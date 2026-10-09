@@ -16,7 +16,7 @@ export const createAuth = (disableSignUp: boolean) => betterAuth({
   trustedOrigins: (process.env.TRUSTED_ORIGINS ?? 'http://localhost:5176,http://localhost:3000').split(',').map((origin) => origin.trim()).filter(Boolean),
   useSecureCookies: production,
   rateLimit: { enabled: true, window: 60, max: 100, customRules: { '/sign-in/email': { window: 60, max: 5 } } },
-  emailAndPassword: { enabled: true, disableSignUp },
+  emailAndPassword: { enabled: true, disableSignUp, minPasswordLength: 12 },
   user: { additionalFields: { role: { type: 'string', required: false, defaultValue: 'PRESALES', input: false } } },
 })
 
