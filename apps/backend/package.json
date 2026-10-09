@@ -1,0 +1,39 @@
+{
+  "name": "atlas-inet-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "start:dev": "tsx watch src/main.ts",
+    "start:dev:local": "set -a; . ../../.env; set +a; tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "migrate": "node --import tsx src/database/migrate.ts",
+    "migrate:local": "node --env-file=../../.env --import tsx src/database/migrate.ts",
+    "bootstrap-admin": "node --import tsx src/auth/bootstrap-admin.ts",
+    "bootstrap-admin:local": "node --env-file=../../.env --import tsx src/auth/bootstrap-admin.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.2.6",
+    "@nestjs/core": "^11.2.6",
+    "@nestjs/platform-express": "^11.2.6",
+    "@better-auth/kysely-adapter": "^1.7.7",
+    "@types/pg": "^8.23.1",
+    "better-auth": "^1.7.7",
+    "exceljs": "^4.4.0",
+    "fast-xml-parser": "^5.11.2",
+    "jszip": "^3.10.2",
+    "kysely": "^0.28.17",
+    "pg": "^8.23.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.15",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,78 @@
+import { Link, useRouterState } from '@tanstack/react-router'
+import type { MouseEventHandler, ReactNode } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AuthGate } from '../components/AuthGate'
+import { api, apiClient } from '../lib/api'
+
+type User = { id: string; name: string; email: string; role: string }
+type Notification = { id: number; title: string; message: string; readAt: string | null }
+
+const navSections = [
+  { label: 'UTAMA', items: [{ to: '/', label: 'Ringkasan', icon: 'bi-grid-1x2-fill' }] },
+  { label: 'JARINGAN', items: [{ to: '/peta-jaringan', label: 'Peta Jaringan', icon: 'bi-map' }] },
+  { label: 'ANALISIS', items: [
+    { to: '/analisis-alamat', label: 'Analisis Alamat', icon: 'bi-geo-alt' },
+    { to: '/analisis-massal', label: 'Analisis Massal', icon: 'bi-file-earmark-spreadsheet' },
+  ] },
+  { label: 'KAPASITAS', items: [{ to: '/booking-core', label: 'Booking Core', icon: 'bi-diagram-3' }] },
+] as const
+
+const navLink = (item: { to: string; label: string; icon: string }, pathname: string, onClick?: MouseEventHandler<HTMLAnchorElement>) => (
+  <Link key={item.to} to={item.to} onClick={onClick} className={`nav-link ${pathname === item.to ? 'active' : ''}`}>
+    <i className={`nav-icon bi ${item.icon}`} /><span>{item.label}</span>
+  </Link>
+)
+
+export function AppShell({ children }: { children: ReactNode }) {
+  return <AuthGate><AuthenticatedShell>{children}</AuthenticatedShell></AuthGate>
+}
+
+function AuthenticatedShell({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient()
+  const pathname = useRouterState({ select: (state) => state.location.pathname })
+  const { data: user } = useQuery({ queryKey: ['me'], queryFn: () => api<User>('/me') })
+  const isAdmin = user?.role === 'ADMIN'
+  const { data: notifications = [] } = useQuery({ queryKey: ['notifications'], queryFn: () => api<Notification[]>('/notifications'), refetchInterval: 60_000 })
+  const signOut = useMutation({ mutationFn: () => apiClient.post('/auth/sign-out'), onSuccess: () => window.location.reload() })
+  const markRead = useMutation({ mutationFn: (id: number) => api(`/notifications/${id}/read`, { method: 'PATCH' }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }) })
+  const unread = notifications.filter((item) => !item.readAt)
+  return <div className="app-wrapper">
+    <nav className="app-header navbar navbar-expand bg-white border-bottom">
+      <div className="container-fluid px-4">
+        <Link to="/" className="navbar-brand d-flex align-items-center gap-2 mb-0"><span className="brand-mark"><i className="bi bi-broadcast-pin" /></span><span>ATLAS <small>NETWORK INTELLIGENCE</small></span></Link>
+        <div className="d-flex align-items-center gap-3"><details className="notification-menu"><summary className="btn btn-light position-relative" aria-label="Notifikasi"><i className="bi bi-bell" />{unread.length > 0 && <span className="notification-count">{unread.length}</span>}</summary><div className="notification-popover"><b>Notifikasi</b>{notifications.length ? notifications.slice(0, 8).map((item) => <button key={item.id} className={`notification-item ${item.readAt ? '' : 'unread'}`} onClick={() => !item.readAt && markRead.mutate(item.id)}><strong>{item.title}</strong><span>{item.message}</span></button>) : <small>Belum ada notifikasi.</small>}</div></details><div className="user-chip"><span className="avatar">{(user?.name ?? 'A').slice(0,2).toUpperCase()}</span><span className="d-none d-sm-block"><b>{user?.name}</b><small>{user?.role}</small></span><button className="btn btn-sm btn-link p-0" onClick={() => signOut.mutate()} aria-label="Keluar"><i className="bi bi-box-arrow-right" /></button></div></div>
+      </div>
+    </nav>
+    <aside className="app-sidebar">
+      <nav className="sidebar-menu-groups" aria-label="Navigasi utama">
+        {navSections.map((section) => <section className="sidebar-menu-group" key={section.label}>
+          <div className="sidebar-menu-group-label">{section.label}</div>
+          <ul className="nav-sidebar">{section.items.map((item) => <li key={item.to}>{navLink(item, pathname)}</li>)}</ul>
+        </section>)}
+      </nav>
+      <nav className="mobile-nav" aria-label="Navigasi utama">
+        <ul className="nav-sidebar">
+          <li>{navLink(navSections[0].items[0], pathname)}</li>
+          <li>{navLink(navSections[1].items[0], pathname)}</li>
+          <li className="mobile-analysis-menu">
+            <details className={pathname.startsWith('/analisis') ? 'active' : ''}>
+              <summary className={`nav-link ${pathname.startsWith('/analisis') ? 'active' : ''}`}><i className="nav-icon bi bi-graph-up-arrow" /><span>Analisis</span><i className="bi bi-chevron-down mobile-menu-chevron" /></summary>
+              <div className="mobile-analysis-popover">
+                {navSections[2].items.map((item) => navLink(item, pathname, (event) => event.currentTarget.closest('details')?.removeAttribute('open')))}
+              </div>
+            </details>
+          </li>
+          <li>{navLink(navSections[3].items[0], pathname)}</li>
+          {isAdmin && <li>{navLink({ to: '/audit-trails', label: 'Audit Trails', icon: 'bi-journal-text' }, pathname)}</li>}
+        </ul>
+      </nav>
+      {isAdmin && <nav className="sidebar-admin-nav" aria-label="Administrasi">
+        <div className="sidebar-menu-group-label">ADMIN</div>
+        <ul className="nav-sidebar"><li>{navLink({ to: '/audit-trails', label: 'Audit Trails', icon: 'bi-journal-text' }, pathname)}</li></ul>
+      </nav>}
+      <div className="sidebar-help"><div className="help-icon"><i className="bi bi-lightbulb" /></div><b>Butuh bantuan?</b><p>Panduan singkat penggunaan ATLAS.</p><button className="btn btn-sm btn-outline-light">Lihat panduan <i className="bi bi-arrow-up-right ms-1" /></button></div>
+      <div className="sidebar-footer"><span className="status-dot" /> ATLAS · Workspace jaringan</div>
+    </aside>
+    <main className="app-main"><div className="content-wrapper"><div className="content px-4 py-4">{children}</div></div><footer className="main-footer">ATLAS <span>Asset Tracking, Location Analytics &amp; Sales Intelligence Tools</span><span className="float-end">Phase 2 · v0.1.0</span></footer></main>
+  </div>
+}
