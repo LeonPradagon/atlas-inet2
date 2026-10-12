@@ -43,4 +43,7 @@ export type NetworkAsset = {
   geometry: Geometry | null; attributes: Record<string, unknown>
 }
 export type Booking = { id: string; customer: string; picCustomer: string; picPresales: string; segmentId: string; cores: number; status: 'Booked' | 'Waiting List' | 'Released' | 'Expired'; requestedAt: string; expiresAt: string | null; segmentName: string; area: string }
+export type AssetRelation = { assetId: string; kind: 'POLE' | 'ODC' | 'ODP'; name: string; area?: string; poleHeight: '7 m' | '9 m' | null }
+
+export const networkQueryKeys = ['segments', 'cores', 'bookings', 'dashboard', 'relations', 'notifications', 'audit-trails', 'network-usage'] as const
 import type { Geometry } from 'geojson'

@@ -55,20 +55,63 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     if (body.side !== undefined && !validSide) throw new BadRequestException({ message: 'Sisi jalan harus Kiri atau Kanan.' })
     if (body.poleHeight !== undefined && body.poleHeight !== null && !['7 m', '9 m'].includes(String(body.poleHeight))) throw new BadRequestException({ message: 'Tinggi tiang harus 7 m atau 9 m.' })
     if (body.totalCores !== undefined && (!Number.isInteger(total) || total < 0 || total > 4096)) throw new BadRequestException({ message: 'Jumlah core harus bilangan bulat 0–4096.' })
-    const { rows } = await this.db.query(`UPDATE network_assets SET
-      name=COALESCE($2,name), area=COALESCE($3,area), cable_type=COALESCE($4,cable_type),
-      installation=CASE WHEN $5 THEN $6 ELSE installation END, road_side=CASE WHEN $7 THEN $8 ELSE road_side END,
-      pole=COALESCE($9,pole), pole_height=CASE WHEN $10 THEN $11 ELSE pole_height END,
-      odc=COALESCE($12,odc), odp=COALESCE($13,odp), updated_at=now()
-      WHERE id=$1 RETURNING id`, [id,body.name ?? null,body.area ?? null,body.cableType ?? null,body.installation !== undefined,validInstallation ? body.installation : 'Aerial',body.side !== undefined,validSide ? body.side : 'Kiri',body.pole ?? null,body.poleHeight !== undefined,body.poleHeight ?? null,body.odc ?? null,body.odp ?? null])
-    if (!rows.length) throw new NotFoundException({ message: 'Aset tidak ditemukan.' })
-    if (body.totalCores !== undefined) await this.db.transaction(async (client) => this.setCoreCount(client, id, total))
-    await this.db.query("INSERT INTO audit_logs(actor_id,action,entity_type,entity_id,details) VALUES($1,'ASSET_UPDATED','ASSET',$2,$3::jsonb)", [userId,id,JSON.stringify({ fields: Object.keys(body) })])
+    for (const key of ['name','area','cableType','pole','odc','odp']) {
+      if (body[key] !== undefined && (typeof body[key] !== 'string' || String(body[key]).length > 500)) throw new BadRequestException({ message: 'Informasi aset harus berupa teks maksimal 500 karakter.' })
+    }
+    await this.db.transaction(async (client) => {
+      const { rows: locked } = await client.query('SELECT id,asset_type FROM network_assets WHERE id=$1 FOR UPDATE', [id])
+      if (!locked.length) throw new NotFoundException({ message: 'Aset tidak ditemukan.' })
+      if (body.totalCores !== undefined && locked[0].asset_type !== 'segment') throw new BadRequestException({ message: 'Kapasitas core hanya dapat diatur pada segmen kabel.' })
+      await client.query(`UPDATE network_assets SET
+        name=COALESCE($2,name), area=COALESCE($3,area), cable_type=COALESCE($4,cable_type),
+        installation=CASE WHEN $5 THEN $6 ELSE installation END, road_side=CASE WHEN $7 THEN $8 ELSE road_side END,
+        pole=COALESCE($9,pole), pole_height=CASE WHEN $10 THEN $11 ELSE pole_height END,
+        odc=COALESCE($12,odc), odp=COALESCE($13,odp), updated_at=now()
+        WHERE id=$1`, [id,body.name ?? null,body.area ?? null,body.cableType ?? null,body.installation !== undefined,validInstallation ? body.installation : 'Aerial',body.side !== undefined,validSide ? body.side : 'Kiri',body.pole ?? null,body.poleHeight !== undefined,body.poleHeight ?? null,body.odc ?? null,body.odp ?? null])
+      if (body.totalCores !== undefined) {
+        await this.setCoreCount(client, id, total)
+        await this.allocateWaiting(client, id, userId)
+      }
+      await this.audit(client,userId,'ASSET_UPDATED','ASSET',id,{ fields: Object.keys(body) })
+    })
     return (await this.listAssets()).find((asset) => asset.id === id)
   }
 
+  async listRelations(segmentId: string) {
+    const { rows: segment } = await this.db.query("SELECT id FROM network_assets WHERE id=$1 AND asset_type='segment'", [segmentId])
+    if (!segment.length) throw new NotFoundException({ message: 'Segmen tidak ditemukan.' })
+    const { rows } = await this.db.query(`SELECT r.asset_id AS "assetId",r.kind,a.name,a.area,a.pole_height AS "poleHeight"
+      FROM network_asset_relations r JOIN network_assets a ON a.id=r.asset_id
+      WHERE r.segment_id=$1 ORDER BY r.kind,a.name,a.id`, [segmentId])
+    return rows
+  }
+
+  async saveRelations(segmentId: string, input: unknown, userId: string) {
+    if (!Array.isArray(input) || input.length > 1000) throw new BadRequestException({ message: 'Relasi harus berupa daftar, maksimal 1.000 aset.' })
+    const relations = input.map((entry) => {
+      if (!entry || typeof entry !== 'object' || typeof entry.assetId !== 'string' || !['POLE','ODC','ODP'].includes(entry.kind)) throw new BadRequestException({ message: 'Relasi harus memiliki assetId dan jenis POLE, ODC, atau ODP.' })
+      return { assetId: entry.assetId as string, kind: entry.kind as string }
+    })
+    if (new Set(relations.map((entry) => `${entry.kind}:${entry.assetId}`)).size !== relations.length) throw new BadRequestException({ message: 'Relasi aset tidak boleh duplikat.' })
+    await this.db.transaction(async (client) => {
+      const { rows: segment } = await client.query("SELECT id FROM network_assets WHERE id=$1 AND asset_type='segment' FOR UPDATE", [segmentId])
+      if (!segment.length) throw new NotFoundException({ message: 'Segmen tidak ditemukan.' })
+      const ids = [...new Set(relations.map((entry) => entry.assetId))].sort()
+      if (ids.length) {
+        const { rows: points } = await client.query("SELECT id FROM network_assets WHERE id=ANY($1::text[]) AND asset_type='asset' AND GeometryType(geometry)='POINT' ORDER BY id FOR UPDATE", [ids])
+        if (points.length !== ids.length) throw new BadRequestException({ message: 'Pilih aset titik yang masih tersedia; segmen dan boundary tidak dapat dijadikan relasi.' })
+      }
+      await client.query('DELETE FROM network_asset_relations WHERE segment_id=$1', [segmentId])
+      for (const entry of relations) await client.query('INSERT INTO network_asset_relations(segment_id,asset_id,kind) VALUES($1,$2,$3)', [segmentId,entry.assetId,entry.kind])
+      await this.audit(client,userId,'ASSET_RELATIONS_UPDATED','ASSET',segmentId,{ relations })
+    })
+    return this.listRelations(segmentId)
+  }
+
   async listCores(assetId: string) {
-    const { rows } = await this.db.query(`SELECT c.core_number AS "coreNumber",c.status,b.id AS "bookingId",b.customer,b.expires_at AS "expiresAt"
+    const { rows: segment } = await this.db.query("SELECT id FROM network_assets WHERE id=$1 AND asset_type='segment'", [assetId])
+    if (!segment.length) throw new NotFoundException({ message: 'Segmen tidak ditemukan.' })
+    const { rows } = await this.db.query(`SELECT c.core_number AS "coreNumber",c.status,b.id AS "bookingId",b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",b.expires_at AS "expiresAt"
       FROM network_cores c LEFT JOIN booking_cores bc ON bc.core_id=c.id LEFT JOIN bookings b ON b.id=bc.booking_id
       WHERE c.asset_id=$1 ORDER BY c.core_number`, [assetId])
     return rows
@@ -76,8 +119,8 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
 
   private async setCoreCount(client: PoolClient, assetId: string, total: number) {
     await client.query('SELECT id FROM network_assets WHERE id=$1 FOR UPDATE', [assetId])
-    const { rows: active } = await client.query(`SELECT count(*)::int AS count FROM network_cores WHERE asset_id=$1 AND status <> 'Available'`, [assetId])
-    if (active[0].count > total) throw new ConflictException({ message: 'Jumlah core tidak boleh lebih kecil dari core yang sudah digunakan atau dibooking.' })
+    const { rows: active } = await client.query(`SELECT id FROM network_cores WHERE asset_id=$1 AND core_number > $2 AND status <> 'Available' LIMIT 1`, [assetId,total])
+    if (active.length) throw new ConflictException({ message: 'Kapasitas tidak dapat dikurangi karena nomor core yang akan dihapus masih Used atau Booked.' })
     await client.query(`DELETE FROM network_cores WHERE asset_id=$1 AND core_number > $2 AND status='Available'`, [assetId,total])
     await client.query(`INSERT INTO network_cores(asset_id,core_number) SELECT $1,n FROM generate_series(1,$2) n ON CONFLICT DO NOTHING`, [assetId,total])
     await client.query('UPDATE network_assets SET total_cores=$2,updated_at=now() WHERE id=$1', [assetId,total])
@@ -86,17 +129,18 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
   async setCoreStatus(assetId: string, coreNumber: number, status: string | undefined, userId: string) {
     if (!Number.isInteger(coreNumber) || coreNumber < 1 || !['Available','Used'].includes(String(status))) throw new BadRequestException({ message: 'Status core harus Available atau Used.' })
     return this.db.transaction(async (client) => {
-      await client.query('SELECT id FROM network_assets WHERE id=$1 FOR UPDATE', [assetId])
+      const { rows: segment } = await client.query("SELECT id FROM network_assets WHERE id=$1 AND asset_type='segment' FOR UPDATE", [assetId])
+      if (!segment.length) throw new NotFoundException({ message: 'Segmen tidak ditemukan.' })
       const { rows } = await client.query('SELECT id,status FROM network_cores WHERE asset_id=$1 AND core_number=$2 FOR UPDATE', [assetId,coreNumber])
       if (!rows.length) throw new NotFoundException({ message: 'Core tidak ditemukan.' })
       if (rows[0].status === 'Booked') throw new ConflictException({ message: 'Core yang sedang dibooking tidak dapat diubah.' })
       await client.query('UPDATE network_cores SET status=$3 WHERE asset_id=$1 AND core_number=$2', [assetId,coreNumber,status])
-      if (status === 'Available') {
-        const allocation = await this.allocateWaiting(client,assetId)
-        if (allocation) await this.notifyPresales(client,'Kapasitas core tersedia',`${allocation.customer} dialokasikan dari waiting list.`,userId)
-      }
       await this.audit(client,userId,'CORE_STATUS_CHANGED','CORE',`${assetId}:${coreNumber}`,{ assetId,coreNumber,status })
-      return { assetId, coreNumber, status }
+      if (status === 'Available') {
+        await this.allocateWaiting(client,assetId,userId)
+      }
+      const { rows: current } = await client.query('SELECT status FROM network_cores WHERE asset_id=$1 AND core_number=$2', [assetId,coreNumber])
+      return { assetId, coreNumber, status: current[0].status }
     })
   }
 
@@ -117,7 +161,9 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       count(c.id) FILTER (WHERE c.status='Available')::int AS "availableCores",
       count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
       (SELECT count(*)::int FROM bookings b WHERE b.segment_id=a.id AND b.status='Waiting List') AS "waitingList",
-      a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp
+      a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('assetId',linked.id,'kind',r.kind,'name',linked.name,'poleHeight',linked.pole_height) ORDER BY r.kind,linked.name)
+        FROM network_asset_relations r JOIN network_assets linked ON linked.id=r.asset_id WHERE r.segment_id=a.id),'[]'::jsonb) AS "relatedAssets"
       FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
       WHERE a.asset_type='segment' GROUP BY a.id ORDER BY a.area,a.name`)
     return rows
@@ -126,7 +172,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
   async listBookings() {
     const { rows } = await this.db.query(`SELECT b.id,b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",
       b.segment_id AS "segmentId",b.cores,b.status,b.requested_at AS "requestedAt",b.expires_at AS "expiresAt",a.name AS "segmentName",a.area
-      FROM bookings b JOIN network_assets a ON a.id=b.segment_id ORDER BY b.requested_at DESC`)
+      FROM bookings b JOIN network_assets a ON a.id=b.segment_id ORDER BY b.requested_at DESC,b.id DESC`)
     return rows
   }
 
@@ -158,17 +204,16 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     const cores = Number(input.cores), segmentId = input.segmentId
     if (!customer || !picCustomer || !picPresales || !segmentId || !Number.isInteger(cores) || cores < 1) throw new BadRequestException({ message: 'Pelanggan, PIC, segmen, dan jumlah core wajib diisi.' })
     return this.db.transaction(async (client) => {
-      const { rows: assets } = await client.query('SELECT total_cores FROM network_assets WHERE id=$1 FOR UPDATE', [segmentId])
+      const { rows: assets } = await client.query("SELECT total_cores FROM network_assets WHERE id=$1 AND asset_type='segment' FOR UPDATE", [segmentId])
       if (!assets.length) throw new NotFoundException({ message: 'Segmen tidak ditemukan.' })
+      if (!assets[0].total_cores) throw new BadRequestException({ message: 'Kapasitas belum diisi. Minta ADMIN melengkapi jumlah core segmen.' })
       if (cores > assets[0].total_cores) throw new BadRequestException({ message: 'Jumlah booking melebihi kapasitas total segmen.' })
-      const { rows: available } = await client.query(`SELECT id FROM network_cores WHERE asset_id=$1 AND status='Available' ORDER BY core_number LIMIT $2 FOR UPDATE`, [segmentId,cores])
-      const status = available.length === cores ? 'Booked' : 'Waiting List'
-      const id = `BKG-${randomUUID().slice(0,8).toUpperCase()}`
-      const { days } = await this.getBookingDuration()
-      await client.query(`INSERT INTO bookings(id,customer,pic_customer,pic_presales,segment_id,cores,status,requested_by,expires_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,CASE WHEN $7='Booked' THEN now()+($9||' days')::interval ELSE NULL END)`,
-        [id,customer,picCustomer,picPresales,segmentId,cores,status,userId,days])
-      if (status === 'Booked') await this.assignCores(client,id,available.map((row) => row.id))
+      const id = `BKG-${randomUUID().toUpperCase()}`
+      await client.query(`INSERT INTO bookings(id,customer,pic_customer,pic_presales,segment_id,cores,status,requested_by,requested_at)
+        VALUES($1,$2,$3,$4,$5,$6,'Waiting List',$7,clock_timestamp())`, [id,customer,picCustomer,picPresales,segmentId,cores,userId])
+      await this.allocateWaiting(client,segmentId,userId)
+      const { rows } = await client.query('SELECT status FROM bookings WHERE id=$1', [id])
+      const status = rows[0].status
       await this.audit(client,userId,'BOOKING_CREATED','BOOKING',id,{ segmentId,cores,status })
       return { id, customer, picCustomer, picPresales, segmentId, cores, status }
     })
@@ -183,31 +228,38 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
 
   async releaseBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
+      const { rows: targets } = await client.query('SELECT segment_id FROM bookings WHERE id=$1', [id])
+      if (!targets.length) throw new NotFoundException({ message: 'Booking tidak ditemukan.' })
+      await client.query('SELECT id FROM network_assets WHERE id=$1 FOR UPDATE', [targets[0].segment_id])
       const { rows } = await client.query('SELECT * FROM bookings WHERE id=$1 FOR UPDATE', [id])
-      if (!rows.length) throw new NotFoundException({ message: 'Booking tidak ditemukan.' })
       const booking = rows[0]
       if (booking.status !== 'Booked') throw new ConflictException({ message: 'Hanya booking aktif yang dapat dilepas.' })
-      await client.query('SELECT id FROM network_assets WHERE id=$1 FOR UPDATE', [booking.segment_id])
       await client.query("UPDATE network_cores SET status='Available' WHERE id IN (SELECT core_id FROM booking_cores WHERE booking_id=$1)", [id])
       await client.query('DELETE FROM booking_cores WHERE booking_id=$1', [id])
       await client.query("UPDATE bookings SET status='Released',released_at=now() WHERE id=$1", [id])
-      const allocation = await this.allocateWaiting(client, booking.segment_id)
-      await this.audit(client,userId,'BOOKING_RELEASED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores,allocatedBookingId: allocation?.id ?? null })
-      await this.notifyPresales(client, 'Booking core dilepas', allocation ? `${allocation.customer} dialokasikan ke segmen setelah kapasitas dilepas.` : `${booking.cores} core kembali tersedia.`, allocation?.requested_by ?? userId)
-      return { released: id, allocated: allocation?.id ?? null }
+      const allocatedBookingIds = await this.allocateWaiting(client,booking.segment_id,userId)
+      await this.audit(client,userId,'BOOKING_RELEASED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores,allocatedBookingIds })
+      await this.notifyPresales(client,'Booking core dilepas',`${booking.customer}: ${booking.cores} core dilepas. ${allocatedBookingIds.length} permintaan waiting list dialokasikan.`,booking.requested_by ?? userId)
+      return { released: id, allocated: allocatedBookingIds[0] ?? null, allocatedBookingIds }
     })
   }
 
-  private async allocateWaiting(client: PoolClient, segmentId: string) {
-    const { rows: queue } = await client.query("SELECT * FROM bookings WHERE segment_id=$1 AND status='Waiting List' ORDER BY requested_at,id LIMIT 1 FOR UPDATE", [segmentId])
-    if (!queue.length) return null
-    const booking = queue[0]
-    const { rows: available } = await client.query("SELECT id FROM network_cores WHERE asset_id=$1 AND status='Available' ORDER BY core_number LIMIT $2 FOR UPDATE", [segmentId,booking.cores])
-    if (available.length !== booking.cores) return null
-    const { days } = await this.getBookingDuration()
-    await this.assignCores(client,booking.id,available.map((row) => row.id))
-    await client.query("UPDATE bookings SET status='Booked',expires_at=now()+($2||' days')::interval WHERE id=$1", [booking.id,days])
-    return booking
+  // All callers hold the segment lock; the first unfulfilled request blocks later requests.
+  private async allocateWaiting(client: PoolClient, segmentId: string, actorId: string | null = null) {
+    const { rows: queue } = await client.query("SELECT * FROM bookings WHERE segment_id=$1 AND status='Waiting List' ORDER BY requested_at,id FOR UPDATE", [segmentId])
+    const { rows: settings } = await client.query("SELECT value FROM app_settings WHERE key='booking_duration_days'")
+    const days = Number(settings[0]?.value ?? 30)
+    const allocated: string[] = []
+    for (const booking of queue) {
+      const { rows: available } = await client.query("SELECT id FROM network_cores WHERE asset_id=$1 AND status='Available' ORDER BY core_number LIMIT $2 FOR UPDATE", [segmentId,booking.cores])
+      if (available.length !== booking.cores) break
+      await this.assignCores(client,booking.id,available.map((row) => row.id))
+      await client.query("UPDATE bookings SET status='Booked',expires_at=now()+($2||' days')::interval WHERE id=$1", [booking.id,days])
+      await this.audit(client,actorId,'WAITING_LIST_ALLOCATED','BOOKING',booking.id,{ segmentId,cores: booking.cores })
+      await this.notifyPresales(client,'Waiting list dialokasikan',`${booking.customer}: ${booking.cores} core tersedia dan booking ${booking.id} aktif.`,booking.requested_by)
+      allocated.push(booking.id)
+    }
+    return allocated
   }
 
   private async notifyPresales(client: PoolClient, title: string, message: string, requestorId?: string) {
@@ -215,19 +267,18 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       SELECT id,$1,$2 FROM "user" WHERE role='PRESALES' OR id=$3`, [title,message,requestorId ?? ''])
   }
 
-  private async expireBookings() {
-    const { rows } = await this.db.query("SELECT id FROM bookings WHERE status='Booked' AND expires_at <= now() ORDER BY expires_at LIMIT 50")
-    for (const { id } of rows) await this.db.transaction(async (client) => {
-      const { rows: locked } = await client.query('SELECT * FROM bookings WHERE id=$1 AND status=\'Booked\' FOR UPDATE', [id])
+  async expireBookings() {
+    const { rows } = await this.db.query("SELECT id,segment_id FROM bookings WHERE status='Booked' AND expires_at <= now() ORDER BY expires_at LIMIT 50")
+    for (const { id, segment_id } of rows) await this.db.transaction(async (client) => {
+      await client.query('SELECT id FROM network_assets WHERE id=$1 FOR UPDATE', [segment_id])
+      const { rows: locked } = await client.query('SELECT * FROM bookings WHERE id=$1 AND status=\'Booked\' AND expires_at <= now() FOR UPDATE', [id])
       if (!locked.length) return
       const booking = locked[0]
-      await client.query('SELECT id FROM network_assets WHERE id=$1 FOR UPDATE', [booking.segment_id])
       await client.query("UPDATE network_cores SET status='Available' WHERE id IN (SELECT core_id FROM booking_cores WHERE booking_id=$1)", [id])
       await client.query('DELETE FROM booking_cores WHERE booking_id=$1', [id])
       await client.query("UPDATE bookings SET status='Expired',released_at=now() WHERE id=$1", [id])
-      const allocation = await this.allocateWaiting(client,booking.segment_id)
-      await this.audit(client,null,'BOOKING_EXPIRED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores,allocatedBookingId: allocation?.id ?? null })
-      if (allocation) await this.notifyPresales(client,'Kapasitas core tersedia',`${allocation.customer} dialokasikan dari waiting list.`)
+      const allocatedBookingIds = await this.allocateWaiting(client,booking.segment_id)
+      await this.audit(client,null,'BOOKING_EXPIRED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores,allocatedBookingIds })
     })
   }
 

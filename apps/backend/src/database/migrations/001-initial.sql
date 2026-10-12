@@ -47,6 +47,15 @@ UPDATE network_assets SET source='kml', asset_type='segment' WHERE asset_type='i
 CREATE INDEX IF NOT EXISTS network_assets_geom_idx ON network_assets USING gist(geometry);
 CREATE INDEX IF NOT EXISTS network_assets_name_idx ON network_assets USING gin(to_tsvector('simple', name));
 
+CREATE TABLE IF NOT EXISTS network_asset_relations (
+  segment_id text NOT NULL REFERENCES network_assets(id) ON DELETE CASCADE,
+  asset_id text NOT NULL REFERENCES network_assets(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('POLE','ODC','ODP')),
+  PRIMARY KEY(segment_id,asset_id,kind),
+  CHECK(segment_id <> asset_id)
+);
+CREATE INDEX IF NOT EXISTS network_asset_relations_asset_idx ON network_asset_relations(asset_id);
+
 CREATE TABLE IF NOT EXISTS network_cores (
   id bigserial PRIMARY KEY, asset_id text NOT NULL REFERENCES network_assets(id) ON DELETE CASCADE,
   core_number integer NOT NULL, status text NOT NULL DEFAULT 'Available' CHECK (status IN ('Available','Booked','Used')),

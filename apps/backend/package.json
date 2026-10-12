@@ -14,7 +14,8 @@
     "migrate": "node --import tsx src/database/migrate.ts",
     "migrate:local": "node --env-file=../../.env --import tsx src/database/migrate.ts",
     "bootstrap-admin": "node --import tsx src/auth/bootstrap-admin.ts",
-    "bootstrap-admin:local": "node --env-file=../../.env --import tsx src/auth/bootstrap-admin.ts"
+    "bootstrap-admin:local": "node --env-file=../../.env --import tsx src/auth/bootstrap-admin.ts",
+    "test:integration:local": "npm run build && node --env-file=../../.env test/atlas.integration.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.6",

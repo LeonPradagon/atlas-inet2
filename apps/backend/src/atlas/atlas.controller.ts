@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, Get, Inject, Param, Patch, Post, Query, Req, UploadedFile, UseInterceptors, Body } from '@nestjs/common'
+import { BadRequestException, Controller, Get, Inject, Param, Patch, Post, Put, Query, Req, UploadedFile, UseInterceptors, Body } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import type { IncomingMessage } from 'node:http'
 import { AuthService } from '../auth/auth.service'
@@ -40,6 +40,18 @@ export class AtlasController {
 
   @Get('assets/:id/cores')
   async cores(@Req() req: IncomingMessage, @Param('id') id: string) { await this.auth.requireUser(req); return this.atlas.listCores(id) }
+
+  @Get('assets/:id/relations')
+  async relations(@Req() req: IncomingMessage, @Param('id') id: string) {
+    await this.auth.requireUser(req)
+    return this.atlas.listRelations(id)
+  }
+
+  @Put('assets/:id/relations')
+  async saveRelations(@Req() req: IncomingMessage, @Param('id') id: string, @Body() body: { relations?: unknown }) {
+    const user = await this.auth.requireAdmin(req)
+    return this.atlas.saveRelations(id,body?.relations,user.id)
+  }
 
   @Patch('assets/:id/cores/:coreNumber')
   async setCoreStatus(@Req() req: IncomingMessage, @Param('id') id: string, @Param('coreNumber') coreNumber: string, @Body() body: { status?: string }) {

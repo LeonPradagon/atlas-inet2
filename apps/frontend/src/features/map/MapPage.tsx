@@ -5,8 +5,9 @@ import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { Feature, FeatureCollection, Geometry, LineString, Point } from "geojson";
+import { SegmentRelations } from "./SegmentRelations";
 import { PageHeader } from "../../components/PageHeader";
-import { api, type Booking, type NetworkAsset } from "../../lib/api";
+import { api, networkQueryKeys, type Booking, type NetworkAsset } from "../../lib/api";
 
 type Coordinate = [number, number];
 type RouteLine = Feature<LineString, { id: string; name: string; status: "preview" | "saved" }>;
@@ -157,15 +158,17 @@ function firstCoordinate(geometry: NetworkAsset["geometry"]): Coordinate {
 }
 
 export function MapPage() {
-  const { data: networkSegments = [] } = useQuery({ queryKey: ["segments"], queryFn: () => api<NetworkAsset[]>("/assets") });
-  const { data: bookings = [] } = useQuery({ queryKey: ["bookings"], queryFn: () => api<Booking[]>("/bookings") });
+  const { data: networkSegments = [] } = useQuery({ queryKey: ["segments"], queryFn: () => api<NetworkAsset[]>("/assets"), refetchInterval: 30_000 });
+  const { data: bookings = [], isPending: bookingsPending, isError: bookingsError } = useQuery({ queryKey: ["bookings"], queryFn: () => api<Booking[]>("/bookings"), refetchInterval: 30_000 });
   const queryClient = useQueryClient();
+  const invalidateNetwork = () => Promise.all(networkQueryKeys.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
   const mapElement = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const hoverPopup = useRef<Popup | null>(null);
   const fittedImportedBounds = useRef(false);
   const importInput = useRef<HTMLInputElement>(null);
   const xlsxImportInput = useRef<HTMLInputElement>(null);
+  const iconFilter = useRef<HTMLDetailsElement>(null);
   const modeRef = useRef<SelectMode>("idle");
   const pointsRef = useRef<Coordinate[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
@@ -175,7 +178,15 @@ export function MapPage() {
   const [mode, setMode] = useState<SelectMode>("idle");
   const [mapError, setMapError] = useState(false);
   const [mapReady, setMapReady] = useState(false);
-  const [selectedIconCategories, setSelectedIconCategories] = useState<string[]>([]);
+  const [selectedIconCategories, setSelectedIconCategories] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("atlas-map-icon-categories");
+      const parsed: unknown = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) && parsed.every((category) => typeof category === "string") ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [iconCategorySearch, setIconCategorySearch] = useState("");
   const [fileError, setFileError] = useState("");
   const [routeError, setRouteError] = useState("");
@@ -205,33 +216,37 @@ export function MapPage() {
       }
     return [...counts].sort(([a], [b]) => a.localeCompare(b, "id"));
   }, [allNetworkFeatures]);
+  useEffect(() => {
+    localStorage.setItem("atlas-map-icon-categories", JSON.stringify(selectedIconCategories));
+  }, [selectedIconCategories]);
   const shapeFeatures = useMemo(() => lineCollection(allNetworkFeatures.filter((feature) => feature.geometry.type !== "Point")), [allNetworkFeatures]);
-  const pointFeatures = useMemo(() => lineCollection(allNetworkFeatures.filter((feature) => feature.geometry.type === "Point")), [allNetworkFeatures]);
+  const pointFeatures = useMemo(() => lineCollection(allNetworkFeatures.filter((feature) => feature.geometry.type === "Point" && selectedIconCategories.includes(String(feature.properties.iconCategory)))), [allNetworkFeatures, selectedIconCategories]);
   const routeFeatures = useMemo(() => routeCollection([...confirmedRoutes, ...(routePreview ? [routePreview] : [])]), [confirmedRoutes, routePreview]);
   const routePointFeatures = useMemo(() => pointCollection(routePoints), [routePoints]);
   const selectedAsset = networkSegments.find((item) => item.id === selectedId) ?? networkSegments[0];
-  const selectedSegment = selectedAsset?.source !== "kml" && selectedAsset?.assetType === "segment" ? selectedAsset : undefined;
-  const selectedImported = selectedAsset && (selectedAsset.source === "kml" || selectedAsset.assetType !== "segment") ? selectedAsset : undefined;
+  const selectedSegment = selectedAsset?.assetType === "segment" ? selectedAsset : undefined;
+  const selectedImported = selectedAsset && selectedAsset.assetType !== "segment" ? selectedAsset : undefined;
   const imported = networkSegments.filter((item) => item.source !== "managed");
   const selectedName = selectedAsset?.name ?? "Pilih aset jaringan";
   const utilization = (item: NetworkAsset) => (item.totalCores ? Math.round(((item.usedCores + item.bookedCores) / item.totalCores) * 100) : 0);
   const coresQuery = useQuery({
     queryKey: ["cores", selectedSegment?.id],
-    queryFn: () => api<{ coreNumber: number; status: "Available" | "Booked" | "Used"; customer?: string }[]>(`/assets/${selectedSegment?.id}/cores`),
+    queryFn: () => api<{ coreNumber: number; status: "Available" | "Booked" | "Used"; customer?: string; picCustomer?: string; picPresales?: string; expiresAt?: string }[]>(`/assets/${selectedSegment?.id}/cores`),
     enabled: Boolean(selectedSegment),
+    refetchInterval: 30_000,
   });
   const updateCore = useMutation({
     mutationFn: ({ coreNumber, status }: { coreNumber: number; status: "Available" | "Used" }) => api(`/assets/${selectedSegment?.id}/cores/${coreNumber}`, { method: "PATCH", data: { status } }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["cores", selectedSegment?.id] });
-      await queryClient.invalidateQueries({ queryKey: ["segments"] });
-      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-    },
+    onSuccess: invalidateNetwork,
   });
   const updateAsset = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => api(`/assets/${id}`, { method: "PATCH", data }),
-    onSuccess: async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["segments"] }), queryClient.invalidateQueries({ queryKey: ["dashboard"] })]); },
+    onSuccess: invalidateNetwork,
   });
+  useEffect(() => {
+    updateCore.reset();
+    updateAsset.reset();
+  }, [selectedSegment?.id, updateCore.reset, updateAsset.reset]);
   const filteredSegments = networkSegments.filter((item) => item.source !== "kml" && item.assetType === "segment" && `${item.name} ${item.area}`.toLowerCase().includes(search.toLowerCase()));
   const matchedImported = imported.filter((item) => (item.source === "kml" || item.assetType !== "segment") && item.name.toLowerCase().includes(search.toLowerCase()));
   const filteredImported = matchedImported.slice(0, 100);
@@ -239,6 +254,14 @@ export function MapPage() {
   useEffect(() => {
     if (patternQuery.data) setNamePattern(patternQuery.data.pattern);
   }, [patternQuery.data]);
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (event.target instanceof Node && !iconFilter.current?.contains(event.target)) iconFilter.current?.removeAttribute("open");
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick, true);
+  }, []);
 
   function setSelectionMode(value: SelectMode) {
     modeRef.current = value;
@@ -255,11 +278,13 @@ export function MapPage() {
     setWorkerUrl(workerUrl);
     const instance = new MapLibreMap({ container: mapElement.current, style: "https://tiles.openfreemap.org/styles/liberty", center: [106.79, -6.26], zoom: 11.2 });
     map.current = instance;
+    const resizeObserver = new ResizeObserver(() => instance.resize());
+    resizeObserver.observe(mapElement.current);
     instance.addControl(new NavigationControl(), "top-right");
     instance.on("error", () => setMapError(true));
     instance.on("load", () => {
       instance.addSource("network-shapes", { type: "geojson", data: shapeFeatures });
-      instance.addSource("network-points-data", { type: "geojson", data: pointFeatures });
+      instance.addSource("network-points-data", { type: "geojson", data: pointFeatures, cluster: true, clusterMaxZoom: 13, clusterRadius: 42 });
       instance.addLayer({
         id: "network-polygons",
         type: "fill",
@@ -277,17 +302,38 @@ export function MapPage() {
       });
       instance.addLayer({ id: "network-hit", type: "line", source: "network-shapes", filter: visibleLineFilter, paint: { "line-color": "#3454d1", "line-width": 18, "line-opacity": 0 } });
       instance.addLayer({
+        id: "network-clusters",
+        type: "circle",
+        source: "network-points-data",
+        filter: ["has", "point_count"],
+        paint: {
+          "circle-color": "#3454d1",
+          "circle-radius": ["step", ["get", "point_count"], 18, 10, 22, 50, 28, 200, 34],
+          "circle-stroke-color": "#fff",
+          "circle-stroke-width": 2,
+          "circle-opacity": 0.94,
+        },
+      });
+      instance.addLayer({
+        id: "network-cluster-count",
+        type: "symbol",
+        source: "network-points-data",
+        filter: ["has", "point_count"],
+        layout: { "text-field": ["to-string", ["get", "point_count"]], "text-size": 13, "text-font": ["Open Sans Bold"], "text-allow-overlap": true },
+        paint: { "text-color": "#fff" },
+      });
+      instance.addLayer({
         id: "network-points",
         type: "circle",
         source: "network-points-data",
-        filter: ["any", ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]],
+        filter: ["all", ["!", ["has", "point_count"]], ["any", ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]]],
         paint: { "circle-radius": 3, "circle-color": ["coalesce", ["get", "markerColor"], "#3454d1"], "circle-opacity": ["coalesce", ["get", "iconOpacity"], 1], "circle-stroke-color": "#fff", "circle-stroke-width": 1 },
       });
       instance.addLayer({
         id: "network-icons",
         type: "symbol",
         source: "network-points-data",
-        filter: ["all", ["has", "iconImageId"], ["!=", ["get", "iconImageId"], ""]],
+        filter: ["all", ["!", ["has", "point_count"]], ["has", "iconImageId"], ["!=", ["get", "iconImageId"], ""]],
         layout: {
           "icon-image": ["get", "iconImageId"],
           "icon-size": ["min", ["max", ["*", ["coalesce", ["get", "iconScale"], 1], 0.9], 0.9], 1],
@@ -298,7 +344,7 @@ export function MapPage() {
         },
         paint: { "icon-opacity": ["coalesce", ["get", "iconOpacity"], 1] },
       });
-      instance.addLayer({ id: "network-point-hit", type: "circle", source: "network-points-data", paint: { "circle-radius": 18, "circle-color": "#000", "circle-opacity": 0 } });
+      instance.addLayer({ id: "network-point-hit", type: "circle", source: "network-points-data", filter: ["!", ["has", "point_count"]], paint: { "circle-radius": 18, "circle-color": "#000", "circle-opacity": 0 } });
       instance.addSource("route-lines", { type: "geojson", data: routeFeatures });
       instance.addLayer({ id: "saved-routes", type: "line", source: "route-lines", filter: ["==", ["get", "status"], "saved"], paint: { "line-color": "#f29b38", "line-width": 5 } });
       instance.addLayer({ id: "preview-route", type: "line", source: "route-lines", filter: ["==", ["get", "status"], "preview"], paint: { "line-color": "#f29b38", "line-width": 5, "line-dasharray": [2, 1] } });
@@ -306,6 +352,16 @@ export function MapPage() {
       instance.addLayer({ id: "route-markers", type: "circle", source: "route-points", paint: { "circle-radius": 7, "circle-color": "#fff", "circle-stroke-width": 3, "circle-stroke-color": "#f29b38" } });
       instance.on("click", (event) => {
         if (modeRef.current !== "idle") return;
+        const cluster = instance.queryRenderedFeatures(event.point, { layers: ["network-clusters"] })[0];
+        if (cluster) {
+          const clusterId = Number(cluster.properties?.cluster_id);
+          const source = instance.getSource("network-points-data") as GeoJSONSource;
+          void source.getClusterExpansionZoom(clusterId).then((zoom) => {
+            const coordinates = (cluster.geometry as Point).coordinates as Coordinate;
+            instance.easeTo({ center: coordinates, zoom: Math.min(zoom, 18), duration: 450 });
+          });
+          return;
+        }
         const features = instance.queryRenderedFeatures(event.point, { layers: ["network-icons", "network-points", "network-polygons", "network-lines", "network-hit"] });
         const boundary = features.find((item) => item.layer.id === "network-polygons") ?? features.find((item) => ["network-lines", "network-hit"].includes(item.layer.id));
         const feature = pointFeatureAtCursor(instance, event.point) ?? boundary ?? nearestPointFeature(instance, event.point) ?? features[0];
@@ -314,11 +370,12 @@ export function MapPage() {
       });
       hoverPopup.current = new Popup({ closeButton: false, closeOnClick: false, anchor: "bottom", offset: 12, maxWidth: "180px", className: "network-hover-popup" });
       instance.on("mousemove", (event) => {
+        const clusterFeature = instance.queryRenderedFeatures(event.point, { layers: ["network-clusters"] })[0];
         const pointFeature = pointFeatureAtCursor(instance, event.point);
-        const lineFeature = pointFeature
+        const lineFeature = clusterFeature || pointFeature
           ? undefined
           : instance.queryRenderedFeatures(event.point, { layers: ["network-lines", "network-hit"] }).find((item) => ["LineString", "MultiLineString"].includes(String(item.properties?.geometryType)));
-        const feature = pointFeature ?? lineFeature;
+        const feature = clusterFeature ?? pointFeature ?? lineFeature;
         if (!feature) {
           instance.getCanvas().style.cursor = "";
           hoverPopup.current?.remove();
@@ -328,11 +385,12 @@ export function MapPage() {
         const content = document.createElement("div");
         const title = document.createElement("strong");
         const detail = document.createElement("small");
-        title.textContent = String(feature.properties?.name ?? "Aset jaringan");
+        const isCluster = Boolean(clusterFeature);
+        title.textContent = isCluster ? `${Number(feature.properties?.point_count ?? 0).toLocaleString("id-ID")} aset titik` : String(feature.properties?.name ?? "Aset jaringan");
         const sourceLabel = feature.properties?.source === "kml" ? "KML/KMZ" : feature.properties?.source === "xlsx" ? "Excel" : String(feature.properties?.area ?? "Jaringan");
-        detail.textContent = `${sourceLabel} · ${String(feature.properties?.geometryType ?? "Segmen")} · Klik untuk detail`;
+        detail.textContent = isCluster ? "Klik untuk melihat lebih dekat" : `${sourceLabel} · ${String(feature.properties?.geometryType ?? "Segmen")} · Klik untuk detail`;
         content.append(title, document.createElement("br"), detail);
-        const coordinates: Coordinate = pointFeature ? (pointFeature.geometry.coordinates as Coordinate) : [event.lngLat.lng, event.lngLat.lat];
+        const coordinates: Coordinate = isCluster || pointFeature ? (feature.geometry as Point).coordinates as Coordinate : [event.lngLat.lng, event.lngLat.lat];
         hoverPopup.current?.setLngLat(coordinates).setDOMContent(content).addTo(instance);
       });
       setMapReady(true);
@@ -353,6 +411,7 @@ export function MapPage() {
       }
     });
     return () => {
+      resizeObserver.disconnect();
       hoverPopup.current?.remove();
       hoverPopup.current = null;
       map.current?.remove();
@@ -429,7 +488,7 @@ export function MapPage() {
       const form = new FormData();
       form.append("file", file);
       const response = await api<{ importedCount: number; segmentCount: number; firstId?: string }>("/assets/import", { method: "POST", data: form });
-      await queryClient.invalidateQueries({ queryKey: ["segments"] });
+      await invalidateNetwork();
       setFileName(file.name);
       setSelectedId(response.firstId ?? "");
     } catch (error) {
@@ -445,7 +504,7 @@ export function MapPage() {
       const form = new FormData()
       form.append("file", file)
       const result = await api<{ importedCount: number; segmentCount: number }>("/assets/import/xlsx", { method: "POST", data: form })
-      await queryClient.invalidateQueries({ queryKey: ["segments"] })
+      await invalidateNetwork()
       setFileName(`${file.name} · ${result.importedCount} aset (${result.segmentCount} segmen)`)
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "File Excel jaringan tidak dapat dibaca.")
@@ -487,8 +546,7 @@ export function MapPage() {
     const form = new FormData(event.currentTarget)
     updateAsset.mutate({ id: selectedSegment.id, data: {
       area: String(form.get("area")), cableType: String(form.get("cableType")), totalCores: Number(form.get("totalCores")),
-      installation: String(form.get("installation")), side: String(form.get("side")), pole: String(form.get("pole")),
-      poleHeight: String(form.get("poleHeight")) || null, odc: String(form.get("odc")), odp: String(form.get("odp")),
+      installation: String(form.get("installation")), side: String(form.get("side")),
     } })
   }
 
@@ -566,7 +624,7 @@ export function MapPage() {
               <button className="btn btn-light" onClick={() => setFileModal("import")}><i className="bi bi-upload me-1" />Impor</button>
               <button className="btn btn-light" onClick={() => setFileModal("download")}><i className="bi bi-download me-1" />Unduh</button>
             </div>}
-            <details className="map-icon-filter">
+            <details ref={iconFilter} className="map-icon-filter">
               <summary><i className="bi bi-funnel" /><span>Filter ikon</span><b>{selectedIconCategories.length}/{iconCategoryCounts.length}</b></summary>
               <div className="map-icon-filter-menu">
                 <div className="map-icon-filter-actions">
@@ -720,7 +778,8 @@ export function MapPage() {
                 <p className="text-secondary">
                   {selectedSegment.area} · {selectedSegment.cableType}
                 </p>
-                {selectedSegment.nameValid === false && <div className="alert alert-warning py-2">Nama kabel belum sesuai pola standar.</div>}
+                {selectedSegment.totalCores === 0 && <div className="alert alert-info py-2">Kapasitas belum diisi. ADMIN perlu melengkapi jumlah core sebelum segmen dapat dibooking.</div>}
+                {selectedSegment.source !== "kml" && selectedSegment.nameValid === false && <div className="alert alert-warning py-2">Nama kabel belum sesuai pola standar.</div>}
                 <div className="core-summary">
                   <div>
                     <small>Core terpasang</small>
@@ -754,13 +813,13 @@ export function MapPage() {
                   <summary>Rincian {selectedSegment.totalCores} core</summary>
                   {coresQuery.isPending ? (
                     <small>Memuat status core...</small>
-                  ) : (
+                  ) : coresQuery.isError ? <small className="text-danger">Status core tidak dapat dimuat.</small> : !coresQuery.data?.length ? <small className="text-secondary">Belum ada core terpasang.</small> : (
                     <div className="core-status-list">
                       {coresQuery.data?.map((core) => (
                         <div key={core.coreNumber}>
                           <span>Core {core.coreNumber}</span>
                           {core.status === "Booked" ? (
-                            <span className="status-pill is-booked">Booked · {core.customer}</span>
+                            <span className="status-pill is-booked" title={`PIC customer: ${core.picCustomer ?? '—'} · PIC presales: ${core.picPresales ?? '—'}`}>Booked · {core.customer}</span>
                           ) : user?.role === "ADMIN" ? (
                             <select
                               className="form-select form-select-sm"
@@ -780,16 +839,23 @@ export function MapPage() {
                   )}
                   {updateCore.error && <small className="text-danger">{updateCore.error instanceof Error ? updateCore.error.message : "Status core tidak dapat diubah."}</small>}
                 </details>
+                <details className="core-list-details"><summary>Waiting list · {bookings.filter((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List").length}</summary>
+                  {bookingsPending ? <small role="status">Memuat antrean...</small> : bookingsError ? <small className="text-danger">Antrean tidak dapat dimuat.</small> : <div className="segment-waiting-list">
+                    {bookings.filter((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List").sort((a, b) => Date.parse(a.requestedAt) - Date.parse(b.requestedAt) || a.id.localeCompare(b.id)).map((booking, index) => <div className="segment-waiting-item" key={booking.id}><b>{index + 1}. {booking.customer} · {booking.cores} core</b><small>PIC customer: {booking.picCustomer}<br />PIC presales: {booking.picPresales}<br />{new Date(booking.requestedAt).toLocaleString('id-ID')}</small></div>)}
+                    {!bookings.some((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List") && <small className="text-secondary">Belum ada permintaan waiting list.</small>}
+                    <small className="text-secondary d-block mt-2">FIFO ketat: permintaan berikutnya menunggu jika kapasitas belum cukup untuk antrean pertama.</small>
+                  </div>}
+                </details>
                 <hr />
                 <div className="asset-info">
                   {[
                     ["Tipe kabel", selectedSegment.cableType],
                     ["Metode instalasi", selectedSegment.installation],
                     ["Posisi kabel", `Sisi ${selectedSegment.side.toLowerCase()}`],
-                    ["Tiang", selectedSegment.pole],
-                    ["Tinggi tiang", selectedSegment.poleHeight ?? "Belum diketahui"],
-                    ["ODC", selectedSegment.odc],
-                    ["ODP", selectedSegment.odp],
+                    ["Tiang (teks sumber)", selectedSegment.pole || "Belum diketahui"],
+                    ["Tinggi tiang (sumber)", selectedSegment.poleHeight ?? "Belum diketahui"],
+                    ["ODC (teks sumber)", selectedSegment.odc || "Belum diketahui"],
+                    ["ODP (teks sumber)", selectedSegment.odp || "Belum diketahui"],
                   ].map(([label, value]) => (
                     <div key={label}>
                       <span>{label}</span>
@@ -797,6 +863,8 @@ export function MapPage() {
                     </div>
                   ))}
                 </div>
+                <SegmentRelations key={selectedSegment.id} segmentId={selectedSegment.id} isAdmin={user?.role === "ADMIN"} />
+                {selectedSegment.source !== "managed" && <details className="admin-settings mt-3"><summary>Atribut sumber impor</summary><div className="import-detail-list mt-2">{Object.entries(selectedSegment.attributes ?? {}).filter(([key]) => key !== "__kmlStyle").map(([key, value]) => <div key={key}><span>{key}</span><b>{String(value)}</b></div>)}</div></details>}
                 {user?.role === "ADMIN" && <details className="admin-settings mt-4">
                   <summary><i className="bi bi-pencil-square me-2" />Ubah detail aset</summary>
                   <form key={selectedSegment.id} className="mt-3" onSubmit={saveAssetDetails}>
@@ -805,11 +873,8 @@ export function MapPage() {
                     <label className="form-label">Jumlah core</label><input name="totalCores" type="number" min="0" max="4096" required className="form-control form-control-sm mb-2" defaultValue={selectedSegment.totalCores} />
                     <label className="form-label">Metode instalasi</label><select name="installation" className="form-select form-select-sm mb-2" defaultValue={selectedSegment.installation}><option value="Aerial">Aerial</option><option value="Burial">Burial</option></select>
                     <label className="form-label">Sisi jalan</label><select name="side" className="form-select form-select-sm mb-2" defaultValue={selectedSegment.side}><option value="Kiri">Kiri</option><option value="Kanan">Kanan</option></select>
-                    <label className="form-label">Nomor tiang</label><input name="pole" className="form-control form-control-sm mb-2" defaultValue={selectedSegment.pole} />
-                    <label className="form-label">Tinggi tiang</label><select name="poleHeight" className="form-select form-select-sm mb-2" defaultValue={selectedSegment.poleHeight ?? ""}><option value="">Belum diketahui</option><option value="7 m">7 m</option><option value="9 m">9 m</option></select>
-                    <label className="form-label">ODC</label><input name="odc" className="form-control form-control-sm mb-2" defaultValue={selectedSegment.odc} />
-                    <label className="form-label">ODP</label><input name="odp" className="form-control form-control-sm mb-3" defaultValue={selectedSegment.odp} />
                     <button className="btn btn-sm btn-outline-primary" disabled={updateAsset.isPending}>{updateAsset.isPending ? "Menyimpan..." : "Simpan detail"}</button>
+                    {updateAsset.isSuccess && <small className="d-block text-success mt-2" role="status">Detail aset tersimpan.</small>}
                     {updateAsset.error && <small className="d-block text-danger mt-2">{updateAsset.error instanceof Error ? updateAsset.error.message : "Detail aset tidak dapat disimpan."}</small>}
                   </form>
                 </details>}

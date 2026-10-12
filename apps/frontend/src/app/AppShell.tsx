@@ -1,5 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import type { MouseEventHandler, ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AuthGate } from "../components/AuthGate";
 import { AccountMenu } from "../components/AccountMenu";
@@ -37,18 +38,26 @@ export function AppShell({ children }: { children: ReactNode }) {
 }
 
 function AuthenticatedShell({ children }: { children: ReactNode }) {
+  const [sidebarHidden, setSidebarHidden] = useState(false);
+  const mobileAnalysisMenu = useRef<HTMLDetailsElement>(null);
   const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  useEffect(() => {
+    mobileAnalysisMenu.current?.removeAttribute("open");
+  }, [pathname]);
   const { data: user } = useQuery({ queryKey: ["me"], queryFn: () => api<User>("/me") });
   const isAdmin = user?.role === "ADMIN";
   const { data: notifications = [] } = useQuery({ queryKey: ["notifications"], queryFn: () => api<Notification[]>("/notifications"), refetchInterval: 60_000 });
   const markRead = useMutation({ mutationFn: (id: number) => api(`/notifications/${id}/read`, { method: "PATCH" }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }) });
   const unread = notifications.filter((item) => !item.readAt);
   return (
-    <div className="app-wrapper">
+    <div className={`app-wrapper ${sidebarHidden ? "atlas-sidebar-hidden" : ""}`}>
       <nav className="app-header navbar navbar-expand bg-white border-bottom">
         <div className="container-fluid px-4">
-          <Link to="/" className="navbar-brand d-flex align-items-center gap-2 mb-0">
+          <button type="button" className="btn btn-light sidebar-toggle" aria-label={sidebarHidden ? "Tampilkan sidebar" : "Sembunyikan sidebar"} aria-expanded={!sidebarHidden} aria-controls="atlas-sidebar" onClick={() => setSidebarHidden((hidden) => !hidden)}>
+            <i className="bi bi-list" aria-hidden="true" />
+          </button>
+          <Link to="/" className="navbar-brand header-brand d-flex align-items-center gap-2 mb-0">
             <span className="brand-mark">
               <i className="bi bi-broadcast-pin" />
             </span>
@@ -80,7 +89,11 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </nav>
-      <aside className="app-sidebar">
+      <aside id="atlas-sidebar" className="app-sidebar">
+        <Link to="/" className="atlas-sidebar-brand">
+          <span className="brand-mark"><i className="bi bi-broadcast-pin" /></span>
+          <span>ATLAS<small>NETWORK INTELLIGENCE</small></span>
+        </Link>
         <nav className="sidebar-menu-groups" aria-label="Navigasi utama">
           <div className="sidebar-menu-group-label">MAIN MENU</div>
           <ul className="nav-sidebar">
@@ -109,7 +122,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             <li>{navLink(navSections[0].items[0], pathname)}</li>
             <li>{navLink(navSections[1].items[0], pathname)}</li>
             <li className="mobile-analysis-menu">
-              <details className={pathname.startsWith("/analisis") ? "active" : ""}>
+              <details ref={mobileAnalysisMenu} className={pathname.startsWith("/analisis") ? "active" : ""}>
                 <summary className={`nav-link ${pathname.startsWith("/analisis") ? "active" : ""}`}>
                   <i className="nav-icon bi bi-graph-up-arrow" />
                   <span>Analisis</span>
