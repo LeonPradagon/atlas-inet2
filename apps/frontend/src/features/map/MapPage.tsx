@@ -159,13 +159,20 @@ function firstCoordinate(geometry: NetworkAsset["geometry"]): Coordinate {
 
 export function MapPage() {
   const { data: networkSegments = [] } = useQuery({ queryKey: ["segments"], queryFn: () => api<NetworkAsset[]>("/assets"), refetchInterval: 30_000 });
+  const [mapBounds, setMapBounds] = useState<[number, number, number, number] | null>(null);
+  const mapAssetsQuery = useQuery({
+    queryKey: ["map-assets", mapBounds],
+    queryFn: () => api<NetworkAsset[]>(`/assets/map?bbox=${mapBounds!.join(",")}`),
+    enabled: Boolean(mapBounds),
+    staleTime: 20_000,
+    placeholderData: (previous) => previous,
+  });
   const { data: bookings = [], isPending: bookingsPending, isError: bookingsError } = useQuery({ queryKey: ["bookings"], queryFn: () => api<Booking[]>("/bookings"), refetchInterval: 30_000 });
   const queryClient = useQueryClient();
   const invalidateNetwork = () => Promise.all(networkQueryKeys.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
   const mapElement = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const hoverPopup = useRef<Popup | null>(null);
-  const fittedImportedBounds = useRef(false);
   const importInput = useRef<HTMLInputElement>(null);
   const xlsxImportInput = useRef<HTMLInputElement>(null);
   const iconFilter = useRef<HTMLDetailsElement>(null);
@@ -206,16 +213,16 @@ export function MapPage() {
     },
   });
 
-  const allNetworkFeatures = useMemo(() => assetFeatures(networkSegments), [networkSegments]);
+  const allNetworkFeatures = useMemo(() => assetFeatures(mapAssetsQuery.data ?? []), [mapAssetsQuery.data]);
   const iconCategoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const feature of allNetworkFeatures)
-      if (feature.geometry.type === "Point") {
-        const category = String(feature.properties.iconCategory ?? "LAINNYA");
+    for (const asset of networkSegments)
+      if (asset.geometryType?.toUpperCase() === "POINT") {
+        const category = getIconCategory(asset.attributes?.folderPath, asset.attributes?.name ?? asset.name);
         counts.set(category, (counts.get(category) ?? 0) + 1);
       }
     return [...counts].sort(([a], [b]) => a.localeCompare(b, "id"));
-  }, [allNetworkFeatures]);
+  }, [networkSegments]);
   useEffect(() => {
     localStorage.setItem("atlas-map-icon-categories", JSON.stringify(selectedIconCategories));
   }, [selectedIconCategories]);
@@ -283,8 +290,14 @@ export function MapPage() {
     instance.addControl(new NavigationControl(), "top-right");
     instance.on("error", () => setMapError(true));
     instance.on("load", () => {
+      const updateBounds = () => {
+        const bounds = instance.getBounds();
+        setMapBounds([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].map((value) => Number(value.toFixed(4))) as [number, number, number, number]);
+      };
+      instance.on("moveend", updateBounds);
+      updateBounds();
       instance.addSource("network-shapes", { type: "geojson", data: shapeFeatures });
-      instance.addSource("network-points-data", { type: "geojson", data: pointFeatures, cluster: true, clusterMaxZoom: 13, clusterRadius: 42 });
+      instance.addSource("network-points-data", { type: "geojson", data: pointFeatures, cluster: true, clusterMaxZoom: 17, clusterRadius: 42 });
       instance.addLayer({
         id: "network-polygons",
         type: "fill",
@@ -445,14 +458,6 @@ export function MapPage() {
   useEffect(() => {
     const instance = map.current;
     if (!instance || !mapReady) return;
-    if (!fittedImportedBounds.current && imported.length) {
-      const bounds = new LngLatBounds();
-      for (const asset of imported) if (asset.geometry) geometryBounds(asset.geometry, bounds);
-      if (!bounds.isEmpty()) {
-        instance.fitBounds(bounds, { padding: 48, maxZoom: 11, duration: 0 });
-        fittedImportedBounds.current = true;
-      }
-    }
     const icons = new Map<string, { url: string; color: string }>();
     const assetsById = new Map(networkSegments.map((asset) => [asset.id, asset]));
     for (const feature of allNetworkFeatures) {
@@ -479,7 +484,7 @@ export function MapPage() {
         })
         .catch(() => undefined);
     }
-  }, [allNetworkFeatures, mapReady, networkSegments]);
+  }, [allNetworkFeatures, mapReady, mapAssetsQuery.data]);
 
   async function importFile(file?: File) {
     if (!file) return;
@@ -491,6 +496,7 @@ export function MapPage() {
       await invalidateNetwork();
       setFileName(file.name);
       setSelectedId(response.firstId ?? "");
+      if (response.firstId) await focusGeometry(response.firstId);
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "File tidak dapat dibaca.");
     }
@@ -590,16 +596,26 @@ export function MapPage() {
     setRouteDistance(null);
   }
 
-  const focusAsset = (asset: NetworkAsset) => {
-    setSelectedId(asset.id);
-    if (!asset.geometry || !map.current) return;
-    if (asset.geometry.type === "Point") {
-      map.current.flyTo({ center: firstCoordinate(asset.geometry), zoom: 16, essential: true });
-      return;
+  const focusGeometry = async (id: string, existing?: Geometry | null) => {
+    if (!map.current) return;
+    try {
+      const geometry = existing ?? (await api<{ geometry: Geometry | null }>(`/assets/${id}/geometry`)).geometry;
+      if (!geometry) return;
+      if (geometry.type === "Point") {
+        map.current.flyTo({ center: firstCoordinate(geometry), zoom: 16, essential: true });
+        return;
+      }
+      const bounds = new LngLatBounds();
+      geometryBounds(geometry, bounds);
+      if (!bounds.isEmpty()) map.current.fitBounds(bounds, { padding: 64, maxZoom: 14, duration: 500 });
+    } catch {
+      setMapError(true);
     }
-    const bounds = new LngLatBounds();
-    geometryBounds(asset.geometry, bounds);
-    if (!bounds.isEmpty()) map.current.fitBounds(bounds, { padding: 64, maxZoom: 14, duration: 500 });
+  };
+
+  const focusAsset = async (asset: NetworkAsset) => {
+    setSelectedId(asset.id);
+    await focusGeometry(asset.id, asset.geometry);
   };
 
   return (
@@ -617,7 +633,7 @@ export function MapPage() {
         <section className="map-canvas-wrap">
           <div ref={mapElement} className={`map-canvas ${mode !== "idle" ? "map-picking" : ""}`} aria-label="Peta jaringan ATLAS" />
           <div className="map-overlay-label">
-            <i className="bi bi-broadcast-pin" /> Area Jabodetabek
+            <i className="bi bi-broadcast-pin" /> Cakupan routing Pulau Jawa
           </div>
           <div className="map-top-actions">
             {user?.role === "ADMIN" && <div className="map-file-actions">
@@ -848,20 +864,12 @@ export function MapPage() {
                 </details>
                 <hr />
                 <div className="asset-info">
-                  {[
-                    ["Tipe kabel", selectedSegment.cableType],
-                    ["Metode instalasi", selectedSegment.installation],
-                    ["Posisi kabel", `Sisi ${selectedSegment.side.toLowerCase()}`],
-                    ["Tiang (teks sumber)", selectedSegment.pole || "Belum diketahui"],
-                    ["Tinggi tiang (sumber)", selectedSegment.poleHeight ?? "Belum diketahui"],
-                    ["ODC (teks sumber)", selectedSegment.odc || "Belum diketahui"],
-                    ["ODP (teks sumber)", selectedSegment.odp || "Belum diketahui"],
-                  ].map(([label, value]) => (
-                    <div key={label}>
-                      <span>{label}</span>
-                      <b>{value}</b>
-                    </div>
-                  ))}
+                  <div className="asset-info-group"><b>Detail kabel</b><div className="asset-info">
+                    {[["Tipe kabel", selectedSegment.cableType], ["Metode instalasi", selectedSegment.installation], ["Sisi jalan", `Sisi ${selectedSegment.side.toLowerCase()}`]].map(([label, value]) => <div key={label}><span>{label}</span><b>{value}</b></div>)}
+                  </div></div>
+                  <div className="asset-info-group"><b>Data aset dari sumber impor</b><div className="asset-info">
+                    {[["Tiang", selectedSegment.pole || "Belum diketahui"], ["Tinggi tiang", selectedSegment.poleHeight ?? "Belum diketahui"], ["ODC", selectedSegment.odc || "Belum diketahui"], ["ODP", selectedSegment.odp || "Belum diketahui"]].map(([label, value]) => <div key={label}><span>{label}</span><b>{value}</b></div>)}
+                  </div></div>
                 </div>
                 <SegmentRelations key={selectedSegment.id} segmentId={selectedSegment.id} isAdmin={user?.role === "ADMIN"} />
                 {selectedSegment.source !== "managed" && <details className="admin-settings mt-3"><summary>Atribut sumber impor</summary><div className="import-detail-list mt-2">{Object.entries(selectedSegment.attributes ?? {}).filter(([key]) => key !== "__kmlStyle").map(([key, value]) => <div key={key}><span>{key}</span><b>{String(value)}</b></div>)}</div></details>}
@@ -895,10 +903,10 @@ export function MapPage() {
                         <b>{String(value)}</b>
                       </div>
                     ))}
-                  {selectedImported.geometry && (
+                  {(selectedImported.geometryType || selectedImported.geometry?.type) && (
                     <div>
                       <span>Tipe geometri</span>
-                      <b>{selectedImported.geometry.type}</b>
+                      <b>{selectedImported.geometryType ?? selectedImported.geometry?.type}</b>
                     </div>
                   )}
                 </div>

@@ -13,15 +13,14 @@ export function SegmentRelations({ segmentId, isAdmin }: { segmentId: string; is
 
   if (relations.isPending) return <small className="text-secondary d-block mt-3" role="status">Memuat aset yang sudah terhubung...</small>
   if (relations.isError) return <small className="text-danger d-block mt-3" role="alert">Relasi aset tidak dapat dimuat.</small>
-  if (!relations.data?.length) return null
-
   return <section className="segment-relations mt-3">
-    <b>Aset yang sudah terhubung</b>
+    <b>Relasi aset titik</b>
+    {!relations.data?.length && <small className="text-secondary d-block mt-2">Belum ada aset titik yang dihubungkan. Data Tiang, ODC, dan ODP di atas adalah teks dari sumber impor.</small>}
     {kinds.map(({ kind, label }) => {
       const assets = relations.data.filter((entry) => entry.kind === kind)
-      if (!assets.length) return null
       return <div className="relation-group" key={kind}>
-        <b>{label}</b>
+        <b>{label} · {assets.length}</b>
+        {!assets.length && <small className="text-secondary">Belum ada relasi.</small>}
         {assets.map((entry) => <div className="relation-row" key={entry.assetId}>
           <span>{entry.name}</span>
           {kind === 'POLE' && (isAdmin

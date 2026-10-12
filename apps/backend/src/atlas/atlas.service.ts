@@ -39,12 +39,33 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
       count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
       count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
-      COALESCE(a.source_geometry,ST_AsGeoJSON(a.geometry)::jsonb) AS geometry,a.attributes
+      GeometryType(a.geometry) AS "geometryType",NULL::jsonb AS geometry,a.attributes
       FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
       WHERE $1='' OR a.name ILIKE '%'||$1||'%' OR a.area ILIKE '%'||$1||'%'
       GROUP BY a.id ORDER BY a.name`, [search])
     const pattern = new RegExp((await this.getCableNamePattern()).pattern)
     return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
+  }
+
+  async listMapAssets(bounds: [number, number, number, number]) {
+    const { rows } = await this.db.query<AssetRecord>(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
+      a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
+      count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
+      count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
+      count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
+      COALESCE(a.source_geometry,ST_AsGeoJSON(a.geometry)::jsonb) AS geometry,GeometryType(a.geometry) AS "geometryType",a.attributes
+      FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+      WHERE a.geometry && ST_MakeEnvelope($1,$2,$3,$4,4326)
+        AND ST_Intersects(a.geometry,ST_MakeEnvelope($1,$2,$3,$4,4326))
+      GROUP BY a.id ORDER BY a.name`, bounds)
+    const pattern = new RegExp((await this.getCableNamePattern()).pattern)
+    return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
+  }
+
+  async assetGeometry(id: string) {
+    const { rows } = await this.db.query(`SELECT COALESCE(source_geometry,ST_AsGeoJSON(geometry)::jsonb) AS geometry FROM network_assets WHERE id=$1`, [id])
+    if (!rows.length) throw new NotFoundException({ message: 'Aset tidak ditemukan.' })
+    return rows[0]
   }
 
   async updateAsset(id: string, body: Record<string, unknown>, userId: string) {
@@ -286,7 +307,9 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     const { rows } = await this.db.query(`SELECT a.id,a.name,a.area,a.cable_type AS "cableType",
       ST_AsGeoJSON(ST_ClosestPoint(a.geometry,ST_SetSRID(ST_MakePoint($1,$2),4326)))::json AS "nearestPoint",
       ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography)::int AS "straightDistanceMeters"
-      FROM network_assets a WHERE a.geometry IS NOT NULL ORDER BY a.geometry <-> ST_SetSRID(ST_MakePoint($1,$2),4326) LIMIT 1`, [longitude,latitude])
+      FROM network_assets a
+      WHERE a.asset_type='segment' AND GeometryType(a.geometry) IN ('LINESTRING','MULTILINESTRING')
+      ORDER BY a.geometry <-> ST_SetSRID(ST_MakePoint($1,$2),4326) LIMIT 1`, [longitude,latitude])
     return rows[0] ?? null
   }
 

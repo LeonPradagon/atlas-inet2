@@ -19,7 +19,7 @@ export class RoutingService {
     } catch {
       throw new ServiceUnavailableException({ code: 'ROUTING_UNAVAILABLE', message: 'Layanan GraphHopper tidak dapat dihubungi.' })
     }
-    if (!response.ok) throw new BadGatewayException({ message: 'Layanan GraphHopper gagal menghitung rute.' })
+    if (!response.ok) throw new BadGatewayException({ message: 'GraphHopper tidak menemukan rute pada cakupan data jalan yang tersedia.' })
     let result: GraphHopperResponse
     try {
       result = await response.json() as GraphHopperResponse
@@ -28,7 +28,7 @@ export class RoutingService {
     }
     const route = result.paths?.[0]
     if (!route?.points?.coordinates?.length) {
-      throw new BadGatewayException({ message: 'Tidak ditemukan jalur jalan yang menghubungkan titik-titik tersebut.' })
+      throw new BadGatewayException({ message: 'Tidak ditemukan jalur jalan yang menghubungkan titik-titik tersebut. Pastikan semua titik berada di Pulau Jawa dan terhubung ke jalan pada data OSM.' })
     }
     return { geometry: route.points, distanceMeters: route.distance, durationSeconds: route.time / 1000 }
   }

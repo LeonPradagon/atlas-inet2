@@ -32,6 +32,19 @@ export class AtlasController {
   @Get('assets')
   async assets(@Req() req: IncomingMessage, @Query('search') search?: string) { await this.auth.requireUser(req); return this.atlas.listAssets(search ?? '') }
 
+  @Get('assets/map')
+  async mapAssets(@Req() req: IncomingMessage, @Query('bbox') bbox?: string) {
+    await this.auth.requireUser(req)
+    const values = bbox?.split(',').map(Number) ?? []
+    if (values.length !== 4 || values.some((value) => !Number.isFinite(value)) || values[0] < -180 || values[2] > 180 || values[1] < -90 || values[3] > 90 || values[0] >= values[2] || values[1] >= values[3]) {
+      throw new BadRequestException({ message: 'Batas peta tidak valid.' })
+    }
+    return this.atlas.listMapAssets(values as [number, number, number, number])
+  }
+
+  @Get('assets/:id/geometry')
+  async assetGeometry(@Req() req: IncomingMessage, @Param('id') id: string) { await this.auth.requireUser(req); return this.atlas.assetGeometry(id) }
+
   @Patch('assets/:id')
   async updateAsset(@Req() req: IncomingMessage, @Param('id') id: string, @Body() body: Record<string, unknown>) {
     const user = await this.auth.requireAdmin(req)
@@ -175,7 +188,7 @@ export class AtlasController {
     const points = coordinates.map((point): [number, number] => {
       if (!Array.isArray(point) || point.length < 2 || typeof point[0] !== 'number' || typeof point[1] !== 'number') throw new BadRequestException({ message: 'Koordinat harus berupa pasangan longitude, latitude.' })
       const [lon, lat] = point
-      if (!Number.isFinite(lon) || !Number.isFinite(lat) || lon < 105.8 || lon > 107.6 || lat < -7.1 || lat > -5.5) throw new BadRequestException({ message: 'Titik rute harus berada di cakupan Jabodetabek.' })
+      if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90) throw new BadRequestException({ message: 'Koordinat harus berada dalam rentang longitude dan latitude yang valid.' })
       return [lon, lat]
     })
     return this.routing.preview(points)
