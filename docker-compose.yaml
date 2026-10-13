@@ -24,6 +24,7 @@ services:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
       TRUSTED_ORIGINS: http://localhost:5176,http://localhost:3000
       GEOCODER_URL: ${GEOCODER_URL:-}
+      NOMINATIM_URL: ${NOMINATIM_URL:-https://nominatim.openstreetmap.org/search}
       ROUTING_URL: ${ROUTING_URL:-}
       BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-ATLAS Admin}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}

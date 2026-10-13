@@ -1,13 +1,12 @@
 import 'reflect-metadata'
 import { NestFactory } from '@nestjs/core'
 import { toNodeHandler } from 'better-auth/node'
-import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import { Pool } from 'pg'
+import { migrateDatabase } from './database/migration-runner'
 
 async function bootstrap() {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL })
-  try { await pool.query(await readFile(resolve(process.cwd(), 'src/database/migrations/001-initial.sql'), 'utf8')) }
+  try { await migrateDatabase(pool) }
   finally { await pool.end() }
   const [{ AppModule }, { auth }] = await Promise.all([import('./app.module'), import('./auth/auth')])
   const app = await NestFactory.create(AppModule)

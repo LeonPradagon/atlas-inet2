@@ -1,19 +1,23 @@
 graphhopper:
   datareader.file: /data/java-latest.osm.pbf
-  graph.location: /data/graph-cache
+  graph.location: /data/graph-cache-ftth-foot
   profiles:
     - name: car
       custom_model_files: [car.json]
     - name: car_shortest
       custom_model_files: [car.json, shortest.json]
+    - name: bike
+      custom_model_files: [bike.json]
+    - name: foot
+      custom_model_files: [foot.json]
   profiles_ch:
     - profile: car
   profiles_lm: []
-  graph.encoded_values: car_access, car_average_speed, road_access
+  graph.encoded_values: car_access, car_average_speed, road_access, bike_access, bike_average_speed, bike_priority, bike_road_access, bike_network, foot_access, foot_priority, foot_average_speed, foot_road_access, mtb_rating, hike_rating, country, road_class
   prepare.min_network_size: 200
   routing.max_visited_nodes: 1000000
   routing.snap_preventions_default: tunnel, bridge, ferry
-  import.osm.ignored_highways: footway,construction,cycleway,path,steps
+  import.osm.ignored_highways: construction
   graph.dataaccess.default_type: RAM_STORE
 server:
   application_connectors:

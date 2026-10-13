@@ -17,6 +17,7 @@ const navSections = [
     items: [
       { to: "/analisis-alamat", label: "Analisis Alamat", icon: "bi-geo-alt" },
       { to: "/analisis-massal", label: "Analisis Massal", icon: "bi-file-earmark-spreadsheet" },
+      { to: "/riwayat-analisis", label: "Riwayat Analisis", icon: "bi-clock-history" },
     ],
   },
   { label: "KAPASITAS", items: [{ to: "/booking-core", label: "Booking Core", icon: "bi-diagram-3" }] },
@@ -40,11 +41,20 @@ export function AppShell({ children }: { children: ReactNode }) {
 function AuthenticatedShell({ children }: { children: ReactNode }) {
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const mobileAnalysisMenu = useRef<HTMLDetailsElement>(null);
+  const notificationMenu = useRef<HTMLDetailsElement>(null);
   const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const analysisPath = pathname.startsWith("/analisis") || pathname === "/riwayat-analisis";
   useEffect(() => {
     mobileAnalysisMenu.current?.removeAttribute("open");
   }, [pathname]);
+  useEffect(() => {
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (event.target instanceof Node && !notificationMenu.current?.contains(event.target)) notificationMenu.current?.removeAttribute("open");
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick, true);
+  }, []);
   const { data: user } = useQuery({ queryKey: ["me"], queryFn: () => api<User>("/me") });
   const isAdmin = user?.role === "ADMIN";
   const { data: notifications = [] } = useQuery({ queryKey: ["notifications"], queryFn: () => api<Notification[]>("/notifications"), refetchInterval: 60_000 });
@@ -66,7 +76,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             </span>
           </Link>
           <div className="d-flex align-items-center gap-3">
-            <details className="notification-menu">
+            <details ref={notificationMenu} className="notification-menu">
               <summary className="btn btn-light position-relative" aria-label="Notifikasi">
                 <i className="bi bi-bell" />
                 {unread.length > 0 && <span className="notification-count">{unread.length}</span>}
@@ -100,8 +110,8 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             <li>{navLink(navSections[0].items[0], pathname)}</li>
             <li>{navLink(navSections[1].items[0], pathname)}</li>
             <li className="desktop-analysis-menu">
-              <details open={pathname.startsWith("/analisis") || undefined}>
-                <summary className={`nav-link ${pathname.startsWith("/analisis") ? "active" : ""}`}>
+              <details open={analysisPath || undefined}>
+                <summary className={`nav-link ${analysisPath ? "active" : ""}`}>
                   <i className="nav-icon bi bi-graph-up-arrow" />
                   <span>Analisis</span>
                   <i className="bi bi-chevron-down desktop-menu-chevron" />
@@ -122,8 +132,8 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             <li>{navLink(navSections[0].items[0], pathname)}</li>
             <li>{navLink(navSections[1].items[0], pathname)}</li>
             <li className="mobile-analysis-menu">
-              <details ref={mobileAnalysisMenu} className={pathname.startsWith("/analisis") ? "active" : ""}>
-                <summary className={`nav-link ${pathname.startsWith("/analisis") ? "active" : ""}`}>
+              <details ref={mobileAnalysisMenu} className={analysisPath ? "active" : ""}>
+                <summary className={`nav-link ${analysisPath ? "active" : ""}`}>
                   <i className="nav-icon bi bi-graph-up-arrow" />
                   <span>Analisis</span>
                   <i className="bi bi-chevron-down mobile-menu-chevron" />

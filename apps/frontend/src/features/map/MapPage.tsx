@@ -35,6 +35,7 @@ function getIconCategory(folderPath: unknown, assetName: unknown) {
     .reverse();
   const name = String(assetName ?? "");
   const categories: [string, RegExp][] = [
+    ["OLT", /(^|[^A-Z0-9])OLT(?=$|[^A-Z0-9]|\d)/i],
     ["ODP", /(^|[^A-Z0-9])ODP(?=$|[^A-Z0-9]|\d)/i],
     ["ODC", /(^|[^A-Z0-9])ODC(?=$|[^A-Z0-9]|\d)/i],
     ["FDT", /(^|[^A-Z0-9])FDT(?=$|[^A-Z0-9]|\d)/i],
@@ -55,13 +56,29 @@ function getIconCategory(folderPath: unknown, assetName: unknown) {
   return "LAINNYA";
 }
 
+function ftthDesignGroupId(asset: NetworkAsset) {
+  if (typeof asset.attributes?.ftthDesignId === "string") return asset.attributes.ftthDesignId;
+  return asset.attributes?.source === "ftth-design" && asset.createdAt ? `legacy:${asset.createdAt}` : undefined;
+}
+
+function assetIconCategory(asset: NetworkAsset) {
+  const assetKind = String(asset.attributes?.assetKind ?? "").toUpperCase();
+  const categories: Record<string, string> = {
+    JOINT_CLOSURE: "JC",
+    HANDHOLE: "HANDHOLE",
+  };
+  if (["OLT", "ODC", "ODP", "POLE", "FDT", "OFP", "POP", "ODF", "SLACK"].includes(assetKind)) return assetKind;
+  return categories[assetKind] ?? getIconCategory(asset.attributes?.folderPath, asset.attributes?.name ?? asset.name);
+}
+
 const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, unknown>>[] =>
   items.reduce<Feature<Geometry, Record<string, unknown>>[]>((features, item) => {
     if (item.geometry) {
       const style = item.attributes?.__kmlStyle as ImportedStyle | undefined;
       const iconUrl = style?.iconHref?.replace(/^http:\/\//i, "https://");
       const googlePushpin = /\/pushpin\/ylw-pushpin\.png(?:$|[?#])/i.test(style?.iconHref ?? "");
-      const iconCategory = getIconCategory(item.attributes?.folderPath, item.attributes?.name ?? item.name);
+      const iconCategory = assetIconCategory(item);
+      const routeType = item.attributes?.routeType ?? (item.name.startsWith("Kabel feeder") ? "FEEDER" : item.name.startsWith("Kabel ODC") ? "DISTRIBUTION" : undefined);
       features.push({
         type: "Feature",
         id: item.id,
@@ -73,15 +90,18 @@ const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, 
           imported: item.source !== "managed",
           geometryType: item.geometry.type,
           iconCategory,
-          lineColor: style?.lineColor ?? (item.source === "kml" ? "#ffffff" : "#3454d1"),
+          atlasIconId: !iconUrl && ["OLT", "ODC", "ODP", "POLE", "JC", "HANDHOLE", "FDT", "OFP", "POP", "ODF", "SLACK", "TERMINAL BOX"].includes(iconCategory) ? `atlas-icon-${iconCategory.toLowerCase().replace(/\s+/g, "-")}` : "",
+          routeType,
+          lineColor: style?.lineColor ?? String(item.attributes?.lineColor ?? (routeType === "FEEDER" ? "#ff0000" : routeType === "DISTRIBUTION" ? "#a000ff" : item.source === "kml" ? "#ffffff" : "#3454d1")),
           lineOpacity: style?.lineOpacity ?? 1,
-          lineWidth: style?.lineWidth ?? (item.source === "kml" ? 1 : 3),
+          lineWidth: style?.lineWidth ?? (routeType ? 5 : item.source === "kml" ? 1 : 3),
           fillColor: style?.fillColor ?? (item.source === "kml" ? "#ffffff" : "#3454d1"),
           fillOpacity: style?.fillOpacity ?? (item.source === "kml" ? 1 : 0.25),
-          fillEnabled: style?.fillEnabled ?? true,
-          outlineEnabled: style?.outlineEnabled ?? true,
+          fillEnabled: style?.fillEnabled ?? item.source === "kml",
+          outlineEnabled: style?.outlineEnabled ?? ((item.geometry.type !== "Polygon" && item.geometry.type !== "MultiPolygon") || item.source === "kml"),
           iconColor: style?.iconColor ?? "#ffffff",
-          markerColor: style?.iconColor ?? "#3454d1",
+          markerColor: style?.iconColor ?? ({ OLT: "#e8b500", ODC: "#ff0000", ODP: "#0000ff", POLE: "#536177", JC: "#a000ff", HANDHOLE: "#536177" } as Record<string, string>)[iconCategory] ?? "#3454d1",
+          isManagedFtth: item.attributes?.source === "ftth-design",
           iconOpacity: style?.iconOpacity ?? 1,
           iconScale: style?.iconScale ?? 1,
           iconAnchor: style?.iconAnchor ?? (googlePushpin ? "bottom-right" : "center"),
@@ -93,6 +113,41 @@ const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, 
     }
     return features;
   }, []);
+
+function addAtlasMapIcons(map: MapLibreMap) {
+  const icons: Record<string, string> = { OLT: "#e8b500", ODC: "#ff0000", ODP: "#0000ff", POLE: "#536177", JC: "#a000ff", HANDHOLE: "#536177", FDT: "#e75b3c", OFP: "#178c80", POP: "#e8b500", ODF: "#684fc7", SLACK: "#64748b", "TERMINAL BOX": "#3280c8" };
+  for (const [category, color] of Object.entries(icons)) {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 64;
+    const context = canvas.getContext("2d");
+    if (!context) continue;
+    context.scale(2, 2);
+    if (category === "ODC" || category === "ODP") {
+      context.fillStyle = color;
+      context.beginPath(); context.moveTo(16, 4); context.lineTo(28, 27); context.lineTo(4, 27); context.closePath(); context.fill();
+      context.globalCompositeOperation = "destination-out";
+      context.beginPath(); context.arc(16, 19, 3.5, 0, 2 * Math.PI); context.fill();
+      context.globalCompositeOperation = "source-over";
+    } else if (category === "OLT") {
+      context.fillStyle = "#fff"; context.strokeStyle = "#d9a400"; context.lineWidth = 1.5;
+      context.beginPath(); context.roundRect(5, 7, 22, 20, 2); context.fill(); context.stroke();
+      for (const y of [12, 18, 24]) { context.fillStyle = "#e8b500"; context.fillRect(8, y - 1, 16, 3); context.fillStyle = "#fff"; context.fillRect(10, y, 2, 1); }
+    } else if (category === "POLE") {
+      context.strokeStyle = color; context.fillStyle = color; context.lineWidth = 2.5;
+      context.beginPath(); context.moveTo(16, 4); context.lineTo(16, 29); context.moveTo(8, 10); context.lineTo(24, 10); context.moveTo(10, 15); context.lineTo(22, 15); context.moveTo(13, 7); context.lineTo(13, 11); context.moveTo(19, 7); context.lineTo(19, 11); context.stroke();
+      context.beginPath(); context.moveTo(11, 29); context.lineTo(21, 29); context.stroke();
+    } else if (category === "JC" || category === "HANDHOLE") {
+      context.beginPath(); context.roundRect(3, 5, 26, 22, 5); context.fill(); context.stroke();
+      context.fillStyle = "#fff"; context.font = "bold 8px sans-serif"; context.textAlign = "center"; context.textBaseline = "middle";
+      context.fillText(category === "JC" ? "JC" : "HH", 16, 16);
+    } else {
+      context.beginPath(); context.arc(16, 16, 14, 0, 2 * Math.PI); context.fill(); context.stroke();
+      context.fillStyle = "#fff"; context.font = "bold 8px sans-serif"; context.textAlign = "center"; context.textBaseline = "middle";
+      context.fillText(category === "TERMINAL BOX" ? "TB" : category, 16, 17, 26);
+    }
+    map.addImage(`atlas-icon-${category.toLowerCase().replace(/\s+/g, "-")}`, context.getImageData(0, 0, 64, 64), { pixelRatio: 2 });
+  }
+}
 const lineCollection = (features: Feature<Geometry, Record<string, unknown>>[]): FeatureCollection<Geometry> => ({ type: "FeatureCollection", features });
 const routeCollection = (features: RouteLine[]): FeatureCollection<LineString> => ({ type: "FeatureCollection", features });
 const pointCollection = (points: Coordinate[]): FeatureCollection<Point> => ({
@@ -185,13 +240,14 @@ export function MapPage() {
   const [mode, setMode] = useState<SelectMode>("idle");
   const [mapError, setMapError] = useState(false);
   const [mapReady, setMapReady] = useState(false);
-  const [selectedIconCategories, setSelectedIconCategories] = useState<string[]>(() => {
+  const [selectedIconCategories, setSelectedIconCategories] = useState<string[] | null>(() => {
     try {
-      const saved = localStorage.getItem("atlas-map-icon-categories");
-      const parsed: unknown = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) && parsed.every((category) => typeof category === "string") ? parsed : [];
+      const saved = localStorage.getItem("atlas-map-icon-categories-v2");
+      if (saved === null) return null;
+      const parsed: unknown = JSON.parse(saved);
+      return Array.isArray(parsed) && parsed.every((category) => typeof category === "string") ? parsed : null;
     } catch {
-      return [];
+      return null;
     }
   });
   const [iconCategorySearch, setIconCategorySearch] = useState("");
@@ -218,16 +274,18 @@ export function MapPage() {
     const counts = new Map<string, number>();
     for (const asset of networkSegments)
       if (asset.geometryType?.toUpperCase() === "POINT") {
-        const category = getIconCategory(asset.attributes?.folderPath, asset.attributes?.name ?? asset.name);
+        const category = assetIconCategory(asset);
         counts.set(category, (counts.get(category) ?? 0) + 1);
       }
     return [...counts].sort(([a], [b]) => a.localeCompare(b, "id"));
   }, [networkSegments]);
+  const activeIconCategories = useMemo(() => selectedIconCategories ?? iconCategoryCounts.map(([category]) => category), [selectedIconCategories, iconCategoryCounts]);
   useEffect(() => {
-    localStorage.setItem("atlas-map-icon-categories", JSON.stringify(selectedIconCategories));
+    if (selectedIconCategories === null) localStorage.removeItem("atlas-map-icon-categories-v2");
+    else localStorage.setItem("atlas-map-icon-categories-v2", JSON.stringify(selectedIconCategories));
   }, [selectedIconCategories]);
   const shapeFeatures = useMemo(() => lineCollection(allNetworkFeatures.filter((feature) => feature.geometry.type !== "Point")), [allNetworkFeatures]);
-  const pointFeatures = useMemo(() => lineCollection(allNetworkFeatures.filter((feature) => feature.geometry.type === "Point" && selectedIconCategories.includes(String(feature.properties.iconCategory)))), [allNetworkFeatures, selectedIconCategories]);
+  const pointFeatures = useMemo(() => lineCollection(allNetworkFeatures.filter((feature) => feature.geometry.type === "Point" && activeIconCategories.includes(String(feature.properties.iconCategory)))), [allNetworkFeatures, activeIconCategories]);
   const routeFeatures = useMemo(() => routeCollection([...confirmedRoutes, ...(routePreview ? [routePreview] : [])]), [confirmedRoutes, routePreview]);
   const routePointFeatures = useMemo(() => pointCollection(routePoints), [routePoints]);
   const selectedAsset = networkSegments.find((item) => item.id === selectedId) ?? networkSegments[0];
@@ -255,6 +313,16 @@ export function MapPage() {
     updateAsset.reset();
   }, [selectedSegment?.id, updateCore.reset, updateAsset.reset]);
   const filteredSegments = networkSegments.filter((item) => item.source !== "kml" && item.assetType === "segment" && `${item.name} ${item.area}`.toLowerCase().includes(search.toLowerCase()));
+  const ftthDraftGroups = new Map<string, typeof filteredSegments>();
+  const standaloneSegments = filteredSegments.filter((segment) => {
+    const groupId = ftthDesignGroupId(segment);
+    if (!groupId) return true;
+    const group = ftthDraftGroups.get(groupId) ?? [];
+    group.push(segment);
+    ftthDraftGroups.set(groupId, group);
+    return false;
+  });
+  const getDraftFeatureCount = (groupId: string) => networkSegments.filter((asset) => ftthDesignGroupId(asset) === groupId).length;
   const matchedImported = imported.filter((item) => (item.source === "kml" || item.assetType !== "segment") && item.name.toLowerCase().includes(search.toLowerCase()));
   const filteredImported = matchedImported.slice(0, 100);
 
@@ -290,6 +358,7 @@ export function MapPage() {
     instance.addControl(new NavigationControl(), "top-right");
     instance.on("error", () => setMapError(true));
     instance.on("load", () => {
+      addAtlasMapIcons(instance);
       const updateBounds = () => {
         const bounds = instance.getBounds();
         setMapBounds([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].map((value) => Number(value.toFixed(4))) as [number, number, number, number]);
@@ -297,7 +366,7 @@ export function MapPage() {
       instance.on("moveend", updateBounds);
       updateBounds();
       instance.addSource("network-shapes", { type: "geojson", data: shapeFeatures });
-      instance.addSource("network-points-data", { type: "geojson", data: pointFeatures, cluster: true, clusterMaxZoom: 17, clusterRadius: 42 });
+      instance.addSource("network-points-data", { type: "geojson", data: pointFeatures, cluster: true, clusterMaxZoom: 14, clusterRadius: 28 });
       instance.addLayer({
         id: "network-polygons",
         type: "fill",
@@ -339,17 +408,17 @@ export function MapPage() {
         id: "network-points",
         type: "circle",
         source: "network-points-data",
-        filter: ["all", ["!", ["has", "point_count"]], ["any", ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]]],
-        paint: { "circle-radius": 3, "circle-color": ["coalesce", ["get", "markerColor"], "#3454d1"], "circle-opacity": ["coalesce", ["get", "iconOpacity"], 1], "circle-stroke-color": "#fff", "circle-stroke-width": 1 },
+        filter: ["all", ["!", ["has", "point_count"]], ["all", ["any", ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]], ["any", ["!", ["has", "atlasIconId"]], ["==", ["get", "atlasIconId"], ""]]]],
+        paint: { "circle-radius": ["case", ["in", ["get", "iconCategory"], ["literal", ["OLT", "ODC", "ODP", "POLE", "JC", "HANDHOLE"]]], 9, 3], "circle-color": ["coalesce", ["get", "markerColor"], "#3454d1"], "circle-opacity": ["coalesce", ["get", "iconOpacity"], 1], "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 },
       });
       instance.addLayer({
         id: "network-icons",
         type: "symbol",
         source: "network-points-data",
-        filter: ["all", ["!", ["has", "point_count"]], ["has", "iconImageId"], ["!=", ["get", "iconImageId"], ""]],
+        filter: ["all", ["!", ["has", "point_count"]], ["any", ["!", ["has", "atlasIconId"]], ["==", ["get", "atlasIconId"], ""], ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]]],
         layout: {
-          "icon-image": ["get", "iconImageId"],
-          "icon-size": ["min", ["max", ["*", ["coalesce", ["get", "iconScale"], 1], 0.9], 0.9], 1],
+          "icon-image": ["case", ["all", ["has", "atlasIconId"], ["!=", ["get", "atlasIconId"], ""]], ["get", "atlasIconId"], ["get", "iconImageId"]],
+          "icon-size": ["case", ["all", ["has", "atlasIconId"], ["!=", ["get", "atlasIconId"], ""]], ["match", ["get", "iconCategory"], "POLE", 0.62, "OLT", 0.8, "ODC", 0.8, "ODP", 0.8, 0.8], ["min", ["max", ["*", ["coalesce", ["get", "iconScale"], 1], 0.9], 0.9], 1]],
           "icon-anchor": ["get", "iconAnchor"],
           "icon-offset": ["get", "iconOffset"],
           "icon-allow-overlap": true,
@@ -439,15 +508,15 @@ export function MapPage() {
   useEffect(() => {
     const instance = map.current;
     if (!instance || !mapReady) return;
-    const categoryFilter: FilterSpecification = selectedIconCategories.length ? ["in", ["get", "iconCategory"], ["literal", selectedIconCategories]] : ["==", ["get", "iconCategory"], "__NO_ICON_CATEGORY_SELECTED__"];
-    instance.setFilter("network-icons", ["all", ["has", "iconImageId"], ["!=", ["get", "iconImageId"], ""], categoryFilter]);
-    instance.setFilter("network-points", ["all", ["any", ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]], categoryFilter]);
+    const categoryFilter: FilterSpecification = activeIconCategories.length ? ["in", ["get", "iconCategory"], ["literal", activeIconCategories]] : ["==", ["get", "iconCategory"], "__NO_ICON_CATEGORY_SELECTED__"];
+    instance.setFilter("network-icons", ["all", ["any", ["all", ["has", "atlasIconId"], ["!=", ["get", "atlasIconId"], ""]], ["all", ["has", "iconImageId"], ["!=", ["get", "iconImageId"], ""]]], categoryFilter]);
+    instance.setFilter("network-points", ["all", ["any", ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]], ["any", ["!", ["has", "atlasIconId"]], ["==", ["get", "atlasIconId"], ""]], categoryFilter]);
     instance.setFilter("network-point-hit", categoryFilter);
-    if (!selectedIconCategories.length) {
+    if (!activeIconCategories.length) {
       instance.getCanvas().style.cursor = "";
       hoverPopup.current?.remove();
     }
-  }, [mapReady, selectedIconCategories]);
+  }, [mapReady, activeIconCategories]);
   useEffect(() => {
     (map.current?.getSource("route-lines") as GeoJSONSource | undefined)?.setData(routeFeatures);
   }, [routeFeatures]);
@@ -641,7 +710,7 @@ export function MapPage() {
               <button className="btn btn-light" onClick={() => setFileModal("download")}><i className="bi bi-download me-1" />Unduh</button>
             </div>}
             <details ref={iconFilter} className="map-icon-filter">
-              <summary><i className="bi bi-funnel" /><span>Filter ikon</span><b>{selectedIconCategories.length}/{iconCategoryCounts.length}</b></summary>
+              <summary><i className="bi bi-funnel" /><span>Filter ikon</span><b>{activeIconCategories.length}/{iconCategoryCounts.length}</b></summary>
               <div className="map-icon-filter-menu">
                 <div className="map-icon-filter-actions">
                   <button type="button" onClick={() => setSelectedIconCategories(iconCategoryCounts.map(([category]) => category))}>Pilih semua</button>
@@ -650,7 +719,7 @@ export function MapPage() {
                 <input aria-label="Cari kategori ikon" placeholder="Cari jenis ikon" value={iconCategorySearch} onChange={(event) => setIconCategorySearch(event.target.value)} />
                 <div className="map-icon-filter-list">
                   {iconCategoryCounts.filter(([category]) => category.toLowerCase().includes(iconCategorySearch.toLowerCase())).map(([category, count]) => (
-                    <label key={category}><input type="checkbox" checked={selectedIconCategories.includes(category)} onChange={(event) => setSelectedIconCategories((current) => (event.target.checked ? [...current, category] : current.filter((item) => item !== category)))} /><span>{category}</span><small>{count.toLocaleString("id-ID")}</small></label>
+                    <label key={category}><input type="checkbox" checked={activeIconCategories.includes(category)} onChange={(event) => setSelectedIconCategories((current) => (event.target.checked ? [...(current ?? activeIconCategories), category] : (current ?? activeIconCategories).filter((item) => item !== category)))} /><span>{category}</span><small>{count.toLocaleString("id-ID")}</small></label>
                   ))}
                 </div>
                 {!iconCategoryCounts.length && <small className="map-icon-filter-empty">Belum ada ikon titik.</small>}
@@ -673,7 +742,7 @@ export function MapPage() {
           <div className="map-tools">
             <div className="map-search">
               <label className="form-label fw-semibold">
-                Daftar segmen <span className="text-muted fw-normal">({filteredSegments.length + filteredImported.length})</span>
+                Daftar segmen <span className="text-muted fw-normal">({standaloneSegments.length + ftthDraftGroups.size + filteredImported.length})</span>
               </label>
               <div className="input-group">
                 <span className="input-group-text bg-white">
@@ -761,7 +830,7 @@ export function MapPage() {
             )}
           </div>
           <div className="segment-list">
-            {filteredSegments.map((segment) => (
+            {standaloneSegments.map((segment) => (
               <button key={segment.id} className={`segment-item ${selectedId === segment.id ? "selected" : ""}`} onClick={() => focusAsset(segment)}>
                 <span className="segment-dot" />
                 <span className="segment-meta">
@@ -772,6 +841,18 @@ export function MapPage() {
                 </span>
                 <i className="bi bi-chevron-right" />
               </button>
+            ))}
+            {[...ftthDraftGroups].map(([groupId, segments]) => (
+              <details key={groupId} className="ftth-design-group">
+                <summary><span className="segment-dot" /><span className="segment-meta"><b>Draft FTTH · {segments[0]?.area || "Area desain"}</b><small>{segments.length} jalur · {getDraftFeatureCount(groupId)} aset dalam satu desain</small></span><i className="bi bi-chevron-down" /></summary>
+                <div>{segments.map((segment) => (
+                  <button key={segment.id} className={`segment-item ${selectedId === segment.id ? "selected" : ""}`} onClick={() => focusAsset(segment)}>
+                    <span className="segment-dot" style={{ background: segment.attributes?.routeType === "FEEDER" ? "#ff0000" : "#a000ff" }} />
+                    <span className="segment-meta"><b>{segment.name}</b><small>{segment.attributes?.routeType === "FEEDER" ? "Kabel feeder" : "Kabel distribusi"} · {segment.area}</small></span>
+                    <i className="bi bi-chevron-right" />
+                  </button>
+                ))}</div>
+              </details>
             ))}
             {filteredImported.map((line) => (
               <button key={line.id} className={`segment-item imported-item ${selectedId === line.id ? "selected" : ""}`} onClick={() => focusAsset(line)}>

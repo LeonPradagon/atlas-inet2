@@ -40,7 +40,7 @@ export const postJson = (data: unknown): AxiosRequestConfig => ({ method: 'POST'
 export type NetworkAsset = {
   id: string; name: string; area: string; assetType: string; source: 'managed' | 'kml' | 'xlsx'; cableType: string; installation: 'Aerial' | 'Burial'; side: 'Kiri' | 'Kanan';
   pole: string; poleHeight: '7 m' | '9 m' | null; odc: string; odp: string; totalCores: number; usedCores: number; bookedCores: number; idleCores: number; nameValid?: boolean;
-  geometry: Geometry | null; geometryType?: string; attributes: Record<string, unknown>
+  geometry: Geometry | null; geometryType?: string; createdAt?: string; attributes: Record<string, unknown>
 }
 export type Booking = { id: string; customer: string; picCustomer: string; picPresales: string; segmentId: string; cores: number; status: 'Booked' | 'Waiting List' | 'Released' | 'Expired'; requestedAt: string; expiresAt: string | null; segmentName: string; area: string }
 export type AssetRelation = { assetId: string; kind: 'POLE' | 'ODC' | 'ODP'; name: string; area?: string; poleHeight: '7 m' | '9 m' | null }

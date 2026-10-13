@@ -6,7 +6,7 @@ import { Database } from '../database/database'
 type AssetRecord = {
   id: string; name: string; area: string; assetType: string; source: string; cableType: string; installation: string; side: string;
   pole: string; poleHeight: string | null; odc: string; odp: string; totalCores: number; usedCores: number; bookedCores: number; idleCores: number;
-  geometry: unknown; attributes: Record<string, unknown>
+  geometry: unknown; attributes: Record<string, unknown>; createdAt: string
 }
 
 @Injectable()
@@ -16,6 +16,38 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
 
   private async audit(client: PoolClient, actorId: string | null, action: string, entityType: string, entityId: string | null, details: Record<string, unknown>) {
     await client.query('INSERT INTO audit_logs(actor_id,action,entity_type,entity_id,details) VALUES($1,$2,$3,$4,$5::jsonb)', [actorId,action,entityType,entityId,JSON.stringify(details)])
+  }
+
+  async saveAnalysisHistory(userId: string, type: 'ADDRESS' | 'BULK', title: string, input: unknown, result: unknown) {
+    const { rows } = await this.db.query(`INSERT INTO analysis_history(user_id,analysis_type,title,input,result)
+      VALUES($1,$2,$3,$4::jsonb,$5::jsonb)
+      RETURNING id,analysis_type AS "analysisType",title,created_at AS "createdAt"`,
+    [userId, type, title.slice(0, 300), JSON.stringify(input), JSON.stringify(result)])
+    return rows[0]
+  }
+
+  async listAnalysisHistory(userId: string, type?: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN') {
+    const { rows } = await this.db.query(`SELECT id,analysis_type AS "analysisType",title,
+      result->>'status' AS status,
+      CASE WHEN analysis_type='BULK' THEN jsonb_array_length(COALESCE(result->'rows','[]'::jsonb))
+           WHEN analysis_type='FTTH_DESIGN' THEN COALESCE((result->>'savedCount')::int,0)
+           ELSE 1 END AS "itemCount",
+      created_at AS "createdAt"
+      FROM analysis_history WHERE user_id=$1 AND ($2::text IS NULL OR analysis_type=$2)
+      ORDER BY created_at DESC LIMIT 200`, [userId, type ?? null])
+    return rows
+  }
+
+  async getAnalysisHistory(userId: string, id: string) {
+    const { rows } = await this.db.query(`SELECT id,analysis_type AS "analysisType",title,input,result,created_at AS "createdAt"
+      FROM analysis_history WHERE user_id=$1 AND id=$2`, [userId, id])
+    if (!rows[0]) throw new NotFoundException({ message: 'Riwayat analisis tidak ditemukan.' })
+    return rows[0]
+  }
+
+  async deleteAnalysisHistory(userId: string, id: string) {
+    const { rowCount } = await this.db.query('DELETE FROM analysis_history WHERE user_id=$1 AND id=$2', [userId, id])
+    if (!rowCount) throw new NotFoundException({ message: 'Riwayat analisis tidak ditemukan.' })
   }
 
   async listAuditTrails(search = '', limit = 100) {
@@ -39,7 +71,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
       count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
       count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
-      GeometryType(a.geometry) AS "geometryType",NULL::jsonb AS geometry,a.attributes
+      GeometryType(a.geometry) AS "geometryType",NULL::jsonb AS geometry,a.attributes,a.created_at AS "createdAt"
       FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
       WHERE $1='' OR a.name ILIKE '%'||$1||'%' OR a.area ILIKE '%'||$1||'%'
       GROUP BY a.id ORDER BY a.name`, [search])
@@ -53,13 +85,88 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
       count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
       count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
-      COALESCE(a.source_geometry,ST_AsGeoJSON(a.geometry)::jsonb) AS geometry,GeometryType(a.geometry) AS "geometryType",a.attributes
+      COALESCE(a.source_geometry,ST_AsGeoJSON(a.geometry)::jsonb) AS geometry,GeometryType(a.geometry) AS "geometryType",a.attributes,a.created_at AS "createdAt"
       FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
       WHERE a.geometry && ST_MakeEnvelope($1,$2,$3,$4,4326)
         AND ST_Intersects(a.geometry,ST_MakeEnvelope($1,$2,$3,$4,4326))
       GROUP BY a.id ORDER BY a.name`, bounds)
     const pattern = new RegExp((await this.getCableNamePattern()).pattern)
     return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
+  }
+
+  async createPointAsset(body: { name?: unknown; kind?: unknown; longitude?: unknown; latitude?: unknown; area?: unknown; poleHeight?: unknown }, userId: string) {
+    const kinds = ['OLT', 'JOINT_CLOSURE', 'HANDHOLE', 'ODC', 'ODP', 'POLE']
+    const kind = typeof body.kind === 'string' ? body.kind : ''
+    const longitude = body.longitude
+    const latitude = body.latitude
+    const name = typeof body.name === 'string' ? body.name.trim() : ''
+    const area = typeof body.area === 'string' ? body.area.trim() : ''
+    const poleHeight = body.poleHeight === '7 m' || body.poleHeight === '9 m' ? body.poleHeight : null
+    if (!kinds.includes(kind)) throw new BadRequestException({ message: 'Jenis aset FTTH tidak valid.' })
+    if (kind === 'POLE' && !poleHeight) throw new BadRequestException({ message: 'Tinggi tiang harus 7 m atau 9 m.' })
+    if (!name || name.length > 150) throw new BadRequestException({ message: 'Nama aset wajib diisi, maksimal 150 karakter.' })
+    if (area.length > 300) throw new BadRequestException({ message: 'Wilayah maksimal 300 karakter.' })
+    if (typeof longitude !== 'number' || typeof latitude !== 'number' || !Number.isFinite(longitude) || !Number.isFinite(latitude) || Math.abs(longitude) > 180 || Math.abs(latitude) > 90) throw new BadRequestException({ message: 'Koordinat aset tidak valid.' })
+    const id = randomUUID()
+    const category = kind === 'JOINT_CLOSURE' ? 'JC' : kind === 'HANDHOLE' ? 'HANDHOLE' : kind
+    const attributes = { folderPath: `FTTH / ${category}`, assetKind: kind, source: 'address-analysis' }
+    await this.db.transaction(async (client) => {
+      await client.query(`INSERT INTO network_assets(id,name,asset_type,source,area,cable_type,installation,road_side,pole,pole_height,attributes,geometry,source_geometry)
+        VALUES($1,$2,'asset','managed',$3,'Fiber Optic','Aerial','Kiri',$4,$5,$6::jsonb,ST_SetSRID(ST_MakePoint($7,$8),4326),$9::jsonb)`,
+      [id,name,area,kind === 'POLE' ? name : '',poleHeight,JSON.stringify(attributes),longitude,latitude,JSON.stringify({ type: 'Point', coordinates: [longitude,latitude] })])
+      await this.audit(client,userId,'FTTH_ASSET_CREATED','ASSET',id,{ kind,longitude,latitude,area,poleHeight })
+    })
+    return { id,name,kind,area,longitude,latitude,poleHeight }
+  }
+
+  async saveFtthDesign(input: unknown, userId: string, areaInput: unknown) {
+    if (!Array.isArray(input) || input.length < 1 || input.length > 500) throw new BadRequestException({ message: 'Desain harus memiliki 1–500 fitur.' })
+    const area = typeof areaInput === 'string' ? areaInput.trim() : ''
+    if (area.length > 300) throw new BadRequestException({ message: 'Wilayah maksimal 300 karakter.' })
+    const kinds = ['OLT','JOINT_CLOSURE','HANDHOLE','ODC','ODP','POLE','ROUTE']
+    const designId = randomUUID()
+    const features = input.map((value) => {
+      if (!value || typeof value !== 'object') throw new BadRequestException({ message: 'Fitur desain tidak valid.' })
+      const feature = value as { kind?: unknown; name?: unknown; poleHeight?: unknown; routeType?: unknown; geometry?: unknown }
+      const kind = String(feature.kind ?? '')
+      const name = String(feature.name ?? '').trim()
+      const poleHeight = feature.poleHeight === '7 m' || feature.poleHeight === '9 m' ? feature.poleHeight : null
+      const geometry = feature.geometry as { type?: unknown; coordinates?: unknown } | undefined
+      if (!kinds.includes(kind) || !name || name.length > 150 || !geometry || !['Point','LineString'].includes(String(geometry.type)) || !Array.isArray(geometry.coordinates)) throw new BadRequestException({ message: 'Jenis, nama, atau geometri desain tidak valid.' })
+      const coordinates = geometry.coordinates as unknown[]
+      const points = geometry.type === 'Point' ? [coordinates] : coordinates
+      if ((geometry.type === 'Point' && coordinates.length < 2) || (geometry.type === 'LineString' && (coordinates.length < 2 || coordinates.length > 2000)) || points.some((point) => !Array.isArray(point) || point.length < 2 || typeof point[0] !== 'number' || typeof point[1] !== 'number' || !Number.isFinite(point[0]) || !Number.isFinite(point[1]) || Math.abs(point[0]) > 180 || Math.abs(point[1]) > 90)) throw new BadRequestException({ message: 'Koordinat desain tidak valid.' })
+      if ((kind === 'ROUTE') !== (geometry.type === 'LineString')) throw new BadRequestException({ message: 'Fitur kabel harus berupa jalur garis; aset perangkat harus berupa titik.' })
+      if (kind === 'POLE' && !poleHeight) throw new BadRequestException({ message: 'Setiap tiang draft harus memiliki tinggi 7 m atau 9 m.' })
+      const routeType = kind === 'ROUTE' && (feature.routeType === 'FEEDER' || feature.routeType === 'DISTRIBUTION') ? feature.routeType : null
+      if (kind === 'ROUTE' && !routeType) throw new BadRequestException({ message: 'Jenis jalur FTTH harus feeder atau distribusi.' })
+      const category = kind === 'JOINT_CLOSURE' ? 'JC' : kind === 'HANDHOLE' ? 'HANDHOLE' : kind
+      const attributes = { folderPath: `FTTH Draft / ${designId} / ${category}`, ftthDesignId: designId, assetKind: kind, source: 'ftth-design', poleHeight, routeType, lineColor: routeType === 'FEEDER' ? '#ff0000' : routeType === 'DISTRIBUTION' ? '#a000ff' : undefined }
+      return { id: randomUUID(),kind,name,poleHeight,routeType,geometry,geometryJson: JSON.stringify({ type: geometry.type, coordinates }),attributes: JSON.stringify(attributes) }
+    })
+    const historyId = await this.db.transaction(async (client) => {
+      for (const feature of features) {
+        const isRoute = feature.kind === 'ROUTE'
+        await client.query(`INSERT INTO network_assets(id,name,asset_type,source,area,cable_type,installation,road_side,pole_height,attributes,geometry,source_geometry)
+          VALUES($1,$2,$3,'managed',$4,'Fiber Optic','Aerial','Kiri',$5,$6::jsonb,ST_SetSRID(ST_GeomFromGeoJSON($7),4326),$7::jsonb)`,
+        [feature.id,feature.name,isRoute ? 'segment' : 'asset',area,feature.poleHeight,feature.attributes,feature.geometryJson])
+      }
+      const historyTitle = `Draft FTTH · ${area || 'Lokasi analisis'}`.slice(0, 300)
+      const historyInput = { area, designId }
+      const historyResult = {
+        designId,
+        savedCount: features.length,
+        assetCount: features.filter((feature) => feature.kind !== 'ROUTE').length,
+        routeCount: features.filter((feature) => feature.kind === 'ROUTE').length,
+        features: features.map(({ kind, name, poleHeight, routeType, geometry }) => ({ kind, name, poleHeight, routeType, geometry })),
+      }
+      const { rows: historyRows } = await client.query(`INSERT INTO analysis_history(user_id,analysis_type,title,input,result)
+        VALUES($1,'FTTH_DESIGN',$2,$3::jsonb,$4::jsonb) RETURNING id`,
+      [userId, historyTitle, JSON.stringify(historyInput), JSON.stringify(historyResult)])
+      await this.audit(client,userId,'FTTH_DESIGN_CREATED','FTTH_DESIGN',features[0].id,{ featureCount: features.length, kinds: [...new Set(features.map((feature) => feature.kind))] })
+      return historyRows[0].id as string
+    })
+    return { savedCount: features.length, designId, historyId }
   }
 
   async assetGeometry(id: string) {
