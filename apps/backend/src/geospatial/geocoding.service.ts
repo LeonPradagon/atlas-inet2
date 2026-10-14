@@ -77,13 +77,12 @@ export class GeocodingService {
     if (address.postalCode?.trim()) params.set('postcode', address.postalCode.trim())
 
     const expectedStreet = tokens(street ?? '')
-    const matches = (features: PhotonFeature[]) => features.find((feature) => {
+    const matches = (features: PhotonFeature[]) => features.filter((feature) => {
       const properties = feature.properties ?? {}
       if (properties.countrycode && properties.countrycode.toLowerCase() !== 'id') return false
       if (district && properties.district && !this.samePlace(properties.district, district)) return false
       if (location.city && properties.city && !this.samePlace(properties.city, location.city)) return false
       if (location.county && properties.county && !this.samePlace(properties.county.replace(/^(?:kabupaten administrasi|kabupaten|kab)\s+/i, ''), location.county)) return false
-      if (address.postalCode && properties.postcode && properties.postcode !== address.postalCode) return false
       if (address.number && properties.housenumber) {
         const expectedNumber = tokens(address.number).join('')
         const actualNumber = tokens(properties.housenumber).join('')
@@ -92,10 +91,12 @@ export class GeocodingService {
       const actualStreet = tokens(properties.street ?? properties.name ?? '')
       return expectedStreet.every((token) => matchesStreetToken(token, actualStreet))
     })
-    let match = matches(await this.search('structured', params))
+    const preferPostalCode = (features: PhotonFeature[]) => matches(features)
+      .sort((left, right) => Number(right.properties?.postcode === address.postalCode) - Number(left.properties?.postcode === address.postalCode))[0]
+    let match = preferPostalCode(await this.search('structured', params))
     if (!match) {
       const query = [street, address.number && `No. ${address.number}`, address.subdistrict, district, address.city, address.province, address.postalCode, 'Indonesia'].filter(Boolean).join(', ')
-      match = matches(await this.search('api', new URLSearchParams({ q: query, countrycode: 'id', limit: '5' })))
+      match = preferPostalCode(await this.search('api', new URLSearchParams({ q: query, countrycode: 'id', limit: '5' })))
     }
     if (match) return { coordinates: this.coordinates(match), provider: 'photon' }
     const coordinates = await this.geocodeWithNominatim(address)
@@ -147,7 +148,6 @@ export class GeocodingService {
       const match = features.find((feature) => {
         if (feature.country_code && feature.country_code.toLowerCase() !== 'id') return false
         const details = feature.address ?? {}
-        if (address.postalCode && details.postcode && details.postcode.replace(/\s/g, '') !== address.postalCode.replace(/\s/g, '')) return false
         const streetText = tokens([feature.name, feature.display_name, details.road].filter(Boolean).join(' '))
         return expectedStreetTokens.every((token) => matchesStreetToken(token, streetText))
       })
