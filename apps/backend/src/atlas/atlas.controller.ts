@@ -49,9 +49,9 @@ export class AtlasController {
   }
 
   @Post('assets/ftth-design')
-  async saveFtthDesign(@Req() req: IncomingMessage, @Body() body: { features?: unknown; area?: unknown }) {
+  async saveFtthDesign(@Req() req: IncomingMessage, @Body() body: { features?: unknown; area?: unknown; sourceAnalysisId?: unknown; sourceRow?: unknown }) {
     const user = await this.auth.requireAdmin(req)
-    return this.atlas.saveFtthDesign(body?.features, user.id, body?.area)
+    return this.atlas.saveFtthDesign(body?.features, user.id, body?.area, { analysisId: body?.sourceAnalysisId, row: body?.sourceRow })
   }
 
   @Get('assets/:id/geometry')
@@ -180,8 +180,8 @@ export class AtlasController {
       }
     }
     const result = { providerAvailable: Boolean(process.env.GEOCODER_URL), rows }
-    await this.atlas.saveAnalysisHistory(user.id, 'BULK', file.originalname, { fileName: file.originalname, rowCount: rows.length }, result)
-    return result
+    const historyId = await this.atlas.saveAnalysisHistory(user.id, 'BULK', file.originalname, { fileName: file.originalname, rowCount: rows.length }, result)
+    return { ...result, historyId }
   }
 
   @Get('analysis/history')

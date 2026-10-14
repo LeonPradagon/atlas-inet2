@@ -37,6 +37,13 @@ export async function api<T>(path: string, options: AxiosRequestConfig = {}): Pr
 
 export const postJson = (data: unknown): AxiosRequestConfig => ({ method: 'POST', data })
 
+export async function postCompressedJson<T>(path: string, data: unknown): Promise<T> {
+  if (typeof CompressionStream === 'undefined') return api<T>(path, postJson(data))
+  const stream = new Blob([JSON.stringify(data)]).stream().pipeThrough(new CompressionStream('gzip'))
+  const compressed = await new Response(stream).blob()
+  return api<T>(path, { method: 'POST', data: compressed, headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' } })
+}
+
 export type NetworkAsset = {
   id: string; name: string; area: string; assetType: string; source: 'managed' | 'kml' | 'xlsx'; cableType: string; installation: 'Aerial' | 'Burial'; side: 'Kiri' | 'Kanan';
   pole: string; poleHeight: '7 m' | '9 m' | null; odc: string; odp: string; totalCores: number; usedCores: number; bookedCores: number; idleCores: number; nameValid?: boolean;

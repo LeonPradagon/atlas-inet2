@@ -3,70 +3,15 @@ import { useEffect, useRef, useState } from 'react'
 import { Map as MapLibreMap, NavigationControl, Popup, setWorkerUrl } from 'maplibre-gl'
 import type { MapMouseEvent } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
-import type { Feature, LineString, Point } from 'geojson'
+import { distanceMeters, generateFtthDraft, offsetCoordinate, type DesignFeature } from './ftthDraft'
 import { Link } from '@tanstack/react-router'
 import { PageHeader } from '../../components/PageHeader'
-import { api, postJson, type ApiError } from '../../lib/api'
+import { api, postCompressedJson, postJson, type ApiError } from '../../lib/api'
 
 type Result = { address: string; latitude: number; longitude: number; network: { name: string; area: string; cableType: string } | null; distanceMeters: number | null; status: string; message?: string; geocodingProvider?: 'photon' | 'nominatim' }
 type RegionOption = { code: string; name: string }
 type Subdistrict = RegionOption & { postalCode: string }
 type AddressFields = { street: string; number: string; postalCode: string; provinceCode: string; cityCode: string; districtCode: string; subdistrictCode: string }
-type DesignFeature = Feature<Point | LineString, { kind: string; name: string; routeType?: 'FEEDER' | 'DISTRIBUTION'; spacingMeters?: number; poleHeight?: string; roadClass?: string }>
-
-function offsetCoordinate([longitude, latitude]: [number, number], meters: number, bearing: number): [number, number] {
-  const distance = meters / 6371008.8
-  const lat1 = latitude * Math.PI / 180
-  const lon1 = longitude * Math.PI / 180
-  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distance) + Math.cos(lat1) * Math.sin(distance) * Math.cos(bearing))
-  const lon2 = lon1 + Math.atan2(Math.sin(bearing) * Math.sin(distance) * Math.cos(lat1), Math.cos(distance) - Math.sin(lat1) * Math.sin(lat2))
-  return [lon2 * 180 / Math.PI, lat2 * 180 / Math.PI]
-}
-
-function insideBoundary([longitude, latitude]: [number, number], center: [number, number], radius: number): boolean {
-  const north = (latitude - center[1]) * 110540
-  const east = (longitude - center[0]) * 111320 * Math.cos(center[1] * Math.PI / 180)
-  return Math.hypot(east, north) <= radius
-}
-
-function distanceMeters(a: [number, number], b: [number, number]): number {
-  const latitude = (a[1] + b[1]) / 2 * Math.PI / 180
-  return Math.hypot((a[0] - b[0]) * 111320 * Math.cos(latitude), (a[1] - b[1]) * 110540)
-}
-
-function coverageTargets(center: [number, number]): [number, number][] {
-  const targets: [number, number][] = []
-  // 200 m grid keeps every point within ~142 m of a candidate service point.
-  for (let north = -400; north <= 400; north += 200) {
-    for (let east = -400; east <= 400; east += 200) {
-      if (Math.hypot(east, north) > 500) continue
-      targets.push(offsetCoordinate(center, Math.hypot(east, north), Math.atan2(east, north)))
-    }
-  }
-  return targets
-}
-
-function routePoles(coordinates: [number, number][], routeName: string, spacing: number, roadClasses: (string | null)[]): DesignFeature[] {
-  const features: DesignFeature[] = []
-  let remaining = spacing
-  for (let index = 1; index < coordinates.length; index++) {
-    const start = coordinates[index - 1]
-    const end = coordinates[index]
-    const middleLat = (start[1] + end[1]) * Math.PI / 360
-    const dx = (end[0] - start[0]) * 111320 * Math.cos(middleLat)
-    const dy = (end[1] - start[1]) * 110540
-    const length = Math.hypot(dx, dy)
-    const roadClass = roadClasses[index - 1]
-    const poleHeight = roadClass && ['primary', 'secondary', 'tertiary', 'trunk', 'motorway'].includes(roadClass) ? '9 m' : '7 m'
-    for (; length > 0 && remaining <= length; remaining += spacing) {
-      const fraction = remaining / length
-      features.push({ type: 'Feature', properties: { kind: 'POLE', name: `Tiang ${routeName} ${features.length + 1}`, spacingMeters: spacing, poleHeight, roadClass: roadClass ?? undefined }, geometry: { type: 'Point', coordinates: [start[0] + (end[0] - start[0]) * fraction, start[1] + (end[1] - start[1]) * fraction] } })
-    }
-    remaining -= length
-  }
-  return features
-}
-
 function AddressResultMap({ latitude, longitude, anchorKind, design }: { latitude: number; longitude: number; anchorKind: string; design: DesignFeature[] }) {
   const container = useRef<HTMLDivElement>(null)
 
@@ -292,10 +237,10 @@ export function AddressAnalysisPage() {
     onSuccess: () => Promise.all([queryClient.invalidateQueries({ queryKey: ['segments'] }), queryClient.invalidateQueries({ queryKey: ['map-assets'] })]),
   })
   const saveDesign = useMutation({
-    mutationFn: () => api<{ savedCount: number; historyId: string }>('/assets/ftth-design', postJson({ area: [city?.name, province?.name].filter(Boolean).join(', '), features: [
+    mutationFn: () => postCompressedJson<{ savedCount: number; historyId: string }>('/assets/ftth-design', { area: [city?.name, province?.name].filter(Boolean).join(', '), features: [
       ...(!saveAsset.isSuccess ? [{ kind: assetKind, name: (assetName.trim() || `${assetKind} · ${address.street.trim() || 'Titik analisis'}`).slice(0, 150), poleHeight: assetKind === 'POLE' ? poleHeight : undefined, geometry: { type: 'Point', coordinates: [analyze.data!.longitude, analyze.data!.latitude] } }] : []),
       ...designFeatures.map((feature) => ({ ...feature.properties, geometry: feature.geometry })),
-    ] })),
+    ] }),
     onSuccess: () => Promise.all([queryClient.invalidateQueries({ queryKey: ['segments'] }), queryClient.invalidateQueries({ queryKey: ['map-assets'] }), queryClient.invalidateQueries({ queryKey: ['analysis-history'] })]),
   })
   const error = analyze.error as ApiError | null
@@ -312,90 +257,14 @@ export function AddressAnalysisPage() {
   }
   const createFtthDraft = async () => {
     if (!analyze.data) return
-    setDesignLoading(true)
-    setDesignError('')
-    setDesignNotice('')
-    setDesignFeatures([])
-    saveDesign.reset()
+    setDesignLoading(true); setDesignError(''); setDesignNotice(''); setDesignFeatures([]); saveDesign.reset()
     try {
-      const anchor: [number, number] = [analyze.data.longitude, analyze.data.latitude]
-      const requestRoute = async (from: [number, number], to: [number, number], name: string, maxDistance: number) => {
-        const result = await api<{ geometry?: LineString; roadClasses?: (string | null)[]; distanceMeters?: number }>('/routes/preview-ftth', postJson({ coordinates: [from, to] }))
-        if (!result.geometry || result.geometry.coordinates.length < 2) throw new Error(`Jalur ${name} tidak ditemukan di jaringan jalan.`)
-        const points = result.geometry.coordinates as [number, number][]
-        if ((result.distanceMeters ?? Infinity) > maxDistance) throw new Error(`Jalur ${name} melebihi batas ${maxDistance} m.`)
-        return { points, roadClasses: result.roadClasses ?? [] }
-      }
-      const draft: DesignFeature[] = []
-      const poleKeys = new Set<string>()
-      let uncoveredTargets = 0
-      const appendRoute = (points: [number, number][], roadClasses: (string | null)[], name: string, routeType: 'FEEDER' | 'DISTRIBUTION') => {
-        draft.push({ type: 'Feature', properties: { kind: 'ROUTE', name, routeType }, geometry: { type: 'LineString', coordinates: points } })
-        for (const pole of routePoles(points, name, 50, roadClasses)) {
-          const [longitude, latitude] = pole.geometry.coordinates as [number, number]
-          const key = `${longitude.toFixed(5)},${latitude.toFixed(5)}`
-          if (!poleKeys.has(key)) { poleKeys.add(key); draft.push(pole) }
-        }
-      }
-      const sourceLabel = ({ OLT: 'OLT', JOINT_CLOSURE: 'Joint Closure', HANDHOLE: 'Handhole', ODC: 'ODC', ODP: 'ODP', POLE: 'Tiang' } as Record<string, string>)[assetKind] ?? assetKind
-      const odcCandidates: { index: number; coordinate: [number, number]; feeder: [number, number][]; roadClasses: (string | null)[]; used: number }[] = []
-      const odcLocations = [
-        ...[180, 360].flatMap((radius) => Array.from({ length: 8 }, (_, direction) => offsetCoordinate(anchor, radius, 2 * Math.PI * direction / 8))),
-        ...coverageTargets(anchor).filter((target) => distanceMeters(anchor, target) >= 120),
-      ]
-      for (const location of odcLocations) {
-        const index = odcCandidates.length + 1
-        const odcName = `ODC ${String(index).padStart(2, '0')}`
-        const feederName = assetKind === 'OLT' ? `Kabel feeder OLT–${odcName}` : `Kabel lanjutan ${sourceLabel}–${odcName}`
-        let feeder: { points: [number, number][]; roadClasses: (string | null)[] }
-        try {
-          feeder = await requestRoute(anchor, location, feederName, Number.POSITIVE_INFINITY)
-        } catch {
-          continue
-        }
-        const odc: [number, number] = feeder.points.at(-1)!
-        if (insideBoundary(odc, anchor, 500) && !odcCandidates.some((candidate) => distanceMeters(candidate.coordinate, odc) < 80)) {
-          odcCandidates.push({ index, coordinate: odc, feeder: feeder.points, roadClasses: feeder.roadClasses, used: 0 })
-        }
-      }
-      let odpIndex = 0
-      for (const target of coverageTargets(anchor)) {
-        let placed = false
-        const candidates = odcCandidates.filter((odc) => odc.used < 4).sort((a, b) => {
-          return distanceMeters(a.coordinate, target) - distanceMeters(b.coordinate, target)
-        })
-        for (const odc of candidates) {
-          const name = `ODP ${String(odpIndex + 1).padStart(2, '0')}`
-          let route: { points: [number, number][]; roadClasses: (string | null)[] }
-          try {
-            route = await requestRoute(odc.coordinate, target, `kabel ODC ${String(odc.index).padStart(2, '0')}–${name}`, 1500)
-          } catch {
-            continue
-          }
-          const odp: [number, number] = route.points.at(-1)!
-          if (!insideBoundary(odp, anchor, 500)) continue
-          const feederName = assetKind === 'OLT' ? `Kabel feeder OLT–ODC ${String(odc.index).padStart(2, '0')}` : `Kabel lanjutan ${sourceLabel}–ODC ${String(odc.index).padStart(2, '0')}`
-          if (odc.used === 0) {
-            appendRoute(odc.feeder, odc.roadClasses, feederName, 'FEEDER')
-            draft.push({ type: 'Feature', properties: { kind: 'ODC', name: `ODC ${String(odc.index).padStart(2, '0')}` }, geometry: { type: 'Point', coordinates: odc.coordinate } })
-          }
-          appendRoute(route.points, route.roadClasses, `Kabel ODC ${String(odc.index).padStart(2, '0')}–${name}`, 'DISTRIBUTION')
-          draft.push({ type: 'Feature', properties: { kind: 'ODP', name }, geometry: { type: 'Point', coordinates: odp } })
-          odc.used++
-          odpIndex++
-          placed = true
-          break
-        }
-        if (!placed) uncoveredTargets++
-      }
-      if (!draft.some((feature) => feature.properties.kind === 'ODP')) throw new Error('Tidak ada ODP yang dapat dijangkau melalui data jalan di area ini.')
-      setDesignFeatures(draft)
+      const { features, uncoveredTargets } = await generateFtthDraft([analyze.data.longitude, analyze.data.latitude], assetKind)
+      setDesignFeatures(features)
       if (uncoveredTargets) setDesignNotice(`${uncoveredTargets} titik pemerataan tidak dapat dipasangi ODP dengan jalur kabel maksimal 1.500 m pada jaringan GraphHopper. Cakupan mengikuti jalan yang tersedia; sebagian boundary masih belum terlayani.`)
     } catch (error) {
       setDesignError(error instanceof Error ? error.message : 'Draft FTTH tidak dapat dibuat.')
-    } finally {
-      setDesignLoading(false)
-    }
+    } finally { setDesignLoading(false) }
   }
 
   return <>

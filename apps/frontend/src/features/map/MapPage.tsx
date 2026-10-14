@@ -252,6 +252,7 @@ export function MapPage() {
   });
   const [iconCategorySearch, setIconCategorySearch] = useState("");
   const [fileError, setFileError] = useState("");
+  const [importing, setImporting] = useState(false);
   const [routeError, setRouteError] = useState("");
   const [fileName, setFileName] = useState("");
   const [search, setSearch] = useState("");
@@ -351,13 +352,19 @@ export function MapPage() {
   useEffect(() => {
     if (!mapElement.current || map.current) return;
     setWorkerUrl(workerUrl);
-    const instance = new MapLibreMap({ container: mapElement.current, style: "https://tiles.openfreemap.org/styles/liberty", center: [106.79, -6.26], zoom: 11.2 });
+    let focus: Coordinate | null = null;
+    try {
+      const savedFocus = JSON.parse(localStorage.getItem("atlas-map-focus") ?? "null");
+      if (Array.isArray(savedFocus) && savedFocus.length === 2 && savedFocus.every((value) => typeof value === "number" && Number.isFinite(value))) focus = savedFocus as Coordinate;
+    } catch { /* Ignore an invalid saved map position. */ }
+    const instance = new MapLibreMap({ container: mapElement.current, style: "https://tiles.openfreemap.org/styles/liberty", center: focus ?? [106.79, -6.26], zoom: focus ? 15 : 11.2 });
     map.current = instance;
     const resizeObserver = new ResizeObserver(() => instance.resize());
     resizeObserver.observe(mapElement.current);
     instance.addControl(new NavigationControl(), "top-right");
     instance.on("error", () => setMapError(true));
     instance.on("load", () => {
+      if (focus) localStorage.removeItem("atlas-map-focus");
       addAtlasMapIcons(instance);
       const updateBounds = () => {
         const bounds = instance.getBounds();
@@ -557,6 +564,7 @@ export function MapPage() {
 
   async function importFile(file?: File) {
     if (!file) return;
+    setImporting(true);
     try {
       setFileError("");
       const form = new FormData();
@@ -568,11 +576,12 @@ export function MapPage() {
       if (response.firstId) await focusGeometry(response.firstId);
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "File tidak dapat dibaca.");
-    }
+    } finally { setImporting(false); }
   }
 
   async function importNetworkXlsx(file?: File) {
     if (!file) return
+    setImporting(true)
     try {
       setFileError("")
       if (!/\.xlsx$/i.test(file.name)) throw new Error("Pilih file Excel .xlsx.")
@@ -583,7 +592,7 @@ export function MapPage() {
       setFileName(`${file.name} · ${result.importedCount} aset (${result.segmentCount} segmen)`)
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "File Excel jaringan tidak dapat dibaca.")
-    }
+    } finally { setImporting(false) }
   }
 
   function downloadNetworkTemplate() {
@@ -623,14 +632,6 @@ export function MapPage() {
       area: String(form.get("area")), cableType: String(form.get("cableType")), totalCores: Number(form.get("totalCores")),
       installation: String(form.get("installation")), side: String(form.get("side")),
     } })
-  }
-
-  function startRoute() {
-    setPoints([]);
-    setRoutePreview(null);
-    setRouteDistance(null);
-    setRouteError("Klik peta untuk memilih titik awal.");
-    setSelectionMode("start");
   }
 
   async function previewRoute() {
@@ -706,7 +707,7 @@ export function MapPage() {
           </div>
           <div className="map-top-actions">
             {user?.role === "ADMIN" && <div className="map-file-actions">
-              <button className="btn btn-light" onClick={() => setFileModal("import")}><i className="bi bi-upload me-1" />Impor</button>
+              <button className="btn btn-light" onClick={() => setFileModal("import")} disabled={importing} aria-busy={importing}>{importing ? <><span className="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true" />Mengimpor...</> : <><i className="bi bi-upload me-1" />Impor</>}</button>
               <button className="btn btn-light" onClick={() => setFileModal("download")}><i className="bi bi-download me-1" />Unduh</button>
             </div>}
             <details ref={iconFilter} className="map-icon-filter">
@@ -756,10 +757,6 @@ export function MapPage() {
                 <input ref={importInput} className="d-none" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
                 <input ref={xlsxImportInput} className="d-none" type="file" accept=".xlsx" onChange={(event) => { void importNetworkXlsx(event.target.files?.[0]); event.currentTarget.value = ""; }} />
               </>}
-              <button className="btn btn-primary" onClick={startRoute}>
-                <i className="bi bi-signpost-2 me-2" />
-                Rute baru
-              </button>
             </div>
             {fileName && (
               <div className="map-file-status">
@@ -948,9 +945,9 @@ export function MapPage() {
                   <div className="asset-info-group"><b>Detail kabel</b><div className="asset-info">
                     {[["Tipe kabel", selectedSegment.cableType], ["Metode instalasi", selectedSegment.installation], ["Sisi jalan", `Sisi ${selectedSegment.side.toLowerCase()}`]].map(([label, value]) => <div key={label}><span>{label}</span><b>{value}</b></div>)}
                   </div></div>
-                  <div className="asset-info-group"><b>Data aset dari sumber impor</b><div className="asset-info">
-                    {[["Tiang", selectedSegment.pole || "Belum diketahui"], ["Tinggi tiang", selectedSegment.poleHeight ?? "Belum diketahui"], ["ODC", selectedSegment.odc || "Belum diketahui"], ["ODP", selectedSegment.odp || "Belum diketahui"]].map(([label, value]) => <div key={label}><span>{label}</span><b>{value}</b></div>)}
-                  </div></div>
+                  {(selectedSegment.pole || selectedSegment.poleHeight || selectedSegment.odc || selectedSegment.odp) && <div className="asset-info-group"><b>{selectedSegment.source === "managed" ? "Informasi aset" : "Data aset dari sumber impor"}</b><div className="asset-info">
+                    {([["Tiang", selectedSegment.pole], ["Tinggi tiang", selectedSegment.poleHeight], ["ODC", selectedSegment.odc], ["ODP", selectedSegment.odp]] as const).filter(([, value]) => value).map(([label, value]) => <div key={label}><span>{label}</span><b>{value}</b></div>)}
+                  </div></div>}
                 </div>
                 <SegmentRelations key={selectedSegment.id} segmentId={selectedSegment.id} isAdmin={user?.role === "ADMIN"} />
                 {selectedSegment.source !== "managed" && <details className="admin-settings mt-3"><summary>Atribut sumber impor</summary><div className="import-detail-list mt-2">{Object.entries(selectedSegment.attributes ?? {}).filter(([key]) => key !== "__kmlStyle").map(([key, value]) => <div key={key}><span>{key}</span><b>{String(value)}</b></div>)}</div></details>}

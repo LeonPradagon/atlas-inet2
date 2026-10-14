@@ -23,7 +23,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       VALUES($1,$2,$3,$4::jsonb,$5::jsonb)
       RETURNING id,analysis_type AS "analysisType",title,created_at AS "createdAt"`,
     [userId, type, title.slice(0, 300), JSON.stringify(input), JSON.stringify(result)])
-    return rows[0]
+    return rows[0].id as string
   }
 
   async listAnalysisHistory(userId: string, type?: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN') {
@@ -42,7 +42,11 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     const { rows } = await this.db.query(`SELECT id,analysis_type AS "analysisType",title,input,result,created_at AS "createdAt"
       FROM analysis_history WHERE user_id=$1 AND id=$2`, [userId, id])
     if (!rows[0]) throw new NotFoundException({ message: 'Riwayat analisis tidak ditemukan.' })
-    return rows[0]
+    if (rows[0].analysisType !== 'BULK') return rows[0]
+    const { rows: drafts } = await this.db.query(`SELECT id,title,input,result,created_at AS "createdAt"
+      FROM analysis_history WHERE user_id=$1 AND analysis_type='FTTH_DESIGN' AND input->>'sourceAnalysisId'=$2
+      ORDER BY created_at`, [userId, id])
+    return { ...rows[0], relatedDrafts: drafts }
   }
 
   async deleteAnalysisHistory(userId: string, id: string) {
@@ -119,10 +123,13 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return { id,name,kind,area,longitude,latitude,poleHeight }
   }
 
-  async saveFtthDesign(input: unknown, userId: string, areaInput: unknown) {
+  async saveFtthDesign(input: unknown, userId: string, areaInput: unknown, sourceInput?: { analysisId?: unknown; row?: unknown }) {
     if (!Array.isArray(input) || input.length < 1 || input.length > 500) throw new BadRequestException({ message: 'Desain harus memiliki 1–500 fitur.' })
     const area = typeof areaInput === 'string' ? areaInput.trim() : ''
     if (area.length > 300) throw new BadRequestException({ message: 'Wilayah maksimal 300 karakter.' })
+    const sourceAnalysisId = typeof sourceInput?.analysisId === 'string' ? sourceInput.analysisId : ''
+    const sourceRow = Number(sourceInput?.row)
+    if ((sourceAnalysisId && (!Number.isInteger(sourceRow) || sourceRow < 1)) || (!sourceAnalysisId && sourceInput?.row !== undefined)) throw new BadRequestException({ message: 'Asal draft analisis massal tidak valid.' })
     const kinds = ['OLT','JOINT_CLOSURE','HANDHOLE','ODC','ODP','POLE','ROUTE']
     const designId = randomUUID()
     const features = input.map((value) => {
@@ -145,14 +152,26 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       return { id: randomUUID(),kind,name,poleHeight,routeType,geometry,geometryJson: JSON.stringify({ type: geometry.type, coordinates }),attributes: JSON.stringify(attributes) }
     })
     const historyId = await this.db.transaction(async (client) => {
+      if (sourceAnalysisId) {
+        const { rows: parent } = await client.query("SELECT result FROM analysis_history WHERE id=$1 AND user_id=$2 AND analysis_type='BULK' FOR UPDATE", [sourceAnalysisId,userId])
+        if (!parent.length || !Array.isArray(parent[0].result?.rows) || !parent[0].result.rows.some((row: { row?: number }) => Number(row.row) === sourceRow)) throw new NotFoundException({ message: 'Baris analisis massal tidak ditemukan.' })
+      }
       for (const feature of features) {
         const isRoute = feature.kind === 'ROUTE'
         await client.query(`INSERT INTO network_assets(id,name,asset_type,source,area,cable_type,installation,road_side,pole_height,attributes,geometry,source_geometry)
           VALUES($1,$2,$3,'managed',$4,'Fiber Optic','Aerial','Kiri',$5,$6::jsonb,ST_SetSRID(ST_GeomFromGeoJSON($7),4326),$7::jsonb)`,
         [feature.id,feature.name,isRoute ? 'segment' : 'asset',area,feature.poleHeight,feature.attributes,feature.geometryJson])
       }
+      await client.query(`INSERT INTO network_asset_relations(segment_id,asset_id,kind)
+        SELECT route.id, point.id, point.attributes->>'assetKind'
+        FROM network_assets route
+        JOIN network_assets point ON point.attributes->>'ftthDesignId'=route.attributes->>'ftthDesignId'
+          AND point.attributes->>'assetKind' IN ('POLE','ODC','ODP')
+          AND ST_DWithin(route.geometry::geography,point.geometry::geography,1)
+        WHERE route.attributes->>'ftthDesignId'=$1 AND route.attributes->>'assetKind'='ROUTE'
+        ON CONFLICT DO NOTHING`, [designId])
       const historyTitle = `Draft FTTH · ${area || 'Lokasi analisis'}`.slice(0, 300)
-      const historyInput = { area, designId }
+      const historyInput = { area, designId, ...(sourceAnalysisId ? { sourceAnalysisId, sourceRow } : {}) }
       const historyResult = {
         designId,
         savedCount: features.length,

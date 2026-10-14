@@ -9,7 +9,12 @@ async function bootstrap() {
   try { await migrateDatabase(pool) }
   finally { await pool.end() }
   const [{ AppModule }, { auth }] = await Promise.all([import('./app.module'), import('./auth/auth')])
-  const app = await NestFactory.create(AppModule)
+  // FTTH draft payloads contain many routed coordinates; Nest's default JSON
+  // parser limit (100 KB) rejects them before the controller can handle them.
+  const app = await NestFactory.create(AppModule, { bodyParser: false })
+  const expressAdapter = app.getHttpAdapter() as unknown as { useBodyParser: (type: 'json' | 'urlencoded', rawBody: boolean, options: Record<string, unknown>) => void }
+  expressAdapter.useBodyParser('json', false, { limit: '20mb' })
+  expressAdapter.useBodyParser('urlencoded', false, { extended: true, limit: '20mb' })
   const express = app.getHttpAdapter().getInstance()
   express.disable('x-powered-by')
   app.use((_request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse, next: (error?: unknown) => void) => {

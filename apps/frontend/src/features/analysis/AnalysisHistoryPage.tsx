@@ -8,7 +8,8 @@ import { PageHeader } from '../../components/PageHeader'
 import { api } from '../../lib/api'
 
 type HistoryItem = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; status: string | null; itemCount: number; createdAt: string }
-type HistoryDetail = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; input: Record<string, unknown>; result: Record<string, unknown>; createdAt: string }
+type RelatedDraft = { id: string; title: string; input: Record<string, unknown>; result: Record<string, unknown>; createdAt: string }
+type HistoryDetail = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; input: Record<string, unknown>; result: Record<string, unknown>; createdAt: string; relatedDrafts?: RelatedDraft[] }
 type BulkRow = { row: number; address: string; latitude?: number | null; longitude?: number | null; network?: { name?: string } | null; distanceMeters?: number | null; status: string; message?: string }
 type SavedMapPoint = { latitude: number; longitude: number; label: string; kind?: string }
 type SavedMapRoute = { routeType: string; coordinates: [number, number][] }
@@ -135,6 +136,22 @@ function SavedAnalysisMap({ points, routes = [] }: { points: SavedMapPoint[]; ro
 
 const dateTime = (value: string) => new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 
+function BulkHistoryDetail({ detail, rows, mapPoints, mapRoutes, onOpenDraft }: { detail: HistoryDetail; rows: BulkRow[]; mapPoints: SavedMapPoint[]; mapRoutes: SavedMapRoute[]; onOpenDraft: (id: string) => void }) {
+  const drafts = detail.relatedDrafts ?? []
+  return <>
+    <div className="alert alert-light border">File: <b>{String(detail.input.fileName ?? detail.title)}</b> · {rows.length} baris tersimpan.</div>
+    {drafts.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">Draft FTTH dari analisis ini</h4><div className="d-flex flex-column gap-2">{drafts.map((draft) => {
+      const sourceRow = Number(draft.input.sourceRow)
+      const sourceAddress = rows.find((row) => row.row === sourceRow)?.address
+      const features = Array.isArray(draft.result.features) ? draft.result.features as DraftFeature[] : []
+      return <div className="border rounded p-3 d-flex align-items-center gap-3 flex-wrap" key={draft.id}><div className="flex-grow-1"><b>{sourceAddress ? `Baris ${sourceRow} · ${sourceAddress}` : draft.title}</b><small className="d-block text-secondary">{features.filter((feature) => feature.geometry.type === 'Point').length} aset · {features.filter((feature) => feature.geometry.type === 'LineString').length} jalur kabel · {dateTime(draft.createdAt)}</small></div><button className="btn btn-sm btn-outline-primary" onClick={() => onOpenDraft(draft.id)}>Buka detail draft</button></div>
+    })}</div></section>}
+    {mapPoints.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">{drafts.length ? 'Peta analisis dan draft FTTH tersimpan' : 'Peta titik analisis tersimpan'}</h4><SavedAnalysisMap points={mapPoints} routes={mapRoutes} /></section>}
+    <div className="table-responsive"><table className="table table-sm align-middle"><thead><tr><th>BARIS</th><th>ALAMAT</th><th>KOORDINAT</th><th>JARINGAN</th><th>JARAK</th><th>STATUS</th></tr></thead><tbody>{rows.map((row) => <tr key={row.row}><td>{row.row}</td><td>{row.address}</td><td className="font-monospace small">{row.latitude != null && row.longitude != null ? `${row.latitude}, ${row.longitude}` : '—'}</td><td>{row.network?.name ?? '—'}</td><td>{row.distanceMeters == null ? '—' : `${row.distanceMeters} m`}</td><td>{row.status}<small className="d-block text-secondary">{row.message}</small></td></tr>)}</tbody></table></div>
+    <details><summary>Lihat seluruh data file dan hasil</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.input, result: detail.result }, null, 2)}</pre></details>
+  </>
+}
+
 export function AnalysisHistoryPage() {
   const [type, setType] = useState('')
   const [selectedId, setSelectedId] = useState('')
@@ -144,14 +161,16 @@ export function AnalysisHistoryPage() {
   const result = detail.data?.result ?? {}
   const rows = Array.isArray(result.rows) ? result.rows as BulkRow[] : []
   const draftFeatures = Array.isArray(result.features) ? result.features as DraftFeature[] : []
+  const relatedDrafts = detail.data?.relatedDrafts ?? []
+  const relatedDraftFeatures = relatedDrafts.flatMap((draft) => Array.isArray(draft.result.features) ? draft.result.features as DraftFeature[] : [])
   const mapPoints = detail.data?.analysisType === 'ADDRESS'
     ? [savedMapPoint(result.latitude, result.longitude, String(result.address ?? detail.data.title))].filter((point): point is SavedMapPoint => point !== null)
     : detail.data?.analysisType === 'FTTH_DESIGN'
       ? draftFeatures.flatMap((feature) => feature.geometry.type === 'Point' ? [savedMapPoint(feature.geometry.coordinates[1], feature.geometry.coordinates[0], `${feature.kind} · ${feature.name}`, feature.kind)].filter((point): point is SavedMapPoint => point !== null) : [])
-      : rows.flatMap((row) => { const point = savedMapPoint(row.latitude, row.longitude, row.address); return point ? [point] : [] })
+      : [...rows.flatMap((row) => { const point = savedMapPoint(row.latitude, row.longitude, row.address); return point ? [point] : [] }), ...relatedDraftFeatures.flatMap((feature) => feature.geometry.type === 'Point' ? [savedMapPoint(feature.geometry.coordinates[1], feature.geometry.coordinates[0], `${feature.kind} · ${feature.name}`, feature.kind)].filter((point): point is SavedMapPoint => point !== null) : [])]
   const mapRoutes = detail.data?.analysisType === 'FTTH_DESIGN'
     ? draftFeatures.flatMap((feature) => feature.geometry.type === 'LineString' ? [{ routeType: feature.routeType ?? 'DISTRIBUTION', coordinates: feature.geometry.coordinates }] : [])
-    : []
+    : relatedDraftFeatures.flatMap((feature) => feature.geometry.type === 'LineString' ? [{ routeType: feature.routeType ?? 'DISTRIBUTION', coordinates: feature.geometry.coordinates }] : [])
   const exportHistory = async (item: HistoryItem) => {
     setBusyId(item.id)
     try {
@@ -223,7 +242,7 @@ export function AnalysisHistoryPage() {
           : <><div className="card-header d-flex align-items-start gap-3"><div className="flex-grow-1" style={{ minWidth: 0 }}><span className="detail-label">{detail.data.analysisType === 'ADDRESS' ? 'ANALISIS ALAMAT' : detail.data.analysisType === 'BULK' ? 'ANALISIS MASSAL' : 'DRAFT FTTH'}</span><h3 className="mt-1">{detail.data.title}</h3><p>{dateTime(detail.data.createdAt)}</p></div><button className="btn btn-sm btn-outline-secondary ms-auto flex-shrink-0" onClick={() => setSelectedId('')}>Tutup</button></div>
             <div className="card-body">
               {detail.data.analysisType === 'ADDRESS' ? <><div className="row g-3 mb-3"><div className="col-md-4"><small className="text-secondary d-block">Status</small><b>{String(result.status ?? '—')}</b></div><div className="col-md-4"><small className="text-secondary d-block">Koordinat</small><b className="font-monospace">{result.latitude != null && result.longitude != null ? `${result.latitude}, ${result.longitude}` : '—'}</b></div><div className="col-md-4"><small className="text-secondary d-block">Jarak jaringan</small><b>{result.distanceMeters == null ? '—' : `${result.distanceMeters} m`}</b></div><div className="col-12"><small className="text-secondary d-block">Jaringan terdekat</small><b>{(result.network as { name?: string } | null)?.name ?? '—'}</b></div></div>{mapPoints.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">Peta lokasi tersimpan</h4><SavedAnalysisMap points={mapPoints} /></section>}<details><summary>Lihat semua data tersimpan</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.data.input, result }, null, 2)}</pre></details></>
-                : detail.data.analysisType === 'BULK' ? <><div className="alert alert-light border">File: <b>{String(detail.data.input.fileName ?? detail.data.title)}</b> · {rows.length} baris tersimpan.</div>{mapPoints.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">Peta titik analisis tersimpan</h4><SavedAnalysisMap points={mapPoints} /></section>}<div className="table-responsive"><table className="table table-sm align-middle"><thead><tr><th>BARIS</th><th>ALAMAT</th><th>KOORDINAT</th><th>JARINGAN</th><th>JARAK</th><th>STATUS</th></tr></thead><tbody>{rows.map((row) => <tr key={row.row}><td>{row.row}</td><td>{row.address}</td><td className="font-monospace small">{row.latitude != null && row.longitude != null ? `${row.latitude}, ${row.longitude}` : '—'}</td><td>{row.network?.name ?? '—'}</td><td>{row.distanceMeters == null ? '—' : `${row.distanceMeters} m`}</td><td>{row.status}<small className="d-block text-secondary">{row.message}</small></td></tr>)}</tbody></table></div><details><summary>Lihat seluruh data file dan hasil</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.data.input, result }, null, 2)}</pre></details></>
+                : detail.data.analysisType === 'BULK' ? <BulkHistoryDetail detail={detail.data} rows={rows} mapPoints={mapPoints} mapRoutes={mapRoutes} onOpenDraft={setSelectedId} />
                   : <><div className="alert alert-light border">Draft FTTH tersimpan: <b>{Number(result.assetCount ?? mapPoints.length)} aset</b> · <b>{Number(result.routeCount ?? mapRoutes.length)} jalur kabel</b>.</div>{(mapPoints.length > 0 || mapRoutes.length > 0) && <section className="mb-3"><h4 className="h6 mb-2">Peta draft FTTH tersimpan</h4><SavedAnalysisMap points={mapPoints} routes={mapRoutes} /></section>}<details><summary>Lihat semua data draft tersimpan</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.data.input, result }, null, 2)}</pre></details></>}
             </div></>}
     </section>}
