@@ -1,15 +1,17 @@
-import { useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import ExcelJS from 'exceljs'
 import { LngLatBounds, Map as MapLibreMap, NavigationControl, setWorkerUrl } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import type { FeatureCollection, LineString, Point } from 'geojson'
 import { PageHeader } from '../../components/PageHeader'
-import { api } from '../../lib/api'
+import { api, postCompressedJson } from '../../lib/api'
+import { generateFtthDraft, type DesignFeature } from './ftthDraft'
 
-type HistoryItem = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; status: string | null; itemCount: number; createdAt: string }
+type HistoryItem = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; status: string | null; itemCount: number; createdAt: string; bulkJobId?: string | null; jobStatus?: string | null; processedRows?: number | null; succeededRows?: number | null; failedRows?: number | null }
 type RelatedDraft = { id: string; title: string; input: Record<string, unknown>; result: Record<string, unknown>; createdAt: string }
-type HistoryDetail = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; input: Record<string, unknown>; result: Record<string, unknown>; createdAt: string; relatedDrafts?: RelatedDraft[] }
+type HistoryDetail = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; input: Record<string, unknown>; result: Record<string, unknown>; createdAt: string; relatedDrafts?: RelatedDraft[]; bulkJobId?: string | null; jobStatus?: string | null; totalRows?: number | null; processedRows?: number | null; succeededRows?: number | null; failedRows?: number | null }
 type BulkRow = { row: number; address: string; latitude?: number | null; longitude?: number | null; network?: { name?: string } | null; distanceMeters?: number | null; status: string; message?: string }
 type SavedMapPoint = { latitude: number; longitude: number; label: string; kind?: string }
 type SavedMapRoute = { routeType: string; coordinates: [number, number][] }
@@ -136,10 +138,21 @@ function SavedAnalysisMap({ points, routes = [] }: { points: SavedMapPoint[]; ro
 
 const dateTime = (value: string) => new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 
+function HoverActionButton({ label, className, disabled, onClick, children }: { label: string; className: string; disabled?: boolean; onClick: () => void; children: ReactNode }) {
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null)
+  const show = (element: HTMLButtonElement) => {
+    const rect = element.getBoundingClientRect()
+    setPosition({ left: Math.max(8, Math.min(window.innerWidth - 8, rect.left + rect.width / 2)), top: rect.top > 48 ? rect.top - 8 : rect.bottom + 8 })
+  }
+  const hide = () => setPosition(null)
+  return <><button type="button" className={className} aria-label={label} aria-describedby={position ? 'history-action-tooltip' : undefined} disabled={disabled} onClick={onClick} onMouseEnter={(event) => show(event.currentTarget)} onMouseLeave={hide} onFocus={(event) => show(event.currentTarget)} onBlur={hide}>{children}</button>{position && createPortal(<div id="history-action-tooltip" role="tooltip" style={{ position: 'fixed', zIndex: 3000, left: position.left, top: position.top, transform: `translate(-50%, ${position.top < 60 ? '0' : '-100%'})`, pointerEvents: 'none', padding: '5px 9px', borderRadius: 5, background: '#172033', color: '#fff', fontSize: 12, lineHeight: 1.3, whiteSpace: 'nowrap', boxShadow: '0 2px 8px #0003' }}>{label}</div>, document.body)}</>
+}
+
 function BulkHistoryDetail({ detail, rows, mapPoints, mapRoutes, onOpenDraft }: { detail: HistoryDetail; rows: BulkRow[]; mapPoints: SavedMapPoint[]; mapRoutes: SavedMapRoute[]; onOpenDraft: (id: string) => void }) {
   const drafts = detail.relatedDrafts ?? []
+  const rowCount = detail.totalRows ?? rows.length
   return <>
-    <div className="alert alert-light border">File: <b>{String(detail.input.fileName ?? detail.title)}</b> · {rows.length} baris tersimpan.</div>
+    <div className="alert alert-light border">File: <b>{String(detail.input.fileName ?? detail.title)}</b> · {rowCount.toLocaleString('id-ID')} baris tersimpan.</div>
     {drafts.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">Draft FTTH dari analisis ini</h4><div className="d-flex flex-column gap-2">{drafts.map((draft) => {
       const sourceRow = Number(draft.input.sourceRow)
       const sourceAddress = rows.find((row) => row.row === sourceRow)?.address
@@ -156,20 +169,31 @@ export function AnalysisHistoryPage() {
   const [type, setType] = useState('')
   const [selectedId, setSelectedId] = useState('')
   const [busyId, setBusyId] = useState('')
+  const [draftFeatures, setDraftFeatures] = useState<DesignFeature[]>([])
+  const [draftBusy, setDraftBusy] = useState(false)
+  const [draftMessage, setDraftMessage] = useState('')
+  const [draftError, setDraftError] = useState('')
+  const detailPanelRef = useRef<HTMLElement>(null)
+  const { data: user } = useQuery({ queryKey: ['me'], queryFn: () => api<{ role: string }>('/me') })
+  const queryClient = useQueryClient()
   const history = useQuery({ queryKey: ['analysis-history', type], queryFn: () => api<HistoryItem[]>(`/analysis/history${type ? `?type=${type}` : ''}`) })
   const detail = useQuery({ queryKey: ['analysis-history', selectedId], queryFn: () => api<HistoryDetail>(`/analysis/history/${selectedId}`), enabled: Boolean(selectedId) })
+  useEffect(() => { setDraftFeatures([]); setDraftMessage(''); setDraftError('') }, [selectedId])
+  useEffect(() => {
+    if (selectedId && !detail.isPending) detailPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [selectedId, detail.isPending])
   const result = detail.data?.result ?? {}
   const rows = Array.isArray(result.rows) ? result.rows as BulkRow[] : []
-  const draftFeatures = Array.isArray(result.features) ? result.features as DraftFeature[] : []
+  const savedDraftFeatures = Array.isArray(result.features) ? result.features as DraftFeature[] : []
   const relatedDrafts = detail.data?.relatedDrafts ?? []
   const relatedDraftFeatures = relatedDrafts.flatMap((draft) => Array.isArray(draft.result.features) ? draft.result.features as DraftFeature[] : [])
   const mapPoints = detail.data?.analysisType === 'ADDRESS'
-    ? [savedMapPoint(result.latitude, result.longitude, String(result.address ?? detail.data.title))].filter((point): point is SavedMapPoint => point !== null)
+    ? [...[savedMapPoint(result.latitude, result.longitude, String(result.address ?? detail.data.title))].filter((point): point is SavedMapPoint => point !== null), ...relatedDraftFeatures.flatMap((feature) => feature.geometry.type === 'Point' ? [savedMapPoint(feature.geometry.coordinates[1], feature.geometry.coordinates[0], `${feature.kind} · ${feature.name}`, feature.kind)].filter((point): point is SavedMapPoint => point !== null) : [])]
     : detail.data?.analysisType === 'FTTH_DESIGN'
-      ? draftFeatures.flatMap((feature) => feature.geometry.type === 'Point' ? [savedMapPoint(feature.geometry.coordinates[1], feature.geometry.coordinates[0], `${feature.kind} · ${feature.name}`, feature.kind)].filter((point): point is SavedMapPoint => point !== null) : [])
+      ? savedDraftFeatures.flatMap((feature) => feature.geometry.type === 'Point' ? [savedMapPoint(feature.geometry.coordinates[1], feature.geometry.coordinates[0], `${feature.kind} · ${feature.name}`, feature.kind)].filter((point): point is SavedMapPoint => point !== null) : [])
       : [...rows.flatMap((row) => { const point = savedMapPoint(row.latitude, row.longitude, row.address); return point ? [point] : [] }), ...relatedDraftFeatures.flatMap((feature) => feature.geometry.type === 'Point' ? [savedMapPoint(feature.geometry.coordinates[1], feature.geometry.coordinates[0], `${feature.kind} · ${feature.name}`, feature.kind)].filter((point): point is SavedMapPoint => point !== null) : [])]
   const mapRoutes = detail.data?.analysisType === 'FTTH_DESIGN'
-    ? draftFeatures.flatMap((feature) => feature.geometry.type === 'LineString' ? [{ routeType: feature.routeType ?? 'DISTRIBUTION', coordinates: feature.geometry.coordinates }] : [])
+    ? savedDraftFeatures.flatMap((feature) => feature.geometry.type === 'LineString' ? [{ routeType: feature.routeType ?? 'DISTRIBUTION', coordinates: feature.geometry.coordinates }] : [])
     : relatedDraftFeatures.flatMap((feature) => feature.geometry.type === 'LineString' ? [{ routeType: feature.routeType ?? 'DISTRIBUTION', coordinates: feature.geometry.coordinates }] : [])
   const exportHistory = async (item: HistoryItem) => {
     setBusyId(item.id)
@@ -183,7 +207,12 @@ export function AnalysisHistoryPage() {
       const resultData = result.data && typeof result.data === 'object' ? result.data as Record<string, unknown> : {}
       const bulkRows = Array.isArray(result.rows) ? result.rows : Array.isArray(resultData.rows) ? resultData.rows : Array.isArray(result.results) ? result.results : []
       if (saved.analysisType === 'BULK') {
-        for (const value of bulkRows) {
+        if (saved.bulkJobId) {
+          for (let page = 1; page <= Math.ceil((saved.totalRows ?? item.itemCount) / 100); page++) {
+            const resultPage = await api<{ rows: BulkRow[] }>(`/analysis/bulk/jobs/${saved.bulkJobId}/rows?page=${page}&pageSize=100`)
+            for (const row of resultPage.rows) sheet.addRow([row.address ?? '',row.latitude ?? '',row.longitude ?? '',row.network?.name ?? '',row.distanceMeters ?? '',row.status ?? ''])
+          }
+        } else for (const value of bulkRows) {
           const row = value as BulkRow
           sheet.addRow([row.address ?? '', row.latitude ?? '', row.longitude ?? '', row.network?.name ?? '', row.distanceMeters ?? '', row.status ?? ''])
         }
@@ -225,6 +254,31 @@ export function AnalysisHistoryPage() {
       await history.refetch()
     } finally { setBusyId('') }
   }
+  const generateSingleDraft = async () => {
+    if (!detail.data || detail.data.analysisType !== 'ADDRESS') return
+    const longitude = Number(result.longitude), latitude = Number(result.latitude)
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) { setDraftError('Koordinat analisis tidak tersedia.'); return }
+    setDraftBusy(true); setDraftError(''); setDraftMessage(''); setDraftFeatures([])
+    try {
+      const { features, uncoveredTargets } = await generateFtthDraft([longitude, latitude], 'OLT')
+      setDraftFeatures([{ type: 'Feature', properties: { kind: 'OLT', name: `OLT · ${detail.data.title}`.slice(0, 150) }, geometry: { type: 'Point', coordinates: [longitude, latitude] } }, ...features])
+      setDraftMessage(uncoveredTargets ? `Draft siap ditinjau; ${uncoveredTargets} titik belum terlayani.` : 'Draft siap ditinjau. Simpan jika hasilnya sudah sesuai.')
+    } catch (error) { setDraftError(error instanceof Error ? error.message : 'Draft FTTH tidak dapat dibuat.') }
+    finally { setDraftBusy(false) }
+  }
+  const saveSingleDraft = async () => {
+    if (!detail.data || !draftFeatures.length) return
+    setDraftBusy(true); setDraftError('')
+    const structured = detail.data.input.structured as { city?: string; province?: string } | undefined
+    const network = result.network as { area?: string } | null
+    try {
+      await postCompressedJson('/assets/ftth-design', { area: network?.area || [structured?.city, structured?.province].filter(Boolean).join(', '), sourceAnalysisId: detail.data.id, features: draftFeatures.map((feature) => ({ ...feature.properties, geometry: feature.geometry })) })
+      setDraftMessage('Draft FTTH tersimpan di Peta Jaringan dan Riwayat Analisis.')
+      setDraftFeatures([])
+      await Promise.all([detail.refetch(), history.refetch(), queryClient.invalidateQueries({ queryKey: ['analysis-history'] })])
+    } catch (error) { setDraftError(error instanceof Error ? error.message : 'Draft FTTH gagal disimpan.') }
+    finally { setDraftBusy(false) }
+  }
 
   return <>
     <PageHeader title="Riwayat Analisis" subtitle="Hasil analisis alamat, massal, dan draft FTTH tersimpan di database dan dapat dibuka kembali." />
@@ -233,16 +287,16 @@ export function AnalysisHistoryPage() {
       {history.isPending ? <div className="py-5 text-center"><span className="spinner-border spinner-border-sm me-2" />Memuat riwayat...</div>
         : history.isError ? <div className="alert alert-danger m-3">Riwayat analisis tidak dapat dimuat.</div>
           : !history.data?.length ? <div className="empty-result py-5"><div className="empty-illustration"><i className="bi bi-clock-history" /></div><h3>Belum ada riwayat analisis</h3><p>Setelah analisis alamat, massal, atau draft FTTH disimpan, hasilnya akan muncul di sini.</p></div>
-            : <div className="table-responsive"><table className="table align-middle mb-0"><thead><tr><th>WAKTU</th><th>JENIS</th><th>ALAMAT / FILE</th><th>JUMLAH</th><th></th></tr></thead><tbody>{history.data.map((item) => <tr key={item.id} className={selectedId === item.id ? 'table-primary' : ''}><td className="text-nowrap">{dateTime(item.createdAt)}</td><td><span className="badge text-bg-light border">{item.analysisType === 'ADDRESS' ? 'Analisis alamat' : item.analysisType === 'BULK' ? 'Analisis massal' : 'Draft FTTH'}</span></td><td className="text-break">{item.title}</td><td>{item.itemCount} {item.analysisType === 'ADDRESS' ? 'lokasi' : item.analysisType === 'BULK' ? 'baris' : 'aset'}</td><td className="text-end text-nowrap"><button className="btn btn-sm btn-outline-success me-1" title="Ekspor Excel" aria-label={`Ekspor ${item.title} ke Excel`} disabled={busyId === item.id} onClick={() => void exportHistory(item)}><i className="bi bi-file-earmark-excel" /></button><button className="btn btn-sm btn-outline-danger me-1" title="Hapus riwayat" aria-label={`Hapus ${item.title}`} disabled={busyId === item.id} onClick={() => void deleteHistory(item)}><i className="bi bi-trash" /></button><button className="btn btn-sm btn-outline-primary" onClick={() => setSelectedId(item.id)}>{selectedId === item.id ? 'Terbuka' : 'Lihat detail'}</button></td></tr>)}</tbody></table></div>}
+            : <div className="table-responsive"><table className="table align-middle mb-0"><thead><tr><th>WAKTU</th><th>JENIS</th><th>ALAMAT / FILE</th><th>JUMLAH / PROGRES</th><th></th></tr></thead><tbody>{history.data.map((item) => <tr key={item.id} className={selectedId === item.id ? 'table-primary' : ''}><td className="text-nowrap">{dateTime(item.createdAt)}</td><td><span className="badge text-bg-light border">{item.analysisType === 'ADDRESS' ? 'Analisis alamat' : item.analysisType === 'BULK' ? 'Analisis massal' : 'Draft FTTH'}</span></td><td className="text-break">{item.title}</td><td>{item.bulkJobId ? <>{item.processedRows ?? 0}/{item.itemCount} · {item.jobStatus}</> : <>{item.itemCount} {item.analysisType === 'ADDRESS' ? 'lokasi' : item.analysisType === 'BULK' ? 'baris' : 'aset'}</>}</td><td className="text-end text-nowrap">{item.bulkJobId && <HoverActionButton label="Buka hasil dan progres pekerjaan analisis massal" className="btn btn-sm btn-outline-success me-1" onClick={() => { window.location.href = `/analisis-massal?jobId=${item.bulkJobId}` }}><i className="bi bi-box-arrow-up-right" aria-hidden="true" /></HoverActionButton>}{item.analysisType === 'ADDRESS' && <HoverActionButton label="Buka hasil analisis alamat" className="btn btn-sm btn-outline-success me-1" onClick={() => setSelectedId(item.id)}><i className="bi bi-box-arrow-up-right" aria-hidden="true" /></HoverActionButton>}<HoverActionButton label="Unduh hasil sebagai file Excel" className="btn btn-sm btn-outline-success me-1" disabled={busyId === item.id} onClick={() => void exportHistory(item)}><i className="bi bi-file-earmark-excel" aria-hidden="true" /></HoverActionButton><HoverActionButton label="Hapus catatan riwayat ini" className="btn btn-sm btn-outline-danger me-1" disabled={busyId === item.id} onClick={() => void deleteHistory(item)}><i className="bi bi-trash" aria-hidden="true" /></HoverActionButton><HoverActionButton label={selectedId === item.id ? 'Tutup panel detail' : 'Lihat detail analisis'} className="btn btn-sm btn-outline-primary" onClick={() => setSelectedId(selectedId === item.id ? '' : item.id)}><i className={`bi ${selectedId === item.id ? 'bi-eye-slash' : 'bi-eye'}`} aria-hidden="true" /></HoverActionButton></td></tr>)}</tbody></table></div>}
       <div className="card-footer small text-secondary">Maksimal 200 riwayat terbaru.</div>
     </section>
-    {selectedId && <section className="card panel-card mt-4">
+    {selectedId && <section ref={detailPanelRef} className="card panel-card mt-4">
       {detail.isPending ? <div className="card-body py-5 text-center"><span className="spinner-border spinner-border-sm me-2" />Memuat detail...</div>
         : detail.isError || !detail.data ? <div className="alert alert-danger m-3">Detail riwayat tidak dapat dibuka.</div>
           : <><div className="card-header d-flex align-items-start gap-3"><div className="flex-grow-1" style={{ minWidth: 0 }}><span className="detail-label">{detail.data.analysisType === 'ADDRESS' ? 'ANALISIS ALAMAT' : detail.data.analysisType === 'BULK' ? 'ANALISIS MASSAL' : 'DRAFT FTTH'}</span><h3 className="mt-1">{detail.data.title}</h3><p>{dateTime(detail.data.createdAt)}</p></div><button className="btn btn-sm btn-outline-secondary ms-auto flex-shrink-0" onClick={() => setSelectedId('')}>Tutup</button></div>
             <div className="card-body">
-              {detail.data.analysisType === 'ADDRESS' ? <><div className="row g-3 mb-3"><div className="col-md-4"><small className="text-secondary d-block">Status</small><b>{String(result.status ?? '—')}</b></div><div className="col-md-4"><small className="text-secondary d-block">Koordinat</small><b className="font-monospace">{result.latitude != null && result.longitude != null ? `${result.latitude}, ${result.longitude}` : '—'}</b></div><div className="col-md-4"><small className="text-secondary d-block">Jarak jaringan</small><b>{result.distanceMeters == null ? '—' : `${result.distanceMeters} m`}</b></div><div className="col-12"><small className="text-secondary d-block">Jaringan terdekat</small><b>{(result.network as { name?: string } | null)?.name ?? '—'}</b></div></div>{mapPoints.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">Peta lokasi tersimpan</h4><SavedAnalysisMap points={mapPoints} /></section>}<details><summary>Lihat semua data tersimpan</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.data.input, result }, null, 2)}</pre></details></>
-                : detail.data.analysisType === 'BULK' ? <BulkHistoryDetail detail={detail.data} rows={rows} mapPoints={mapPoints} mapRoutes={mapRoutes} onOpenDraft={setSelectedId} />
+              {detail.data.analysisType === 'ADDRESS' ? <><div className="row g-3 mb-3"><div className="col-md-4"><small className="text-secondary d-block">Status</small><b>{String(result.status ?? '—')}</b></div><div className="col-md-4"><small className="text-secondary d-block">Koordinat</small><b className="font-monospace">{result.latitude != null && result.longitude != null ? `${result.latitude}, ${result.longitude}` : '—'}</b></div><div className="col-md-4"><small className="text-secondary d-block">Jarak jaringan</small><b>{result.distanceMeters == null ? '—' : `${result.distanceMeters} m`}</b></div><div className="col-12"><small className="text-secondary d-block">Jaringan terdekat</small><b>{(result.network as { name?: string } | null)?.name ?? '—'}</b></div></div>{user?.role === 'ADMIN' && relatedDrafts.length === 0 && <section className="border rounded p-3 mb-3"><div className="d-flex gap-2 flex-wrap"><button type="button" className="btn btn-primary" onClick={() => void generateSingleDraft()} disabled={draftBusy || draftFeatures.length > 0 || result.latitude == null || result.longitude == null}>{draftBusy ? <><span className="spinner-border spinner-border-sm me-2" />Membuat draft...</> : <><i className="bi bi-diagram-3 me-2" />Buat draft FTTH</>}</button>{draftFeatures.length > 0 && <button type="button" className="btn btn-outline-success" onClick={() => void saveSingleDraft()} disabled={draftBusy}><i className="bi bi-save me-2" />Simpan draft ke peta</button>}</div>{draftMessage && <div className="alert alert-info py-2 mt-3 mb-0">{draftMessage}</div>}{draftError && <div className="alert alert-danger py-2 mt-3 mb-0">{draftError}</div>}{draftFeatures.length > 0 && <div className="mt-3"><h4 className="h6">Pratinjau draft FTTH</h4><SavedAnalysisMap points={draftFeatures.flatMap((feature) => feature.geometry.type === 'Point' ? [savedMapPoint(feature.geometry.coordinates[1], feature.geometry.coordinates[0], `${feature.properties.kind} · ${feature.properties.name}`, feature.properties.kind)].filter((point): point is SavedMapPoint => point !== null) : [])} routes={draftFeatures.flatMap((feature) => feature.geometry.type === 'LineString' ? [{ routeType: feature.properties.routeType ?? 'DISTRIBUTION', coordinates: feature.geometry.coordinates as [number, number][] }] : [])} /></div>}</section>}{relatedDrafts.length > 0 && <section className="mb-3"><h4 className="h6">Draft FTTH tersimpan</h4>{relatedDrafts.map((draft) => <div className="border rounded p-3 mb-2 d-flex align-items-center gap-3 flex-wrap" key={draft.id}><div className="flex-grow-1"><b>{draft.title}</b><small className="d-block text-secondary">{Number(draft.result.assetCount ?? 0)} aset · {Number(draft.result.routeCount ?? 0)} jalur kabel · {dateTime(draft.createdAt)}</small></div><button type="button" className="btn btn-sm btn-outline-primary" onClick={() => setSelectedId(draft.id)}>Buka draft</button></div>)}</section>}{mapPoints.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">Peta lokasi{relatedDrafts.length ? ' dan draft FTTH tersimpan' : ' tersimpan'}</h4><SavedAnalysisMap points={mapPoints} routes={mapRoutes} /></section>}<details><summary>Lihat semua data tersimpan</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.data.input, result }, null, 2)}</pre></details></>
+                : detail.data.analysisType === 'BULK' ? <>{detail.data.bulkJobId && <div className="alert alert-primary d-flex align-items-center justify-content-between gap-2 flex-wrap"><span>Status: <b>{detail.data.jobStatus}</b> · {detail.data.processedRows ?? 0}/{detail.data.totalRows ?? 0} diproses · {detail.data.succeededRows ?? 0} berhasil · {detail.data.failedRows ?? 0} gagal.</span><button className="btn btn-sm btn-primary" onClick={() => { window.location.href = `/analisis-massal?jobId=${detail.data.bulkJobId}` }}>Buka pekerjaan dan hasil</button></div>}<BulkHistoryDetail detail={detail.data} rows={rows} mapPoints={mapPoints} mapRoutes={mapRoutes} onOpenDraft={setSelectedId} /></>
                   : <><div className="alert alert-light border">Draft FTTH tersimpan: <b>{Number(result.assetCount ?? mapPoints.length)} aset</b> · <b>{Number(result.routeCount ?? mapRoutes.length)} jalur kabel</b>.</div>{(mapPoints.length > 0 || mapRoutes.length > 0) && <section className="mb-3"><h4 className="h6 mb-2">Peta draft FTTH tersimpan</h4><SavedAnalysisMap points={mapPoints} routes={mapRoutes} /></section>}<details><summary>Lihat semua data draft tersimpan</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.data.input, result }, null, 2)}</pre></details></>}
             </div></>}
     </section>}

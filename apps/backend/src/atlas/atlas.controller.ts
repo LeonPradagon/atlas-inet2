@@ -6,6 +6,7 @@ import { AtlasService } from './atlas.service'
 import { NetworkImportService } from '../network/network-import.service'
 import { RoutingService } from '../geospatial/routing.service'
 import { GeocodingService, type StructuredAddress } from '../geospatial/geocoding.service'
+import { BulkAnalysisService } from './bulk-analysis.service'
 
 @Controller()
 export class AtlasController {
@@ -15,6 +16,7 @@ export class AtlasController {
     @Inject(NetworkImportService) private readonly imports: NetworkImportService,
     @Inject(RoutingService) private readonly routing: RoutingService,
     @Inject(GeocodingService) private readonly geocoding: GeocodingService,
+    @Inject(BulkAnalysisService) private readonly bulk: BulkAnalysisService,
   ) {}
 
   @Get('dashboard')
@@ -146,27 +148,53 @@ export class AtlasController {
   }
 
   @Post('analysis/address')
-  async analyzeAddress(@Req() req: IncomingMessage, @Body() body: { address?: string; structured?: StructuredAddress }) {
+  async analyzeAddress(@Req() req: IncomingMessage, @Body() body: { address?: string; structured?: StructuredAddress; coordinates?: { longitude?: number; latitude?: number; provider?: 'photon' | 'manual'; matchQuality?: 'approximate'; matchedStreet?: string }; coordinateConfirmed?: boolean }) {
     const user = await this.auth.requireUser(req)
     if (!body.address?.trim()) throw new BadRequestException({ message: 'Alamat wajib diisi.' })
+    if (!body.structured?.province?.trim() || !body.structured.city?.trim() || !body.structured.district?.trim() || !body.structured.subdistrict?.trim()) {
+      throw new BadRequestException({ message: 'Provinsi, kabupaten/kota, kecamatan, dan kelurahan/desa wajib dipilih.' })
+    }
+    if (body.coordinates) {
+      if (body.coordinateConfirmed !== true) throw new BadRequestException({ message: 'Konfirmasi posisi titik pada peta sebelum analisis.' })
+      const { longitude, latitude, provider, matchQuality, matchedStreet } = body.coordinates
+      if (typeof longitude !== 'number' || typeof latitude !== 'number') throw new BadRequestException({ message: 'Koordinat harus berupa longitude dan latitude.' })
+      const result = await this.analyzeCoordinates(longitude, latitude, body.address, provider, matchQuality, matchedStreet)
+      const historyId = await this.atlas.saveAnalysisHistory(user.id, 'ADDRESS', body.address.trim(), { address: body.address, structured: body.structured, coordinates: body.coordinates, coordinateConfirmed: true }, result)
+      return { ...result, historyId }
+    }
     if (body.structured) {
         const result = await this.geocoding.geocodeStructured(body.structured)
         const [longitude, latitude] = result.coordinates
-        const analysis = await this.analyzeCoordinates(longitude, latitude, body.address, result.provider)
-        await this.atlas.saveAnalysisHistory(user.id, 'ADDRESS', body.address.trim(), { address: body.address, structured: body.structured }, analysis)
-        return analysis
+        const analysis = await this.analyzeCoordinates(longitude, latitude, body.address, result.provider, result.matchQuality, result.matchedStreet)
+        const historyId = await this.atlas.saveAnalysisHistory(user.id, 'ADDRESS', body.address.trim(), { address: body.address, structured: body.structured }, analysis)
+        return { ...analysis, historyId }
     }
     const result = await this.analyzeLocation(body.address)
-    await this.atlas.saveAnalysisHistory(user.id, 'ADDRESS', body.address.trim(), { address: body.address }, result)
-    return result
+    const historyId = await this.atlas.saveAnalysisHistory(user.id, 'ADDRESS', body.address.trim(), { address: body.address }, result)
+    return { ...result, historyId }
+  }
+
+  @Get('analysis/address/suggestions')
+  async addressSuggestions(@Req() req: IncomingMessage, @Query('q') query?: string, @Query('subdistrict') subdistrict?: string, @Query('district') district?: string, @Query('city') city?: string, @Query('province') province?: string, @Query('postalCode') postalCode?: string) {
+    await this.auth.requireUser(req)
+    if (!query?.trim() || query.trim().length < 3) return []
+    return this.geocoding.suggestAddress(query.trim(), { subdistrict, district, city, province, postalCode })
+  }
+
+  @Get('analysis/address/reverse')
+  async reverseAddress(@Req() req: IncomingMessage, @Query('longitude') longitude?: string, @Query('latitude') latitude?: string) {
+    await this.auth.requireUser(req)
+    const lon = Number(longitude), lat = Number(latitude)
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90) throw new BadRequestException({ message: 'Koordinat alamat tidak valid.' })
+    return this.geocoding.reverseAddress(lon, lat)
   }
 
   @Post('analysis/bulk')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 15 * 1024 * 1024 } }))
   async bulkAnalysis(@Req() req: IncomingMessage, @UploadedFile() file?: { originalname: string; buffer: Buffer }) {
     const user = await this.auth.requireUser(req)
     if (!file || !/\.xlsx$/i.test(file.originalname)) throw new BadRequestException({ message: 'Pilih file Excel .xlsx.' })
-    const source = await this.imports.analyzeWorkbook(file.buffer)
+    const source = await this.imports.analyzeWorkbook(file.buffer, { maxBytes: 15 * 1024 * 1024, maxRows: 500 })
     const rows = []
     for (const item of source) {
       try {
@@ -182,6 +210,38 @@ export class AtlasController {
     const result = { providerAvailable: Boolean(process.env.GEOCODER_URL), rows }
     const historyId = await this.atlas.saveAnalysisHistory(user.id, 'BULK', file.originalname, { fileName: file.originalname, rowCount: rows.length }, result)
     return { ...result, historyId }
+  }
+
+  @Post('analysis/bulk/jobs')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 15 * 1024 * 1024 } }))
+  async createBulkJob(@Req() req: IncomingMessage, @UploadedFile() file?: { originalname: string; buffer: Buffer }) {
+    const user = await this.auth.requireUser(req)
+    if (!file) throw new BadRequestException({ message: 'Pilih file Excel .xlsx.' })
+    return this.bulk.create(user.id,file.originalname,file.buffer)
+  }
+
+  @Get('analysis/bulk/jobs/:id')
+  async bulkJobProgress(@Req() req: IncomingMessage, @Param('id') id: string) {
+    const user = await this.auth.requireUser(req)
+    return this.bulk.progress(user.id,id)
+  }
+
+  @Get('analysis/bulk/jobs/:id/rows')
+  async bulkJobRows(@Req() req: IncomingMessage, @Param('id') id: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('search') search?: string, @Query('status') status?: string) {
+    const user = await this.auth.requireUser(req)
+    return this.bulk.page(user.id,id,Number(page) || 1,Number(pageSize) || 50,search ?? '',status ?? '')
+  }
+
+  @Get('analysis/bulk/jobs/:id/map-points')
+  async bulkJobMapPoints(@Req() req: IncomingMessage, @Param('id') id: string) {
+    const user = await this.auth.requireUser(req)
+    return this.bulk.mapPoints(user.id,id)
+  }
+
+  @Post('analysis/bulk/jobs/:id/cancel')
+  async cancelBulkJob(@Req() req: IncomingMessage, @Param('id') id: string) {
+    const user = await this.auth.requireUser(req)
+    return this.bulk.cancel(user.id,id)
   }
 
   @Get('analysis/history')
@@ -209,30 +269,36 @@ export class AtlasController {
     return this.analyzeCoordinates(longitude, latitude, address)
   }
 
-  private async analyzeCoordinates(longitude: number, latitude: number, address?: string, geocodingProvider?: 'photon' | 'nominatim') {
+  private async analyzeCoordinates(longitude: number, latitude: number, address?: string, geocodingProvider?: 'photon' | 'nominatim' | 'manual', geocodingMatch?: 'approximate', matchedStreet?: string) {
     if (!Number.isFinite(longitude) || !Number.isFinite(latitude) || Math.abs(longitude) > 180 || Math.abs(latitude) > 90) throw new BadRequestException({ message: 'Koordinat tidak valid.' })
     const nearest = await this.atlas.nearestNetwork(longitude, latitude)
-      if (!nearest) return { address, longitude, latitude, network: null, distanceMeters: null, status: 'NETWORK_NOT_FOUND', geocodingProvider }
+      if (!nearest) return { address, longitude, latitude, network: null, distanceMeters: null, status: 'NETWORK_NOT_FOUND', geocodingProvider, geocodingMatch, matchedStreet }
     const target = nearest.nearestPoint?.coordinates as [number, number] | undefined
-      if (!target) return { address, longitude, latitude, network: nearest, distanceMeters: null, status: 'NETWORK_NOT_FOUND', geocodingProvider }
+      if (!target) return { address, longitude, latitude, network: nearest, distanceMeters: null, status: 'NETWORK_NOT_FOUND', geocodingProvider, geocodingMatch, matchedStreet }
     try {
       const route = await this.routing.preview([[longitude,latitude],target])
-        return { address, longitude, latitude, network: nearest, distanceMeters: route.distanceMeters, routeGeometry: route.geometry, status: 'OK', geocodingProvider }
+        return { address, longitude, latitude, network: nearest, distanceMeters: route.distanceMeters, routeGeometry: route.geometry, status: 'OK', geocodingProvider, geocodingMatch, matchedStreet }
     } catch {
-        return { address, longitude, latitude, network: nearest, distanceMeters: null, status: 'ROUTING_UNAVAILABLE', message: 'Rute jalan belum tersedia; jarak penarikan tidak ditampilkan.', geocodingProvider }
+        return { address, longitude, latitude, network: nearest, distanceMeters: null, status: 'ROUTING_UNAVAILABLE', message: 'Rute jalan belum tersedia; jarak penarikan tidak ditampilkan.', geocodingProvider, geocodingMatch, matchedStreet }
     }
   }
 
   @Post('routes/preview')
   async routePreview(@Req() req: IncomingMessage, @Body() body: { coordinates?: unknown }) {
-    await this.auth.requireUser(req)
-    return this.routing.preview(this.parseRouteCoordinates(body?.coordinates))
+    const user = await this.auth.requireUser(req)
+    const points = this.parseRouteCoordinates(body?.coordinates)
+    const result = await this.routing.preview(points)
+    await this.atlas.recordAudit(user.id,'ROUTE_PREVIEW_COMPLETED',{ pointCount: points.length,distanceMeters: result.distanceMeters })
+    return result
   }
 
   @Post('routes/preview-ftth')
   async ftthRoutePreview(@Req() req: IncomingMessage, @Body() body: { coordinates?: unknown }) {
-    await this.auth.requireUser(req)
-    return this.routing.previewFtth(this.parseRouteCoordinates(body?.coordinates))
+    const user = await this.auth.requireUser(req)
+    const points = this.parseRouteCoordinates(body?.coordinates)
+    const result = await this.routing.previewFtth(points)
+    await this.atlas.recordAudit(user.id,'FTTH_ROUTE_PREVIEW_COMPLETED',{ pointCount: points.length,distanceMeters: result.distanceMeters })
+    return result
   }
 
   private parseRouteCoordinates(coordinates: unknown) {

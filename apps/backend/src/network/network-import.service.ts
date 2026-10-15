@@ -368,8 +368,10 @@ export class NetworkImportService {
     return { importedCount: assets.length, segmentCount: assets.filter((asset) => asset.type === 'segment').length }
   }
 
-  async analyzeWorkbook(buffer: Buffer) {
-    if (buffer.length > 10 * 1024 * 1024) throw new BadRequestException({ message: 'Ukuran file maksimal 10 MB.' })
+  async analyzeWorkbook(buffer: Buffer, options: { maxBytes?: number; maxRows?: number; validateRegions?: boolean } = {}) {
+    const maxBytes = options.maxBytes ?? 10 * 1024 * 1024
+    const maxRows = options.maxRows ?? 500
+    if (buffer.length > maxBytes) throw new BadRequestException({ message: `Ukuran file maksimal ${Math.round(maxBytes / 1024 / 1024)} MB.` })
     const workbook = new ExcelJS.Workbook()
     try { await workbook.xlsx.load(buffer as never) } catch { throw new BadRequestException({ message: 'File XLSX tidak dapat dibaca.' }) }
     const sheet = workbook.worksheets[0]
@@ -380,17 +382,37 @@ export class NetworkImportService {
     const latIndex = headers.findIndex((value) => /^lat|latitude$/i.test(value))
     const lonIndex = headers.findIndex((value) => /^(lon|lng|longitude)$/i.test(value))
     if (addressIndex < 0 && (latIndex < 0 || lonIndex < 0)) throw new BadRequestException({ message: 'Kolom wajib: Alamat atau pasangan Latitude dan Longitude.' })
-    const rows: { row: number; address: string; latitude: number | null; longitude: number | null }[] = []
+    const column = (pattern: RegExp) => headers.findIndex((value) => pattern.test(value))
+    const indexes = {
+      province: column(/^(provinsi|province)$/i), city: column(/^(kabupaten|kabupaten\/kota|kota|city)$/i),
+      district: column(/^(kecamatan|district)$/i), village: column(/^(kelurahan|kelurahan\/desa|desa|village)$/i),
+      number: column(/^(nomor rumah|no rumah|house number)$/i), postal: column(/^(kode pos|postal code|postcode)$/i),
+    }
+    const rows: { row: number; address: string; latitude: number | null; longitude: number | null; structured?: Record<string, string>; inputError?: string }[] = []
     for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber++) {
       const row = sheet.getRow(rowNumber)
       const value = (index: number) => index < 0 ? '' : String(row.getCell(index + 1).text ?? '').trim()
-      const address = value(addressIndex) || `${value(latIndex)}, ${value(lonIndex)}`
-      if (!address.replace(/[ ,]/g, '')) continue
-      const latitude = value(latIndex), longitude = value(lonIndex)
-      rows.push({ row: rowNumber, address, latitude: latitude ? Number(latitude) : null, longitude: longitude ? Number(longitude) : null })
+      const address = value(addressIndex)
+      const latitudeText = value(latIndex), longitudeText = value(lonIndex)
+      const blankCoordinates = !latitudeText && !longitudeText
+      if (!address && blankCoordinates) continue
+      const latitude = latitudeText ? Number(latitudeText) : null
+      const longitude = longitudeText ? Number(longitudeText) : null
+      const structured = Object.fromEntries(Object.entries({
+        province: value(indexes.province), city: value(indexes.city), district: value(indexes.district),
+        subdistrict: value(indexes.village), number: value(indexes.number), postalCode: value(indexes.postal), street: address,
+      }).filter(([, field]) => field))
+      let inputError: string | undefined
+      if ((latitudeText && !longitudeText) || (!latitudeText && longitudeText)) inputError = 'Latitude dan Longitude harus diisi berpasangan.'
+      else if (latitudeText && longitudeText && (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude!) > 90 || Math.abs(longitude!) > 180)) inputError = 'Koordinat tidak valid.'
+      else if (blankCoordinates && (!address || !structured.province || !structured.city || !structured.district)) inputError = 'Alamat tanpa koordinat wajib memiliki Alamat, Provinsi, Kabupaten/Kota, dan Kecamatan.'
+      rows.push({ row: rowNumber, address: address || `${latitudeText}, ${longitudeText}`, latitude, longitude, ...(Object.keys(structured).length ? { structured } : {}), ...(inputError ? { inputError } : {}) })
     }
     if (!rows.length) throw new BadRequestException({ message: 'Tidak ada baris lokasi pada file.' })
-    if (rows.length > 500) throw new BadRequestException({ message: 'Maksimal 500 lokasi per file XLSX.' })
+    if (rows.length > maxRows) throw new BadRequestException({ message: `Maksimal ${maxRows.toLocaleString('id-ID')} lokasi per file XLSX.` })
+    if (options.validateRegions && !['province', 'city', 'district'].every((field) => indexes[field as keyof typeof indexes] >= 0)) {
+      throw new BadRequestException({ message: 'Template alamat harus menyediakan kolom Provinsi, Kabupaten/Kota, dan Kecamatan.' })
+    }
     return rows
   }
 }

@@ -9,6 +9,12 @@ const production = process.env.NODE_ENV === 'production'
 const secret = process.env.BETTER_AUTH_SECRET
 if (production && (!secret || secret.length < 32)) throw new Error('BETTER_AUTH_SECRET must contain at least 32 characters in production.')
 
+async function writeAuthAudit(action: string, actorId: string | null, statusCode: number) {
+  await pool.query('INSERT INTO audit_logs(actor_id,action,entity_type,entity_id,details) VALUES($1,$2,\'AUTH\',NULL,$3::jsonb)', [actorId,action,JSON.stringify({ method: 'email', statusCode })])
+}
+
+export const recordFailedLogin = (statusCode: number) => writeAuthAudit('LOGIN_FAILED',null,statusCode)
+
 export const createAuth = (disableSignUp: boolean) => betterAuth({
   database: kyselyAdapter(database, { type: 'postgres' }),
   secret: secret || 'development-only-change-me-at-least-32-characters',
@@ -18,6 +24,16 @@ export const createAuth = (disableSignUp: boolean) => betterAuth({
   rateLimit: { enabled: true, window: 60, max: 100, customRules: { '/sign-in/email': { window: 60, max: 5 } } },
   emailAndPassword: { enabled: true, disableSignUp, minPasswordLength: 12 },
   user: { additionalFields: { role: { type: 'string', required: false, defaultValue: 'PRESALES', input: false } } },
+  databaseHooks: {
+    session: {
+      create: { after: async (session, context) => {
+        if (context?.path === '/sign-in/email') await writeAuthAudit('LOGIN_SUCCEEDED',session.userId,200)
+      } },
+      delete: { after: async (session, context) => {
+        if (context?.path === '/sign-out') await writeAuthAudit('LOGOUT_SUCCEEDED',session.userId,200)
+      } },
+    },
+  },
 })
 
 export const auth = createAuth(true)

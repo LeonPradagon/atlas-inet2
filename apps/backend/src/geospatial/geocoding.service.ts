@@ -11,20 +11,44 @@ export type StructuredAddress = {
 }
 
 type PhotonFeature = {
-  properties?: { name?: string; street?: string; housenumber?: string; district?: string; city?: string; county?: string; postcode?: string; countrycode?: string }
+  properties?: { name?: string; street?: string; housenumber?: string; locality?: string; district?: string; city?: string; county?: string; state?: string; postcode?: string; countrycode?: string; type?: string; osm_type?: string; osm_id?: number }
   geometry?: { coordinates?: unknown }
 }
+export type AddressSuggestion = { id: string; label: string; longitude: number; latitude: number; street?: string; number?: string; subdistrict?: string; district?: string; city?: string; province?: string; postalCode?: string; matchQuality: 'approximate' }
 type NominatimFeature = { lat: string; lon: string; name?: string; display_name?: string; address?: Record<string, string>; country_code?: string }
 
 function tokens(value: string) {
-  return value.toLocaleLowerCase('id')
+  return canonicalStreet(value).toLocaleLowerCase('id')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\b(?:jln|jl)\b/g, 'jalan')
     .replace(/\b(?:k\s+h|kh)\b/g, 'kyai haji')
-    .replace(/\bky\b/g, 'kyai')
     .replace(/\bpal merah\b/g, 'palmerah')
     .split(/\s+/).filter((token) => token && token !== 'jalan' && token !== 'no')
+}
+
+function canonicalStreet(value: string) {
+  return value
+    .replace(/^\s*(?:jln|jl)\.?\s*/i, 'Jalan ')
+    .replace(/\bk\s*\.?\s*h\.?\s*/gi, 'Kyai Haji ')
+    .replace(/\bkh\.?\s*/gi, 'Kyai Haji ')
+    .replace(/\bhj\.?\s*/gi, 'Hajjah ')
+    .replace(/\bh\.?\s+(?=[\p{L}])/giu, 'Haji ')
+    .replace(/\br\s*\.?\s*a\.?\s*/gi, 'Raden Ajeng ')
+    .replace(/\br\.?\s+(?=[\p{L}])/giu, 'Raden ')
+    .replace(/\bprof\.?\s*/gi, 'Profesor ')
+    .replace(/\bdr\.?\s+(?=[\p{L}])/giu, 'Doktor ')
+    .replace(/\bir\.?\s+(?=[\p{L}])/giu, 'Insinyur ')
+    .replace(/\b(jln|jl)\.?\s*/gi, 'Jalan ')
+    .replace(/\bgg\.?\s*/gi, 'Gang ')
+    .replace(/\bkp\.?\s*/gi, 'Kampung ')
+    .replace(/\bdsn\.?\s*/gi, 'Dusun ')
+    .replace(/\bds\.?\s*/gi, 'Desa ')
+    .replace(/\bdk\.?\s*/gi, 'Dukuh ')
+    .replace(/\btj\.?\s*/gi, 'Tanjung ')
+    .replace(/\bpsr\.?\s*/gi, 'Pasar ')
+    .replace(/\bklp\.?\b/gi, 'Kelapa')
+    .replace(/\bkb\.?\b/gi, 'Kebon')
+    .replace(/\bky\b/gi, 'Kyai')
 }
 
 function geocoderCity(value?: string) {
@@ -46,7 +70,7 @@ export class GeocodingService {
   private nominatimQueue: Promise<void> = Promise.resolve()
   private readonly nominatimCache = new Map<string, [number, number]>()
 
-  private async search(path: 'api' | 'structured', params: URLSearchParams): Promise<PhotonFeature[]> {
+  private async search(path: 'api' | 'structured' | 'reverse', params: URLSearchParams): Promise<PhotonFeature[]> {
     const baseUrl = process.env.GEOCODER_URL
     if (!baseUrl) throw new ServiceUnavailableException({ code: 'GEOCODING_UNAVAILABLE', message: 'Provider geocoding belum dikonfigurasi. Data alamat belum dianalisis.' })
     const url = new URL(path, `${baseUrl.replace(/\/$/, '')}/`)
@@ -64,9 +88,71 @@ export class GeocodingService {
     return this.coordinates(features[0])
   }
 
-  async geocodeStructured(address: StructuredAddress): Promise<{ coordinates: [number, number]; provider: 'photon' | 'nominatim' }> {
+  async suggestAddress(query: string, context: StructuredAddress = {}): Promise<AddressSuggestion[]> {
+    const rawQuery = query.slice(0, 200).trim().toLocaleLowerCase('id')
+    const normalizedQuery = canonicalStreet(rawQuery).replace(/\bkec\.?\b/gi, 'Kecamatan').replace(/\bno\.?\s*(?=\d)/gi, 'Nomor ')
+    const queryVariants = [...new Set([normalizedQuery, rawQuery])]
+    const searches = queryVariants.flatMap((variant) => {
+      const streetWithoutNumber = variant.replace(/\s+(?:no(?:mor)?\.?\s*)?\d+[a-z]?$/i, '').trim()
+      return [
+        [variant, context.subdistrict, context.district, context.city, context.province, context.postalCode],
+        [variant, context.city, context.province],
+        [streetWithoutNumber, context.city, context.province],
+        [streetWithoutNumber],
+      ]
+    })
+    const streetNeedles = tokens(normalizedQuery.replace(/\s+(?:no(?:mor)?\.?\s*)?\d+[a-z]?$/i, ''))
+      .filter((token) => !['kyai', 'haji', 'jalan', 'gang', 'kampung', 'raya', 'arteri', 'utama'].includes(token))
+    const matchesRequestedStreet = (feature: PhotonFeature) => {
+      const properties = feature.properties ?? {}
+      const actualStreet = tokens(properties.street ?? '')
+      const actualName = tokens(properties.name ?? '')
+      const matches = (actual: string[]) => streetNeedles.every((token) => matchesStreetToken(token, actual))
+      return !streetNeedles.length || matches(actualStreet) || matches(actualName)
+    }
+    let features: PhotonFeature[] = []
+    const searched = new Set<string>()
+    for (const parts of searches) {
+      const searchText = parts.filter(Boolean).join(', ')
+      if (searched.has(searchText)) continue
+      searched.add(searchText)
+      const results = await this.search('api', new URLSearchParams({ q: searchText, countrycode: 'id', limit: '5' }))
+      if (!results.length) continue
+      if (!features.length) features = results
+      if (results.some(matchesRequestedStreet)) { features = results; break }
+    }
+    const unique = new Set<string>()
+    return features.flatMap((feature) => {
+      try {
+        const properties = feature.properties ?? {}
+        if (!matchesRequestedStreet(feature)) return []
+        const [longitude, latitude] = this.coordinates(feature)
+        const id = `${properties.osm_type ?? 'feature'}:${properties.osm_id ?? `${longitude},${latitude}`}`
+        if (unique.has(id)) return []
+        unique.add(id)
+        const street = properties.street ?? properties.name
+        const fields = [properties.name, properties.street, properties.housenumber && `No. ${properties.housenumber}`, properties.locality, properties.district, properties.city, properties.postcode]
+        return [{ id, label: [...new Set(fields.filter(Boolean))].join(', '), longitude, latitude, street, number: properties.housenumber, subdistrict: properties.locality, district: properties.district, city: properties.city ?? properties.county, province: properties.state, postalCode: properties.postcode, matchQuality: 'approximate' as const }]
+      } catch { return [] }
+    })
+  }
+
+  async reverseAddress(longitude: number, latitude: number): Promise<StructuredAddress | null> {
+    const features = await this.search('reverse', new URLSearchParams({ lon: String(longitude), lat: String(latitude), limit: '1' }))
+    const properties = features[0]?.properties
+    if (!properties) return null
+    return {
+      subdistrict: properties.locality,
+      district: properties.district,
+      city: properties.city ?? properties.county,
+      province: properties.state,
+      postalCode: properties.postcode,
+    }
+  }
+
+  async geocodeStructured(address: StructuredAddress): Promise<{ coordinates: [number, number]; provider: 'photon' | 'nominatim'; matchQuality?: 'approximate'; matchedStreet?: string }> {
     const params = new URLSearchParams({ countrycode: 'id', limit: '5' })
-    const street = address.street?.trim()
+    const street = canonicalStreet(address.street ?? '').trim()
     const district = address.district?.trim()
     const location = geocoderCity(address.city)
     if (street) params.set('street', street)
@@ -88,17 +174,35 @@ export class GeocodingService {
         const actualNumber = tokens(properties.housenumber).join('')
         if (expectedNumber !== actualNumber && !matchesStreetToken(expectedNumber, [actualNumber])) return false
       }
-      const actualStreet = tokens(properties.street ?? properties.name ?? '')
+      const actualStreet = tokens([properties.street, properties.name].filter(Boolean).join(' '))
       return expectedStreet.every((token) => matchesStreetToken(token, actualStreet))
     })
     const preferPostalCode = (features: PhotonFeature[]) => matches(features)
       .sort((left, right) => Number(right.properties?.postcode === address.postalCode) - Number(left.properties?.postcode === address.postalCode))[0]
-    let match = preferPostalCode(await this.search('structured', params))
+    const structuredFeatures = await this.search('structured', params)
+    let match = preferPostalCode(structuredFeatures)
+    let textFeatures: PhotonFeature[] = []
     if (!match) {
       const query = [street, address.number && `No. ${address.number}`, address.subdistrict, district, address.city, address.province, address.postalCode, 'Indonesia'].filter(Boolean).join(', ')
-      match = preferPostalCode(await this.search('api', new URLSearchParams({ q: query, countrycode: 'id', limit: '5' })))
+      textFeatures = await this.search('api', new URLSearchParams({ q: query, countrycode: 'id', limit: '5' }))
+      match = preferPostalCode(textFeatures)
     }
     if (match) return { coordinates: this.coordinates(match), provider: 'photon' }
+    const anchor = expectedStreet.find((token) => token.length >= 4 && !['arteri', 'raya', 'kyai', 'haji'].includes(token))
+    const approximate = [...structuredFeatures, ...textFeatures]
+      .filter((feature) => {
+        const properties = feature.properties ?? {}
+        if (!anchor || !address.postalCode || properties.postcode !== address.postalCode || !district || !properties.district || !this.samePlace(properties.district, district)) return false
+        if (properties.countrycode && properties.countrycode.toLowerCase() !== 'id') return false
+        if (location.city && properties.city && !this.samePlace(properties.city, location.city)) return false
+        if (address.number && properties.housenumber && tokens(address.number).join('') !== tokens(properties.housenumber).join('')) return false
+        return tokens([properties.street, properties.name].filter(Boolean).join(' ')).some((token) => matchesStreetToken(anchor, [token]))
+      })
+      .sort((left, right) => {
+        const exactHouseNumber = (feature: PhotonFeature) => Number(Boolean(address.number && feature.properties?.housenumber && tokens(address.number).join('') === tokens(feature.properties.housenumber).join('')))
+        return exactHouseNumber(right) - exactHouseNumber(left)
+      })[0]
+    if (approximate) return { coordinates: this.coordinates(approximate), provider: 'photon', matchQuality: 'approximate', matchedStreet: approximate.properties?.street ?? approximate.properties?.name }
     const coordinates = await this.geocodeWithNominatim(address)
     if (coordinates) return { coordinates, provider: 'nominatim' }
     throw new BadGatewayException({ code: 'GEOCODING_NO_MATCH', message: 'Jalan tidak ditemukan pada Photon maupun OpenStreetMap. Periksa nama jalan atau kode pos.' })
@@ -113,16 +217,13 @@ export class GeocodingService {
   }
 
   private async geocodeWithNominatim(address: StructuredAddress): Promise<[number, number] | null> {
-    const street = address.street?.trim()
+    const street = canonicalStreet(address.street ?? '').trim()
     const expectedStreetTokens = tokens(street ?? '')
     const importantStreetTokens = expectedStreetTokens.filter((token) => token.length > 3 && token !== 'kyai' && token !== 'haji')
     if (!street || !importantStreetTokens.length) return null
 
-    const canonicalStreet = street
-      .replace(/^(?:jln|jl)\.?\s*/i, 'Jalan ')
-      .replace(/\bky\b/gi, 'Kyai')
     const query = [
-      canonicalStreet,
+      street,
       address.subdistrict, address.district,
       address.city?.replace(/^(?:Kota Administrasi|Kota|Kabupaten Administrasi|Kabupaten|Kab)\s+/i, ''),
       address.province, address.postalCode, 'Indonesia',

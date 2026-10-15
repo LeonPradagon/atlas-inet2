@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import ExcelJS from 'exceljs'
-import { LngLatBounds, Map as MapLibreMap, NavigationControl, Popup, setWorkerUrl } from 'maplibre-gl'
+import { LngLatBounds, Map as MapLibreMap, NavigationControl, setWorkerUrl } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import type { FeatureCollection, LineString, Point, Polygon } from 'geojson'
 import { PageHeader } from '../../components/PageHeader'
@@ -9,31 +9,39 @@ import { api, postCompressedJson } from '../../lib/api'
 import { generateFtthDraft, offsetCoordinate, type DesignFeature } from './ftthDraft'
 import { Link } from '@tanstack/react-router'
 
-type AnalysisRow = { row: number; address: string; latitude?: number | null; longitude?: number | null; network?: { name: string; area?: string } | null; distanceMeters?: number | null; status: string; message?: string }
+type AnalysisRow = { row: number; address: string; latitude?: number | null; longitude?: number | null; network?: { name: string; area?: string } | null; distanceMeters?: number | null; status: string; message?: string; result?: Record<string, unknown> | null }
+type BulkJob = { jobId: string; historyId: string; fileName: string; status: string; total: number; processed: number; succeeded: number; failed: number; cancelRequested: boolean }
+type BulkMapPoint = { row: number; address: string; latitude: number; longitude: number; status: string }
+
+const rowStatusLabel = (status: string) => status === 'ERROR' ? 'FAILED' : status
 
 type DraftOverlay = { row: number; anchor: [number, number]; features: DesignFeature[] }
 
-function BulkResultsMap({ rows, draftOverlays }: { rows: AnalysisRow[]; draftOverlays: DraftOverlay[] }) {
+function BulkResultsMap({ draftOverlays, mapPoints, selectedRow, onSelectRow }: { draftOverlays: DraftOverlay[]; mapPoints: BulkMapPoint[]; selectedRow: AnalysisRow | null; onSelectRow: (row: number) => void }) {
   const container = useRef<HTMLDivElement>(null)
-  const points = rows.filter((row): row is AnalysisRow & { latitude: number; longitude: number } => Number.isFinite(row.latitude) && Number.isFinite(row.longitude) && Math.abs(row.latitude!) <= 90 && Math.abs(row.longitude!) <= 180)
+  const points = mapPoints.filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude))
+  const selected = selectedRow && Number.isFinite(selectedRow.latitude) && Number.isFinite(selectedRow.longitude) ? selectedRow : null
+  const pointsKey = points.map(({ row,latitude,longitude,status }) => `${row}:${latitude},${longitude}:${status}`).join('|')
+  const selectedKey = selected ? `${selected.row}:${selected.longitude},${selected.latitude}` : ''
+  const selectedDraftOverlays = draftOverlays.filter((overlay) => overlay.row === selected?.row)
 
   useEffect(() => {
     if (!container.current || !points.length) return
     setWorkerUrl(workerUrl)
-    const map = new MapLibreMap({ container: container.current, style: 'https://tiles.openfreemap.org/styles/liberty', center: [points[0].longitude, points[0].latitude], zoom: 13 })
+    const map = new MapLibreMap({ container: container.current, style: 'https://tiles.openfreemap.org/styles/liberty', center: [points[0].longitude, points[0].latitude], zoom: 5 })
     map.addControl(new NavigationControl(), 'top-right')
     map.on('load', () => {
       const data: FeatureCollection<Point, { address: string; network: string; distance: number | null; status: string; message: string }> = {
         type: 'FeatureCollection',
-        features: points.map((row) => ({ type: 'Feature', properties: { address: row.address, network: row.network?.name ?? '—', distance: row.distanceMeters ?? null, status: row.status, message: row.message ?? '' }, geometry: { type: 'Point', coordinates: [row.longitude, row.latitude] } })),
+        features: points.map((row) => ({ type: 'Feature', properties: { row: row.row, address: row.address, network: '—', distance: null, status: row.status, message: '' }, geometry: { type: 'Point', coordinates: [row.longitude, row.latitude] } })),
       }
       const ring = (center: [number, number], radius: number) => {
         const coordinates = Array.from({ length: 65 }, (_, index) => offsetCoordinate(center, radius, index / 64 * 2 * Math.PI))
         coordinates[coordinates.length - 1] = coordinates[0]
         return coordinates
       }
-      const boundaryRings = points.map((row) => ring([row.longitude, row.latitude], 500))
-      const odpRings = draftOverlays.flatMap((overlay) => overlay.features.flatMap((feature) => feature.properties.kind === 'ODP' && feature.geometry.type === 'Point' ? [ring(feature.geometry.coordinates as [number, number], 150)] : []))
+      const boundaryRings = selected ? [ring([selected.longitude!, selected.latitude!], 500)] : []
+      const odpRings = selectedDraftOverlays.flatMap((overlay) => overlay.features.flatMap((feature) => feature.properties.kind === 'ODP' && feature.geometry.type === 'Point' ? [ring(feature.geometry.coordinates as [number, number], 150)] : []))
       const allRings = [...boundaryRings, ...odpRings]
       const radiusBounds = allRings.flat().reduce((bounds, coordinate) => bounds.extend(coordinate), new LngLatBounds())
       const radii: FeatureCollection<Polygon, { kind: string }> = {
@@ -50,11 +58,17 @@ function BulkResultsMap({ rows, draftOverlays }: { rows: AnalysisRow[]; draftOve
         map.addLayer({ id: 'bulk-analysis-odp-fill', type: 'fill', source: 'bulk-analysis-radii', filter: ['==', ['get', 'kind'], 'odp'], paint: { 'fill-color': '#f29b38', 'fill-opacity': 0.12 } })
         map.addLayer({ id: 'bulk-analysis-odp-line', type: 'line', source: 'bulk-analysis-radii', filter: ['==', ['get', 'kind'], 'odp'], paint: { 'line-color': '#f29b38', 'line-width': 1, 'line-dasharray': [2, 2] } })
       }
-      const draftPoints = draftOverlays.flatMap((overlay) => [
-        { type: 'Feature' as const, properties: { kind: 'OLT', name: `OLT · ${rows.find((row) => row.row === overlay.row)?.address ?? 'Titik analisis'}` }, geometry: { type: 'Point' as const, coordinates: overlay.anchor } },
+      const routeGeometry = selectedRow?.result?.routeGeometry as { type?: string; coordinates?: [number,number][] } | undefined
+      if (routeGeometry?.type === 'LineString' && Array.isArray(routeGeometry.coordinates)) {
+        const routeData: FeatureCollection<LineString> = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: routeGeometry.coordinates } }] }
+        map.addSource('bulk-selected-route', { type: 'geojson', data: routeData })
+        map.addLayer({ id: 'bulk-selected-route', type: 'line', source: 'bulk-selected-route', paint: { 'line-color': '#f29b38', 'line-width': 4 } })
+      }
+      const draftPoints = selectedDraftOverlays.flatMap((overlay) => [
+        { type: 'Feature' as const, properties: { kind: 'OLT', name: `OLT · ${selectedRow?.address ?? 'Titik analisis'}` }, geometry: { type: 'Point' as const, coordinates: overlay.anchor } },
         ...overlay.features.filter((feature) => feature.geometry.type === 'Point'),
       ])
-      const draftLines = draftOverlays.flatMap((overlay) => overlay.features.filter((feature) => feature.geometry.type === 'LineString'))
+      const draftLines = selectedDraftOverlays.flatMap((overlay) => overlay.features.filter((feature) => feature.geometry.type === 'LineString'))
       if (draftPoints.length) {
         const drawIcon = (kind: 'OLT' | 'ODC' | 'ODP' | 'POLE', color: string) => {
           const canvas = document.createElement('canvas'); canvas.width = 64; canvas.height = 64
@@ -81,30 +95,38 @@ function BulkResultsMap({ rows, draftOverlays }: { rows: AnalysisRow[]; draftOve
         map.addSource('bulk-ftth-lines', { type: 'geojson', data: lineData })
         map.addLayer({ id: 'bulk-ftth-routes', type: 'line', source: 'bulk-ftth-lines', paint: { 'line-color': ['match', ['get', 'routeType'], 'FEEDER', '#ff0000', 'DISTRIBUTION', '#a000ff', '#64748b'], 'line-width': ['match', ['get', 'routeType'], 'FEEDER', 4.5, 3.5] } })
       }
-      map.addSource('bulk-analysis-points', { type: 'geojson', data })
-      map.addLayer({ id: 'bulk-analysis-points', type: 'circle', source: 'bulk-analysis-points', paint: { 'circle-radius': 8, 'circle-color': ['case', ['==', ['get', 'status'], 'OK'], '#405bd8', '#f0a22e'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } })
+      map.addSource('bulk-analysis-points', { type: 'geojson', data, cluster: true, clusterRadius: 48, clusterMaxZoom: 13 })
+      map.addLayer({ id: 'bulk-analysis-clusters', type: 'circle', source: 'bulk-analysis-points', filter: ['has', 'point_count'], paint: { 'circle-color': '#405bd8', 'circle-radius': ['step', ['get', 'point_count'], 18, 50, 24, 200, 32], 'circle-opacity': 0.88, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } })
+      map.addLayer({ id: 'bulk-analysis-cluster-count', type: 'symbol', source: 'bulk-analysis-points', filter: ['has', 'point_count'], layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 12 }, paint: { 'text-color': '#fff' } })
+      map.addLayer({ id: 'bulk-analysis-points', type: 'circle', source: 'bulk-analysis-points', filter: ['!', ['has', 'point_count']], paint: { 'circle-radius': 7, 'circle-color': ['case', ['==', ['get', 'status'], 'OK'], '#405bd8', '#f0a22e'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } })
       map.on('mouseenter', 'bulk-analysis-points', () => { map.getCanvas().style.cursor = 'pointer' })
       map.on('mouseleave', 'bulk-analysis-points', () => { map.getCanvas().style.cursor = '' })
+      map.on('click', 'bulk-analysis-clusters', async (event) => {
+        const feature = map.queryRenderedFeatures(event.point, { layers: ['bulk-analysis-clusters'] })[0]
+        const source = map.getSource('bulk-analysis-points') as import('maplibre-gl').GeoJSONSource
+        const zoom = await source.getClusterExpansionZoom(Number(feature.properties?.cluster_id))
+        map.easeTo({ center: (feature.geometry as Point).coordinates as [number,number], zoom })
+      })
       map.on('click', 'bulk-analysis-points', (event) => {
         const feature = map.queryRenderedFeatures(event.point, { layers: ['bulk-analysis-points'] })[0]
         if (!feature) return
+        onSelectRow(Number(feature.properties?.row))
         map.flyTo({ center: event.lngLat, zoom: 15 })
-        const content = document.createElement('div')
-        const title = document.createElement('strong'); title.textContent = String(feature.properties?.address ?? 'Lokasi'); content.append(title)
-        const detail = document.createElement('div'); detail.textContent = `Jaringan: ${feature.properties?.network ?? '—'} · ${feature.properties?.distance == null ? 'Jarak belum tersedia' : `${feature.properties.distance} m`} · ${feature.properties?.status ?? ''}`; content.append(detail)
-        if (feature.properties?.message) { const message = document.createElement('small'); message.textContent = String(feature.properties.message); content.append(message) }
-        new Popup({ closeButton: true, maxWidth: '320px' }).setLngLat(event.lngLat).setDOMContent(content).addTo(map)
       })
-      if (draftOverlays.length) {
-        map.fitBounds(radiusBounds!, { padding: 48, maxZoom: 15 })
+      if (selected) {
+        map.flyTo({ center: [selected.longitude!, selected.latitude!], zoom: 15 })
       } else if (points.length > 1) {
-        map.fitBounds(radiusBounds, { padding: 48, maxZoom: 14 })
+        const allBounds = points.reduce((bounds, point) => bounds.extend([point.longitude,point.latitude]), new LngLatBounds())
+        map.fitBounds(allBounds, { padding: 36, maxZoom: 8 })
       } else if (points.length === 1) {
-        map.setZoom(15)
+        map.setZoom(14)
+      }
+      if (selected && selectedDraftOverlays.length) {
+        map.fitBounds(radiusBounds!, { padding: 48, maxZoom: 15 })
       }
     })
     return () => map.remove()
-  }, [rows, draftOverlays])
+  }, [pointsKey, draftOverlays, selectedKey, onSelectRow])
 
   return <div ref={container} role="img" aria-label="Peta lokasi hasil analisis massal" className="border rounded overflow-hidden" style={{ height: 360, width: '100%' }} />
 }
@@ -118,78 +140,172 @@ function downloadWorkbook(workbook: ExcelJS.Workbook, name: string) {
 
 export function BulkAnalysisPage() {
   const input = useRef<HTMLInputElement>(null)
-  const [rows, setRows] = useState<AnalysisRow[]>([])
-  const [analysisHistoryId, setAnalysisHistoryId] = useState('')
-  const [fileName, setFileName] = useState('')
+  const [jobId, setJobId] = useState(() => new URLSearchParams(window.location.search).get('jobId') ?? localStorage.getItem('atlas-bulk-job') ?? '')
+  const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [selectedRowNumber, setSelectedRowNumber] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [draftingRow, setDraftingRow] = useState<number | null>(null)
   const [savedDraftRows, setSavedDraftRows] = useState<Set<number>>(() => new Set())
   const [draftMessage, setDraftMessage] = useState<{ row: number; text: string; error: boolean } | null>(null)
   const [draftOverlays, setDraftOverlays] = useState<DraftOverlay[]>([])
+  const [draftBatchProgress, setDraftBatchProgress] = useState<{ completed: number; total: number } | null>(null)
+  const [draftBatchSummary, setDraftBatchSummary] = useState<{ generated: number; failed: number; stopped: boolean } | null>(null)
+  const stopDraftBatch = useRef(false)
   const queryClient = useQueryClient()
   const { data: user } = useQuery({ queryKey: ['me'], queryFn: () => api<{ role: string }>('/me') })
+  const jobQuery = useQuery({ queryKey: ['bulk-job',jobId], queryFn: () => api<BulkJob>(`/analysis/bulk/jobs/${jobId}`), enabled: Boolean(jobId), refetchInterval: (query) => ['COMPLETED','COMPLETED_WITH_ERRORS','CANCELLED','FAILED'].includes(query.state.data?.status ?? '') ? false : 1500 })
+  const activeJob = !['COMPLETED','COMPLETED_WITH_ERRORS','CANCELLED','FAILED'].includes(jobQuery.data?.status ?? '')
+  const pageQuery = useQuery({ queryKey: ['bulk-job-rows',jobId,page,search,statusFilter], queryFn: () => api<{ rows: AnalysisRow[]; total: number; page: number; pageSize: number }>(`/analysis/bulk/jobs/${jobId}/rows?page=${page}&pageSize=50&search=${encodeURIComponent(search)}&status=${encodeURIComponent(statusFilter)}`), enabled: Boolean(jobId), refetchInterval: activeJob ? 2000 : false })
+  const mapQuery = useQuery({ queryKey: ['bulk-job-map-points',jobId], queryFn: () => api<BulkMapPoint[]>(`/analysis/bulk/jobs/${jobId}/map-points`), enabled: Boolean(jobId), refetchInterval: activeJob ? 5000 : false })
+  const rows = pageQuery.data?.rows ?? []
+  const mapPoints = mapQuery.data ?? []
+  const job = jobQuery.data
+  const selectedRow = rows.find((row) => row.row === selectedRowNumber) ?? null
+  const draftCandidates = rows.filter((row) => row.status === 'OK' && Number.isFinite(row.latitude) && Number.isFinite(row.longitude) && !savedDraftRows.has(row.row) && !draftOverlays.some((overlay) => overlay.row === row.row))
+  const onSelectMapRow = useCallback((row: number) => { setSelectedRowNumber(row); setPage(Math.floor((row - 1) / 50) + 1); setSearch(''); setStatusFilter('') }, [])
+  useEffect(() => { if (jobId) localStorage.setItem('atlas-bulk-job',jobId) }, [jobId])
+  const clearCurrentJob = () => {
+    if (draftBatchProgress) return
+    const url = new URL(window.location.href); url.searchParams.delete('jobId'); window.history.replaceState(window.history.state, '', url)
+    localStorage.removeItem('atlas-bulk-job')
+    if (input.current) input.current.value = ''
+    setJobId(''); setPage(1); setSearch(''); setStatusFilter(''); setSelectedRowNumber(null); setDraftOverlays([]); setSavedDraftRows(new Set()); setDraftMessage(null); setError('')
+  }
   const processFile = async (file?: File) => {
-    if (!file) return
+    if (!file || draftBatchProgress) return
     setError(''); setLoading(true)
     try {
-      if (file.size > 10 * 1024 * 1024) throw new Error('Ukuran file melebihi batas 10 MB.')
+      if (file.size > 15 * 1024 * 1024) throw new Error('Ukuran file melebihi batas 15 MB.')
       if (!/\.xlsx$/i.test(file.name)) throw new Error('Pilih file Excel dengan format .xlsx.')
       const form = new FormData(); form.append('file', file)
-      const result = await api<{ rows: AnalysisRow[]; historyId: string }>('/analysis/bulk', { method: 'POST', data: form })
-      setRows(result.rows); setAnalysisHistoryId(result.historyId); setFileName(file.name); setDraftOverlays([]); setSavedDraftRows(new Set())
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'File tidak dapat dibaca.'); setRows([]); setAnalysisHistoryId(''); setFileName(''); setDraftOverlays([]); setSavedDraftRows(new Set()) }
+      const result = await api<BulkJob>('/analysis/bulk/jobs', { method: 'POST', data: form })
+      const url = new URL(window.location.href); url.searchParams.set('jobId', result.jobId); window.history.replaceState(window.history.state, '', url)
+      setJobId(result.jobId); setPage(1); setSelectedRowNumber(null); setDraftOverlays([]); setSavedDraftRows(new Set()); setDraftBatchSummary(null)
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ['bulk-job',result.jobId] }),queryClient.invalidateQueries({ queryKey: ['analysis-history'] })])
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'File tidak dapat dibaca.') }
     finally { setLoading(false) }
   }
-  const download = () => {
+  const download = async () => {
     const workbook = new ExcelJS.Workbook()
     const sheet = workbook.addWorksheet('Hasil Analisis')
     sheet.addRow(['Alamat', 'Latitude', 'Longitude', 'Nearest Network', 'Estimasi Jarak Jalan (m)', 'Status', 'Pesan'])
-    rows.forEach((row) => sheet.addRow([row.address,row.latitude ?? '',row.longitude ?? '',row.network?.name ?? '',row.distanceMeters ?? '',row.status,row.message ?? '']))
+    if (jobId) {
+      for (let current = 1; current <= Math.ceil((job?.total ?? 0) / 100); current++) {
+        const result = await api<{ rows: AnalysisRow[] }>(`/analysis/bulk/jobs/${jobId}/rows?page=${current}&pageSize=100`)
+        result.rows.forEach((row) => sheet.addRow([row.address,row.latitude ?? '',row.longitude ?? '',row.network?.name ?? '',row.distanceMeters ?? '',row.status,row.message ?? '']))
+      }
+    }
     downloadWorkbook(workbook,'ATLAS-hasil-analisis.xlsx')
   }
   const downloadTemplate = () => {
     const workbook = new ExcelJS.Workbook(); const sheet = workbook.addWorksheet('Lokasi')
-    sheet.addRow(['Alamat']); sheet.addRow([''])
+    sheet.columns = [
+      { header: 'Alamat', key: 'address', width: 34 }, { header: 'Provinsi', key: 'province', width: 28 },
+      { header: 'Kabupaten/Kota', key: 'city', width: 34 }, { header: 'Kecamatan', key: 'district', width: 22 },
+      { header: 'Kelurahan/Desa', key: 'village', width: 22 }, { header: 'Nomor Rumah', key: 'number', width: 16 },
+      { header: 'Kode Pos', key: 'postalCode', width: 14 }, { header: 'Latitude', key: 'latitude', width: 14 },
+      { header: 'Longitude', key: 'longitude', width: 14 },
+    ]
+    sheet.addRow(['Jl. Panjang Arteri Klp. Dua Raya','Daerah Khusus Ibukota Jakarta','Kota Administrasi Jakarta Barat','Kebon Jeruk','Kebon Jeruk','5','11530','',''])
+    sheet.addRow(['Titik contoh Jakarta','','','','','','',-6.1754,106.8272])
+    sheet.views = [{ state: 'frozen', ySplit: 1 }]
+    sheet.autoFilter = 'A1:I1'
+    sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }
+    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3454D1' } }
+    const instructions = workbook.addWorksheet('Petunjuk')
+    instructions.columns = [{ width: 30 }, { width: 100 }]
+    instructions.addRows([
+      ['PANDUAN TEMPLATE ANALISIS MASSAL'],
+      ['Alamat', 'Isi alamat dan Provinsi, Kabupaten/Kota, serta Kecamatan. Kelurahan/Desa, Nomor Rumah, dan Kode Pos bersifat opsional.'],
+      ['Koordinat', 'Atau isi Latitude dan Longitude sekaligus. Jangan isi hanya salah satunya.'],
+      ['Format koordinat', 'Latitude antara -90 sampai 90; Longitude antara -180 sampai 180. Gunakan angka desimal.'],
+      ['Sebelum upload', 'Ganti atau hapus dua baris contoh pada sheet Lokasi. Jangan ubah nama kolom di baris pertama.'],
+      ['Batas upload', 'Maksimal 5.000 lokasi dan ukuran file 15 MB.'],
+    ])
+    instructions.getRow(1).font = { bold: true, size: 14, color: { argb: 'FF3454D1' } }
     downloadWorkbook(workbook,'template-analisis-atlas.xlsx')
   }
   const generateDraft = async (row: AnalysisRow) => {
-    if (row.status !== 'OK' || !Number.isFinite(row.latitude) || !Number.isFinite(row.longitude) || user?.role !== 'ADMIN') return
+    if (row.status !== 'OK' || !Number.isFinite(row.latitude) || !Number.isFinite(row.longitude) || user?.role !== 'ADMIN') return false
     setDraftingRow(row.row); setDraftMessage(null)
     try {
       const anchor: [number, number] = [row.longitude!, row.latitude!]
       const { features, uncoveredTargets } = await generateFtthDraft(anchor, 'OLT')
       setDraftOverlays((current) => [...current.filter((overlay) => overlay.row !== row.row), { row: row.row, anchor, features }])
       setDraftMessage({ row: row.row, text: `Draft FTTH siap ditinjau${uncoveredTargets ? `; ${uncoveredTargets} titik belum terlayani.` : '.'} Klik Simpan ke peta untuk menyimpan desain.`, error: false })
+      return true
     } catch (cause) {
       setDraftMessage({ row: row.row, text: cause instanceof Error ? cause.message : 'Draft FTTH tidak dapat dibuat.', error: true })
+      return false
     } finally { setDraftingRow(null) }
+  }
+  const generateDraftsForPage = async () => {
+    const candidates = rows.filter((row) => row.status === 'OK' && Number.isFinite(row.latitude) && Number.isFinite(row.longitude) && !savedDraftRows.has(row.row) && !draftOverlays.some((overlay) => overlay.row === row.row))
+    if (!candidates.length || user?.role !== 'ADMIN') return
+    stopDraftBatch.current = false
+    setDraftBatchSummary(null); setDraftMessage(null); setDraftBatchProgress({ completed: 0, total: candidates.length })
+    let generated = 0, failed = 0, completed = 0
+    for (const row of candidates) {
+      if (stopDraftBatch.current) break
+      if (await generateDraft(row)) generated++; else failed++
+      completed++
+      setDraftBatchProgress({ completed, total: candidates.length })
+    }
+    setDraftBatchProgress(null)
+    setDraftBatchSummary({ generated, failed, stopped: stopDraftBatch.current })
   }
   const saveDraft = async (row: AnalysisRow) => {
     const draftOverlay = draftOverlays.find((overlay) => overlay.row === row.row)
     if (!draftOverlay || savedDraftRows.has(row.row) || user?.role !== 'ADMIN') return
     setDraftingRow(row.row); setDraftMessage(null)
     try {
-      const result = await postCompressedJson<{ savedCount: number }>('/assets/ftth-design', {
+      const result = await postCompressedJson<{ savedCount: number; designId: string }>('/assets/ftth-design', {
         area: row.network?.area ?? 'Analisis massal',
-        sourceAnalysisId: analysisHistoryId,
+        sourceAnalysisId: job?.historyId,
         sourceRow: row.row,
         features: [
           { kind: 'OLT', name: `OLT · ${row.address}`.slice(0, 150), geometry: { type: 'Point', coordinates: draftOverlay.anchor } },
           ...draftOverlay.features.map(({ properties, geometry }) => ({ ...properties, geometry })),
         ],
       })
-      await Promise.all(['segments', 'map-assets', 'analysis-history'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })))
       setSavedDraftRows((current) => new Set(current).add(row.row))
       localStorage.setItem('atlas-map-focus', JSON.stringify(draftOverlay.anchor))
+      localStorage.setItem('atlas-map-focus-design', result.designId)
+      await Promise.all(['segments', 'map-assets', 'analysis-history'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })))
       setDraftMessage({ row: row.row, text: `Draft FTTH tersimpan (${result.savedCount} aset/jalur).`, error: false })
     } catch (cause) {
       setDraftMessage({ row: row.row, text: cause instanceof Error ? cause.message : 'Draft FTTH tidak dapat disimpan.', error: true })
     } finally { setDraftingRow(null) }
   }
   return <>
-    <PageHeader title="Analisis massal" subtitle="Proses banyak alamat sekaligus dengan file Excel." action={<button className="btn btn-outline-primary" onClick={downloadTemplate}><i className="bi bi-download me-2" />Unduh template</button>} />
-    <div className="row g-4"><div className="col-xl-4"><section className="card panel-card"><div className="card-header"><div><h3>Unggah file lokasi</h3><p>Format .xlsx</p></div></div><div className="card-body"><div className="upload-zone" role="button" tabIndex={0} onClick={() => input.current?.click()} onKeyDown={(event) => { if (event.key === 'Enter') input.current?.click() }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void processFile(event.dataTransfer.files[0]) }}><span className="upload-icon"><i className="bi bi-cloud-arrow-up" /></span><b>Tarik file ke sini</b><span>atau <u>pilih dari perangkat</u></span><small>Maksimal 10 MB · .xlsx</small></div><input ref={input} className="d-none" type="file" accept=".xlsx" onChange={(event) => { void processFile(event.target.files?.[0]); event.currentTarget.value = '' }} />{loading && <div className="mt-3"><span className="spinner-border spinner-border-sm me-2" />Memproses file...</div>}{fileName && <div className="selected-file"><i className="bi bi-file-earmark-excel text-success" /><span>{fileName}<small>{rows.length} baris diperiksa</small></span><button className="btn btn-sm btn-link text-secondary" onClick={() => { setRows([]); setFileName(''); setDraftOverlays([]); setSavedDraftRows(new Set()) }} aria-label="Hapus file"><i className="bi bi-x-lg" /></button></div>}{error && <div className="alert alert-danger mt-3 mb-0"><i className="bi bi-exclamation-circle me-2" />{error}</div>}<div className="upload-requirements mt-4"><b><i className="bi bi-info-circle me-2" />Format file</b><p>Isi kolom <code>Alamat</code> atau pasangan <code>Latitude</code> dan <code>Longitude</code>. Baris pertama berisi nama kolom.</p></div></div></section></div>
-      <div className="col-xl-8"><section className="card panel-card result-table-card"><div className="card-header"><div><h3>Hasil analisis</h3><p>{rows.length ? `${rows.length} lokasi diperiksa` : 'Unggah file untuk mulai memproses lokasi.'}</p></div>{rows.length > 0 && <button className="btn btn-success btn-sm ms-auto flex-shrink-0" onClick={download}><i className="bi bi-file-earmark-arrow-down me-2" />Unduh Excel</button>}</div>{rows.length ? <><div className="alert alert-info m-3 mb-0">Jika provider belum tersedia, status baris menjelaskan layanan yang belum aktif. Tidak ada hasil contoh yang ditampilkan.</div>{rows.some((row) => Number.isFinite(row.latitude) && Number.isFinite(row.longitude)) && <section className="p-3 pb-0"><h4 className="h6 mb-2">Peta lokasi</h4><BulkResultsMap rows={rows} draftOverlays={draftOverlays} /><div className="d-flex flex-wrap gap-3 mt-2 small text-secondary"><span><i className="bi bi-circle-fill text-primary me-1" />Titik alamat</span><span><i className="bi bi-circle-fill me-1" style={{ color: '#3454d1' }} />Boundary 500 m</span>{draftOverlays.length > 0 && <><span><i className="bi bi-triangle-fill me-1" style={{ color: '#ff0000' }} />ODC</span><span><i className="bi bi-triangle-fill me-1" style={{ color: '#0000ff' }} />ODP</span><span><i className="bi bi-circle-fill me-1" style={{ color: '#536177' }} />Tiang</span><span><i className="bi bi-dash-lg me-1" style={{ color: '#ff0000' }} />Feeder / distribusi</span><span><i className="bi bi-circle-fill me-1" style={{ color: '#f29b38' }} />Radius layanan ODP 150 m</span></>}</div></section>}{draftMessage && <div className={`alert ${draftMessage.error ? 'alert-danger' : 'alert-success'} mx-3 mt-3 mb-0`}><div>{draftMessage.text}</div>{!draftMessage.error && savedDraftRows.has(draftMessage.row) && <div className="d-flex gap-2 mt-2"><Link to="/peta-jaringan" className="btn btn-sm btn-outline-success">Lihat di Peta Jaringan</Link><Link to="/riwayat-analisis" className="btn btn-sm btn-outline-success">Buka Riwayat Analisis</Link></div>}</div>}<div className="table-responsive"><table className="table atlas-table mb-0"><thead><tr><th>Lokasi</th><th>Koordinat</th><th>Nearest network</th><th>Jarak jalan</th><th>Status</th>{user?.role === 'ADMIN' && <th>Aksi</th>}</tr></thead><tbody>{rows.map((row) => <tr key={row.row}><td className="address-cell">{row.address}</td><td className="text-muted small">{row.latitude !== null && row.latitude !== undefined ? `${row.latitude}, ${row.longitude}` : '—'}</td><td><span className="cable-name">{row.network?.name ?? '—'}</span></td><td>{row.distanceMeters === null || row.distanceMeters === undefined ? '—' : `${row.distanceMeters} m`}</td><td><span className={row.status === 'OK' ? 'status-success' : 'text-warning'}>{row.status}</span><small className="d-block text-muted">{row.message ?? ''}</small></td>{user?.role === 'ADMIN' && <td className="text-nowrap"><div className="d-flex gap-2 flex-wrap"><button className="btn btn-sm btn-outline-primary" onClick={() => void generateDraft(row)} disabled={draftingRow !== null || savedDraftRows.has(row.row) || draftOverlays.some((overlay) => overlay.row === row.row) || row.status !== 'OK' || !Number.isFinite(row.latitude) || !Number.isFinite(row.longitude)}>{draftingRow === row.row ? <><span className="spinner-border spinner-border-sm me-1" />Memproses...</> : draftOverlays.some((overlay) => overlay.row === row.row) ? <><i className="bi bi-check2 me-1" />Draft siap</> : <><i className="bi bi-magic me-1" />Generate draft FTTH</>}</button>{savedDraftRows.has(row.row) ? <button className="btn btn-sm btn-success" disabled><i className="bi bi-check-circle me-1" />Tersimpan</button> : draftOverlays.some((overlay) => overlay.row === row.row) && <button className="btn btn-sm btn-outline-success" onClick={() => void saveDraft(row)} disabled={draftingRow !== null}>{draftingRow === row.row ? <><span className="spinner-border spinner-border-sm me-1" />Menyimpan...</> : <><i className="bi bi-save me-1" />Simpan ke peta</>}</button>}</div></td>}</tr>)}</tbody></table></div></> : <div className="bulk-empty"><div className="empty-illustration small"><i className="bi bi-file-earmark-spreadsheet" /></div><b>Belum ada hasil</b><span>Hasil pemrosesan file akan ditampilkan di sini.</span></div>}</section></div></div>
+    <PageHeader title="Analisis massal" subtitle="Analisis hingga 5.000 lokasi di latar belakang." action={<button className="btn btn-outline-primary" onClick={downloadTemplate}><i className="bi bi-download me-2" />Unduh template</button>} />
+    <div className="row g-4">
+      <div className="col-xl-4"><section className="card panel-card"><div className="card-header"><div><h3>Unggah file lokasi</h3><p>Format .xlsx · maksimal 15 MB</p></div>{(jobId || error || search || statusFilter) && <button type="button" className="btn btn-sm btn-outline-secondary ms-auto" onClick={clearCurrentJob} disabled={loading || Boolean(draftBatchProgress)} title="Kosongkan file dan hasil yang sedang dibuka"><i className="bi bi-eraser me-1" />Bersihkan</button>}</div><div className="card-body">
+        <div className="upload-zone" role="button" tabIndex={0} aria-disabled={Boolean(draftBatchProgress)} onClick={() => { if (!draftBatchProgress) input.current?.click() }} onKeyDown={(event) => { if (!draftBatchProgress && event.key === 'Enter') input.current?.click() }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (!draftBatchProgress) void processFile(event.dataTransfer.files[0]) }}><span className="upload-icon"><i className="bi bi-cloud-arrow-up" /></span><b>Tarik file ke sini</b><span>atau <u>pilih dari perangkat</u></span><small>Maksimal 15 MB · 5.000 lokasi · .xlsx</small></div>
+        <input ref={input} className="d-none" type="file" accept=".xlsx" disabled={Boolean(draftBatchProgress)} onChange={(event) => { void processFile(event.target.files?.[0]); event.currentTarget.value = '' }} />
+        {loading && <div className="mt-3"><span className="spinner-border spinner-border-sm me-2" />Mengunggah dan menyiapkan antrean...</div>}
+        {job && <div className="selected-file"><i className="bi bi-file-earmark-excel text-success" /><span>{job.fileName}<small>{job.processed.toLocaleString('id-ID')} dari {job.total.toLocaleString('id-ID')} · {job.status}</small></span>{['QUEUED','RUNNING'].includes(job.status) && <button className="btn btn-sm btn-outline-danger ms-auto" onClick={() => void api(`/analysis/bulk/jobs/${jobId}/cancel`,{method:'POST'}).then(() => queryClient.invalidateQueries({queryKey:['bulk-job',jobId]}))}>Batalkan</button>}</div>}
+        {job && <div className="mt-3"><div className="progress" role="progressbar" aria-valuenow={job.processed} aria-valuemin={0} aria-valuemax={job.total}><div className="progress-bar" style={{width:`${job.total ? Math.round(job.processed / job.total * 100) : 0}%`}} /></div><small className="text-secondary">{job.succeeded} berhasil · {job.failed} gagal</small></div>}
+        {error && <div className="alert alert-danger mt-3 mb-0"><i className="bi bi-exclamation-circle me-2" />{error}</div>}
+        <div className="upload-requirements mt-4"><b><i className="bi bi-info-circle me-2" />Format file</b><p>Alamat memerlukan Provinsi, Kabupaten/Kota, dan Kecamatan. Atau isi pasangan Latitude dan Longitude. Kelurahan, nomor rumah, serta kode pos opsional.</p></div>
+      </div></section></div>
+      <div className="col-xl-8"><section className="card panel-card result-table-card">
+        <div className="card-header d-flex align-items-start gap-2 flex-wrap"><div><h3>Hasil analisis</h3><p>{job ? `${job.total.toLocaleString('id-ID')} lokasi · ${job.processed.toLocaleString('id-ID')} diproses` : 'Unggah file untuk memulai pekerjaan.'}</p></div>{job && job.processed === job.total && <div className="ms-auto d-flex gap-2 flex-wrap">{user?.role === 'ADMIN' && (draftBatchProgress ? <button type="button" className="btn btn-outline-danger btn-sm" onClick={() => { stopDraftBatch.current = true }}>Hentikan draft ({draftBatchProgress.completed}/{draftBatchProgress.total})</button> : draftCandidates.length > 0 && <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => void generateDraftsForPage()} title="Buat draft untuk semua lokasi valid di halaman ini"><i className="bi bi-diagram-3 me-2" />Generate draft FTTH ({draftCandidates.length})</button>)}<button className="btn btn-success btn-sm flex-shrink-0" onClick={() => void download()}><i className="bi bi-file-earmark-arrow-down me-2" />Unduh Excel</button></div>}</div>
+        {draftBatchProgress && <div className="px-3 pt-3"><div className="progress" role="progressbar" aria-valuenow={draftBatchProgress.completed} aria-valuemin={0} aria-valuemax={draftBatchProgress.total}><div className="progress-bar" style={{ width: `${Math.round(draftBatchProgress.completed / draftBatchProgress.total * 100)}%` }} /></div><small className="text-secondary">Membuat draft FTTH berurutan: {draftBatchProgress.completed} dari {draftBatchProgress.total}. Draft yang selesai tetap tersimpan di sesi ini.</small></div>}
+        {draftBatchSummary && <div className={`alert ${draftBatchSummary.failed ? 'alert-warning' : 'alert-success'} mx-3 mt-3 mb-0`}>{draftBatchSummary.generated} draft siap ditinjau{draftBatchSummary.failed ? ` · ${draftBatchSummary.failed} gagal dibuat` : ''}{draftBatchSummary.stopped ? ' · proses dihentikan' : ''}. Simpan draft yang diperlukan ke peta dari baris masing-masing.</div>}
+        {job && <><div className="alert alert-info m-3 mb-0">Ringkasan peta mengelompokkan seluruh titik. Pilih titik pada peta atau baris tabel untuk melihat radius 500 m dan detail lokasi.</div>
+          {mapPoints.length > 0 && <section className="p-3 pb-0"><h4 className="h6 mb-2">Peta lokasi · {mapPoints.length.toLocaleString('id-ID')} titik</h4><BulkResultsMap draftOverlays={draftOverlays} mapPoints={mapPoints} selectedRow={selectedRow} onSelectRow={onSelectMapRow} /><div className="small text-secondary mt-2">Lingkaran 500 m hanya terlihat saat lokasi dipilih.</div></section>}
+          {selectedRow && <section className="mx-3 mt-3 p-3 border rounded"><div className="d-flex justify-content-between gap-2"><div><b>{selectedRow.address}</b><div className="small text-secondary">{selectedRow.latitude}, {selectedRow.longitude} · {selectedRow.status}</div><div className="small">Jaringan: {selectedRow.network?.name ?? '—'} · Jarak jalan: {selectedRow.distanceMeters ?? '—'}{selectedRow.distanceMeters != null ? ' m' : ''}</div>{selectedRow.message && <small className="text-secondary">{selectedRow.message}</small>}</div><button className="btn btn-sm btn-light" onClick={() => setSelectedRowNumber(null)}>Tutup</button></div></section>}
+          {draftMessage && <div className={`alert ${draftMessage.error ? 'alert-danger' : 'alert-success'} mx-3 mt-3 mb-0`}><div>{draftMessage.text}</div>{!draftMessage.error && savedDraftRows.has(draftMessage.row) && <div className="d-flex gap-2 mt-2"><Link to="/peta-jaringan" className="btn btn-sm btn-outline-success">Lihat di Peta Jaringan</Link><Link to="/riwayat-analisis" className="btn btn-sm btn-outline-success">Buka Riwayat Analisis</Link></div>}</div>}
+          <div className="row g-2 px-3 mt-3"><div className="col-md"><input className="form-control form-control-sm" value={search} placeholder="Cari alamat..." onChange={(event) => { setSearch(event.target.value); setPage(1) }} /></div><div className="col-md-4"><select className="form-select form-select-sm" value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(1) }}><option value="">Semua status</option><option value="OK">Berhasil</option><option value="ERROR">Gagal</option><option value="QUEUED">Menunggu</option><option value="PROCESSING">Diproses</option><option value="CANCELLED">Dibatalkan</option></select></div></div>
+          <div className="table-responsive mt-3"><table className="table atlas-table mb-0"><thead><tr><th>Baris</th><th>Lokasi</th><th>Koordinat</th><th>Jaringan</th><th>Jarak</th><th>Status</th>{user?.role === 'ADMIN' && <th>Aksi</th>}</tr></thead><tbody>{rows.map((row) => <tr key={row.row} className={selectedRowNumber === row.row ? 'table-primary' : ''} onClick={() => setSelectedRowNumber(row.row)} style={{cursor:'pointer'}}><td>{row.row}</td><td className="address-cell">{row.address}</td><td className="text-muted small">{row.latitude != null && row.longitude != null ? `${row.latitude}, ${row.longitude}` : '—'}</td><td><span className="cable-name">{row.network?.name ?? '—'}</span></td><td>{row.distanceMeters == null ? '—' : `${row.distanceMeters} m`}</td><td><span className={row.status === 'OK' ? 'status-success' : 'text-warning'}>{rowStatusLabel(row.status)}</span><small className="d-block text-muted">{row.message ?? ''}</small></td>{user?.role === 'ADMIN' && <td className="text-nowrap" onClick={(event) => event.stopPropagation()}><div className="d-flex gap-2 flex-wrap"><button className="btn btn-sm btn-outline-primary" onClick={() => { setSelectedRowNumber(row.row); void generateDraft(row) }} disabled={Boolean(draftBatchProgress) || draftingRow !== null || savedDraftRows.has(row.row) || draftOverlays.some((overlay) => overlay.row === row.row) || row.status !== 'OK' || !Number.isFinite(row.latitude) || !Number.isFinite(row.longitude)}>{draftingRow === row.row ? <><span className="spinner-border spinner-border-sm me-1" />Memproses...</> : draftOverlays.some((overlay) => overlay.row === row.row) ? 'Draft siap' : 'Generate draft FTTH'}</button>{savedDraftRows.has(row.row) ? <button className="btn btn-sm btn-success" disabled>Tersimpan</button> : draftOverlays.some((overlay) => overlay.row === row.row) && <button className="btn btn-sm btn-outline-success" onClick={() => void saveDraft(row)} disabled={Boolean(draftBatchProgress) || draftingRow !== null}>Simpan ke peta</button>}</div></td>}</tr>)}</tbody></table></div>
+          <div className="d-flex align-items-center justify-content-between p-3"><small>Halaman {page} · {pageQuery.data?.total ?? 0} baris</small><div className="btn-group"><button className="btn btn-sm btn-outline-secondary" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>Sebelumnya</button><button className="btn btn-sm btn-outline-secondary" disabled={page * 50 >= (pageQuery.data?.total ?? 0)} onClick={() => setPage((value) => value + 1)}>Berikutnya</button></div></div>
+        </>}
+        {!job && <div className="bulk-empty"><div className="empty-illustration small"><i className="bi bi-file-earmark-spreadsheet" /></div><b>Belum ada hasil</b><span>Hasil pekerjaan akan tersimpan dan dapat dibuka lagi dari riwayat analisis.</span></div>}
+      </section></div>
+    </div>
   </>
 }

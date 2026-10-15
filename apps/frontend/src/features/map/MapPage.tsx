@@ -4,7 +4,7 @@ import { LngLatBounds, Map as MapLibreMap, NavigationControl, Popup, setWorkerUr
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import type { Feature, FeatureCollection, Geometry, LineString, Point } from "geojson";
+import type { Feature, FeatureCollection, Geometry, LineString, Point, Polygon } from "geojson";
 import { SegmentRelations } from "./SegmentRelations";
 import { PageHeader } from "../../components/PageHeader";
 import { api, networkQueryKeys, type Booking, type NetworkAsset } from "../../lib/api";
@@ -259,16 +259,7 @@ export function MapPage() {
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeDistance, setRouteDistance] = useState<number | null>(null);
   const [fileModal, setFileModal] = useState<"import" | "download" | null>(null);
-  const [namePattern, setNamePattern] = useState("");
   const { data: user } = useQuery({ queryKey: ["me"], queryFn: () => api<{ role: string }>("/me") });
-  const patternQuery = useQuery({ queryKey: ["cable-name-pattern"], queryFn: () => api<{ pattern: string }>("/settings/cable-name-pattern"), enabled: user?.role === "ADMIN" });
-  const savePattern = useMutation({
-    mutationFn: () => api("/settings/cable-name-pattern", { method: "PATCH", data: { pattern: namePattern } }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["cable-name-pattern"] });
-      await queryClient.invalidateQueries({ queryKey: ["segments"] });
-    },
-  });
 
   const allNetworkFeatures = useMemo(() => assetFeatures(mapAssetsQuery.data ?? []), [mapAssetsQuery.data]);
   const iconCategoryCounts = useMemo(() => {
@@ -289,7 +280,36 @@ export function MapPage() {
   const pointFeatures = useMemo(() => lineCollection(allNetworkFeatures.filter((feature) => feature.geometry.type === "Point" && activeIconCategories.includes(String(feature.properties.iconCategory)))), [allNetworkFeatures, activeIconCategories]);
   const routeFeatures = useMemo(() => routeCollection([...confirmedRoutes, ...(routePreview ? [routePreview] : [])]), [confirmedRoutes, routePreview]);
   const routePointFeatures = useMemo(() => pointCollection(routePoints), [routePoints]);
-  const selectedAsset = networkSegments.find((item) => item.id === selectedId) ?? networkSegments[0];
+  const selectedAsset = networkSegments.find((item) => item.id === selectedId)
+    ?? networkSegments.find((item) => ftthDesignGroupId(item))
+    ?? networkSegments[0];
+  const selectedDraftId = selectedAsset ? ftthDesignGroupId(selectedAsset) : undefined;
+  const selectedDraftOlt = selectedDraftId ? networkSegments.find((asset) =>
+    ftthDesignGroupId(asset) === selectedDraftId
+    && (String(asset.attributes?.assetKind ?? "").toUpperCase() === "OLT" || /^OLT(?:\b|\s|·)/i.test(asset.name)),
+  ) : undefined;
+  const selectedDraftAnchor = selectedDraftOlt ?? (selectedDraftId ? selectedAsset : undefined);
+  const selectedDraftOltGeometry = useQuery({
+    queryKey: ["asset-geometry", selectedDraftAnchor?.id],
+    queryFn: () => api<{ geometry: Geometry | null }>(`/assets/${selectedDraftAnchor!.id}/geometry`),
+    enabled: Boolean(selectedDraftAnchor),
+    staleTime: 60_000,
+  });
+  const draftRadiusMeters = Number(selectedDraftOlt?.attributes?.coverageRadiusMeters) || 500;
+  const draftBoundary = useMemo<Feature<Polygon, Record<string, unknown>> | null>(() => {
+    const geometry = selectedDraftAnchor?.geometry ?? selectedDraftOltGeometry.data?.geometry;
+    if (!geometry) return null;
+    const [longitude, latitude] = firstCoordinate(geometry);
+    const coordinates = Array.from({ length: 65 }, (_, index) => {
+      const bearing = index / 64 * 2 * Math.PI, distance = draftRadiusMeters / 6371008.8;
+      const lat1 = latitude * Math.PI / 180, lon1 = longitude * Math.PI / 180;
+      const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distance) + Math.cos(lat1) * Math.sin(distance) * Math.cos(bearing));
+      const lon2 = lon1 + Math.atan2(Math.sin(bearing) * Math.sin(distance) * Math.cos(lat1), Math.cos(distance) - Math.sin(lat1) * Math.sin(lat2));
+      return [lon2 * 180 / Math.PI, lat2 * 180 / Math.PI] as Coordinate;
+    });
+    coordinates[64] = coordinates[0];
+    return { type: "Feature", properties: { radiusMeters: draftRadiusMeters }, geometry: { type: "Polygon", coordinates: [coordinates] } };
+  }, [selectedDraftAnchor, selectedDraftOltGeometry.data?.geometry, draftRadiusMeters]);
   const selectedSegment = selectedAsset?.assetType === "segment" ? selectedAsset : undefined;
   const selectedImported = selectedAsset && selectedAsset.assetType !== "segment" ? selectedAsset : undefined;
   const imported = networkSegments.filter((item) => item.source !== "managed");
@@ -326,10 +346,6 @@ export function MapPage() {
   const getDraftFeatureCount = (groupId: string) => networkSegments.filter((asset) => ftthDesignGroupId(asset) === groupId).length;
   const matchedImported = imported.filter((item) => (item.source === "kml" || item.assetType !== "segment") && item.name.toLowerCase().includes(search.toLowerCase()));
   const filteredImported = matchedImported.slice(0, 100);
-
-  useEffect(() => {
-    if (patternQuery.data) setNamePattern(patternQuery.data.pattern);
-  }, [patternQuery.data]);
 
   useEffect(() => {
     const closeOnOutsideClick = (event: PointerEvent) => {
@@ -374,6 +390,9 @@ export function MapPage() {
       updateBounds();
       instance.addSource("network-shapes", { type: "geojson", data: shapeFeatures });
       instance.addSource("network-points-data", { type: "geojson", data: pointFeatures, cluster: true, clusterMaxZoom: 14, clusterRadius: 28 });
+      instance.addSource("selected-ftth-boundary", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      instance.addLayer({ id: "selected-ftth-boundary-fill", type: "fill", source: "selected-ftth-boundary", paint: { "fill-color": "#3454d8", "fill-opacity": 0.12 } });
+      instance.addLayer({ id: "selected-ftth-boundary-line", type: "line", source: "selected-ftth-boundary", paint: { "line-color": "#3454d8", "line-width": 2, "line-dasharray": [2, 2] } });
       instance.addLayer({
         id: "network-polygons",
         type: "fill",
@@ -439,6 +458,8 @@ export function MapPage() {
       instance.addLayer({ id: "preview-route", type: "line", source: "route-lines", filter: ["==", ["get", "status"], "preview"], paint: { "line-color": "#f29b38", "line-width": 5, "line-dasharray": [2, 1] } });
       instance.addSource("route-points", { type: "geojson", data: routePointFeatures });
       instance.addLayer({ id: "route-markers", type: "circle", source: "route-points", paint: { "circle-radius": 7, "circle-color": "#fff", "circle-stroke-width": 3, "circle-stroke-color": "#f29b38" } });
+      instance.moveLayer("selected-ftth-boundary-fill");
+      instance.moveLayer("selected-ftth-boundary-line");
       instance.on("click", (event) => {
         if (modeRef.current !== "idle") return;
         const cluster = instance.queryRenderedFeatures(event.point, { layers: ["network-clusters"] })[0];
@@ -512,6 +533,24 @@ export function MapPage() {
     (map.current?.getSource("network-shapes") as GeoJSONSource | undefined)?.setData(shapeFeatures);
     (map.current?.getSource("network-points-data") as GeoJSONSource | undefined)?.setData(pointFeatures);
   }, [shapeFeatures, pointFeatures]);
+  useEffect(() => {
+    (map.current?.getSource("selected-ftth-boundary") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: draftBoundary ? [draftBoundary] : [] });
+  }, [draftBoundary, mapReady]);
+  useEffect(() => {
+    const designId = localStorage.getItem("atlas-map-focus-design");
+    if (!designId) return;
+    const target = networkSegments.find((asset) => asset.attributes?.ftthDesignId === designId && asset.attributes?.assetKind === "ROUTE")
+      ?? networkSegments.find((asset) => asset.attributes?.ftthDesignId === designId);
+    if (target) {
+      setSelectedId(target.id);
+      localStorage.removeItem("atlas-map-focus-design");
+    }
+  }, [networkSegments]);
+  useEffect(() => {
+    if (!draftBoundary || !mapReady || !map.current) return;
+    const bounds = draftBoundary.geometry.coordinates[0].reduce((value, coordinate) => value.extend(coordinate as Coordinate), new LngLatBounds());
+    map.current.fitBounds(bounds, { padding: 72, maxZoom: 16, duration: 450 });
+  }, [draftBoundary, mapReady]);
   useEffect(() => {
     const instance = map.current;
     if (!instance || !mapReady) return;
@@ -840,7 +879,7 @@ export function MapPage() {
               </button>
             ))}
             {[...ftthDraftGroups].map(([groupId, segments]) => (
-              <details key={groupId} className="ftth-design-group">
+              <details key={groupId} className="ftth-design-group" onToggle={(event) => { if (event.currentTarget.open && segments[0]) void focusAsset(segments[0]); }}>
                 <summary><span className="segment-dot" /><span className="segment-meta"><b>Draft FTTH · {segments[0]?.area || "Area desain"}</b><small>{segments.length} jalur · {getDraftFeatureCount(groupId)} aset dalam satu desain</small></span><i className="bi bi-chevron-down" /></summary>
                 <div>{segments.map((segment) => (
                   <button key={segment.id} className={`segment-item ${selectedId === segment.id ? "selected" : ""}`} onClick={() => focusAsset(segment)}>
@@ -872,6 +911,7 @@ export function MapPage() {
                 <p className="text-secondary">
                   {selectedSegment.area} · {selectedSegment.cableType}
                 </p>
+                {selectedDraftId && <div className="alert alert-primary py-2"><i className="bi bi-bounding-box-circles me-2" />Radius desain FTTH {draftRadiusMeters} m ditampilkan pada peta.</div>}
                 {selectedSegment.totalCores === 0 && <div className="alert alert-info py-2">Kapasitas belum diisi. ADMIN perlu melengkapi jumlah core sebelum segmen dapat dibooking.</div>}
                 {selectedSegment.source !== "kml" && selectedSegment.nameValid === false && <div className="alert alert-warning py-2">Nama kabel belum sesuai pola standar.</div>}
                 <div className="core-summary">
@@ -991,22 +1031,6 @@ export function MapPage() {
               </>
             ) : (
               <p className="text-secondary">Pilih segmen untuk melihat detail aset.</p>
-            )}
-            {user?.role === "ADMIN" && (
-              <details className="admin-settings mt-4">
-                <summary>
-                  <i className="bi bi-gear me-2" />
-                  Pengaturan ADMIN
-                </summary>
-                <label className="form-label mt-3" htmlFor="cable-pattern">
-                  Pola nama kabel (RegExp)
-                </label>
-                <input id="cable-pattern" className="form-control form-control-sm" value={namePattern} onChange={(event) => setNamePattern(event.target.value)} />
-                <button className="btn btn-sm btn-outline-primary mt-2" onClick={() => savePattern.mutate()} disabled={savePattern.isPending}>
-                  {savePattern.isPending ? "Menyimpan..." : "Simpan pola"}
-                </button>
-                {savePattern.error && <small className="d-block text-danger mt-2">{savePattern.error instanceof Error ? savePattern.error.message : "Pola tidak dapat disimpan."}</small>}
-              </details>
             )}
           </div>
         </aside>

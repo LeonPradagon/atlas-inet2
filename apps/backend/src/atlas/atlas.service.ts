@@ -18,40 +18,99 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     await client.query('INSERT INTO audit_logs(actor_id,action,entity_type,entity_id,details) VALUES($1,$2,$3,$4,$5::jsonb)', [actorId,action,entityType,entityId,JSON.stringify(details)])
   }
 
+  async recordAudit(actorId: string | null, action: string, details: Record<string, unknown>) {
+    await this.db.transaction((client) => this.audit(client,actorId,action,'PROCESS',null,details))
+  }
+
+  async recordApiRequest(actorId: string | null, method: string, path: string, statusCode: number, durationMs: number) {
+    const action = statusCode >= 400 ? 'API_REQUEST_FAILED' : 'API_REQUEST'
+    await this.db.transaction((client) => this.audit(client,actorId,action,'API',`${method} ${path}`,{ method,path,statusCode,durationMs }))
+  }
+
   async saveAnalysisHistory(userId: string, type: 'ADDRESS' | 'BULK', title: string, input: unknown, result: unknown) {
-    const { rows } = await this.db.query(`INSERT INTO analysis_history(user_id,analysis_type,title,input,result)
+    return this.db.transaction(async (client) => {
+      const { rows } = await client.query(`INSERT INTO analysis_history(user_id,analysis_type,title,input,result)
       VALUES($1,$2,$3,$4::jsonb,$5::jsonb)
-      RETURNING id,analysis_type AS "analysisType",title,created_at AS "createdAt"`,
-    [userId, type, title.slice(0, 300), JSON.stringify(input), JSON.stringify(result)])
-    return rows[0].id as string
+      RETURNING id`, [userId, type, title.slice(0, 300), JSON.stringify(input), JSON.stringify(result)])
+      const id = rows[0].id as string
+      const payload = result && typeof result === 'object' ? result as { status?: string; rows?: { status?: string }[] } : {}
+      const statusCounts = (payload.rows ?? []).reduce<Record<string, number>>((counts, row) => {
+        const status = row.status ?? 'UNKNOWN'
+        counts[status] = (counts[status] ?? 0) + 1
+        return counts
+      }, {})
+      const details = type === 'BULK'
+        ? { rowCount: payload.rows?.length ?? 0, statusCounts }
+        : { status: payload.status ?? 'COMPLETED' }
+      await this.audit(client,userId,type === 'BULK' ? 'BULK_ANALYSIS_COMPLETED' : 'ADDRESS_ANALYSIS_COMPLETED','ANALYSIS_HISTORY',id,details)
+      return id
+    })
   }
 
   async listAnalysisHistory(userId: string, type?: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN') {
-    const { rows } = await this.db.query(`SELECT id,analysis_type AS "analysisType",title,
-      result->>'status' AS status,
-      CASE WHEN analysis_type='BULK' THEN jsonb_array_length(COALESCE(result->'rows','[]'::jsonb))
-           WHEN analysis_type='FTTH_DESIGN' THEN COALESCE((result->>'savedCount')::int,0)
+    const { rows } = await this.db.query(`SELECT h.id,h.analysis_type AS "analysisType",h.title,
+      h.result->>'status' AS status,
+      CASE WHEN h.analysis_type='BULK' THEN COALESCE(j.total_rows,jsonb_array_length(COALESCE(h.result->'rows','[]'::jsonb)))
+           WHEN h.analysis_type='FTTH_DESIGN' THEN COALESCE((h.result->>'savedCount')::int,0)
            ELSE 1 END AS "itemCount",
-      created_at AS "createdAt"
-      FROM analysis_history WHERE user_id=$1 AND ($2::text IS NULL OR analysis_type=$2)
-      ORDER BY created_at DESC LIMIT 200`, [userId, type ?? null])
+      h.created_at AS "createdAt",j.id AS "bulkJobId",j.status AS "jobStatus",j.processed_rows AS "processedRows",
+      j.succeeded_rows AS "succeededRows",j.failed_rows AS "failedRows"
+      FROM analysis_history h LEFT JOIN analysis_bulk_jobs j ON j.history_id=h.id
+      WHERE h.user_id=$1 AND ($2::text IS NULL OR h.analysis_type=$2)
+        AND NOT (h.analysis_type='FTTH_DESIGN' AND EXISTS (
+          SELECT 1 FROM analysis_history a
+          WHERE a.user_id=h.user_id AND a.analysis_type='ADDRESS'
+            AND (h.input->>'sourceAnalysisId'=a.id::text OR EXISTS (
+              SELECT 1 FROM jsonb_array_elements(COALESCE(h.result->'features','[]'::jsonb)) f
+              CROSS JOIN LATERAL (SELECT CASE WHEN f->>'kind'='OLT' THEN f->'geometry'->'coordinates'
+                ELSE f->'geometry'->'coordinates'->0 END AS point) p
+              WHERE (f->>'kind'='OLT' OR (f->>'kind'='ROUTE' AND f->>'routeType'='FEEDER'))
+                AND jsonb_typeof(p.point)='array' AND jsonb_array_length(p.point)>=2
+                AND ST_DistanceSphere(ST_MakePoint((p.point->>0)::float8,(p.point->>1)::float8),
+                  ST_MakePoint((a.result->>'longitude')::float8,(a.result->>'latitude')::float8))<=5
+            ))
+        ))
+      ORDER BY h.created_at DESC LIMIT 200`, [userId, type ?? null])
     return rows
   }
 
   async getAnalysisHistory(userId: string, id: string) {
-    const { rows } = await this.db.query(`SELECT id,analysis_type AS "analysisType",title,input,result,created_at AS "createdAt"
-      FROM analysis_history WHERE user_id=$1 AND id=$2`, [userId, id])
+    const { rows } = await this.db.query(`SELECT h.id,h.analysis_type AS "analysisType",h.title,h.input,h.result,h.created_at AS "createdAt",
+      j.id AS "bulkJobId",j.status AS "jobStatus",j.total_rows AS "totalRows",j.processed_rows AS "processedRows",
+      j.succeeded_rows AS "succeededRows",j.failed_rows AS "failedRows"
+      FROM analysis_history h LEFT JOIN analysis_bulk_jobs j ON j.history_id=h.id WHERE h.user_id=$1 AND h.id=$2`, [userId, id])
     if (!rows[0]) throw new NotFoundException({ message: 'Riwayat analisis tidak ditemukan.' })
-    if (rows[0].analysisType !== 'BULK') return rows[0]
+    if (!['BULK', 'ADDRESS'].includes(rows[0].analysisType)) return rows[0]
     const { rows: drafts } = await this.db.query(`SELECT id,title,input,result,created_at AS "createdAt"
-      FROM analysis_history WHERE user_id=$1 AND analysis_type='FTTH_DESIGN' AND input->>'sourceAnalysisId'=$2
-      ORDER BY created_at`, [userId, id])
-    return { ...rows[0], relatedDrafts: drafts }
+      FROM analysis_history WHERE user_id=$1 AND analysis_type='FTTH_DESIGN'
+        AND (input->>'sourceAnalysisId'=$2 OR input->>'sourceAnalysisId' IS NULL)
+      ORDER BY created_at DESC`, [userId, id])
+    const latitude = Number(rows[0].result?.latitude)
+    const longitude = Number(rows[0].result?.longitude)
+    const relatedDrafts = drafts.filter((draft) => {
+      if (draft.input?.sourceAnalysisId === id) return true
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false
+      const features = draft.result?.features ?? []
+      return features.some((feature: { kind?: string; routeType?: string; geometry?: { coordinates?: unknown } }) => {
+        if (feature.kind !== 'OLT' && !(feature.kind === 'ROUTE' && feature.routeType === 'FEEDER')) return false
+        const geometryCoordinates = feature.geometry?.coordinates
+        if (!Array.isArray(geometryCoordinates) || geometryCoordinates.length < 2) return false
+        const coordinates = Array.isArray(geometryCoordinates[0]) ? geometryCoordinates[0] : geometryCoordinates
+        const dx = (Number(coordinates[0]) - longitude) * 111_320 * Math.cos(latitude * Math.PI / 180)
+        const dy = (Number(coordinates[1]) - latitude) * 111_320
+        return Number.isFinite(dx) && Number.isFinite(dy) && Math.hypot(dx, dy) <= 5
+      })
+    })
+    return { ...rows[0], relatedDrafts }
   }
 
   async deleteAnalysisHistory(userId: string, id: string) {
-    const { rowCount } = await this.db.query('DELETE FROM analysis_history WHERE user_id=$1 AND id=$2', [userId, id])
-    if (!rowCount) throw new NotFoundException({ message: 'Riwayat analisis tidak ditemukan.' })
+    await this.db.transaction(async (client) => {
+      const { rows } = await client.query('SELECT analysis_type AS type FROM analysis_history WHERE user_id=$1 AND id=$2 FOR UPDATE', [userId,id])
+      if (!rows.length) throw new NotFoundException({ message: 'Riwayat analisis tidak ditemukan.' })
+      await client.query('DELETE FROM analysis_history WHERE user_id=$1 AND id=$2', [userId,id])
+      await this.audit(client,userId,'ANALYSIS_HISTORY_DELETED','ANALYSIS_HISTORY',id,{ type: rows[0].type })
+    })
   }
 
   async listAuditTrails(search = '', limit = 100) {
@@ -129,7 +188,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     if (area.length > 300) throw new BadRequestException({ message: 'Wilayah maksimal 300 karakter.' })
     const sourceAnalysisId = typeof sourceInput?.analysisId === 'string' ? sourceInput.analysisId : ''
     const sourceRow = Number(sourceInput?.row)
-    if ((sourceAnalysisId && (!Number.isInteger(sourceRow) || sourceRow < 1)) || (!sourceAnalysisId && sourceInput?.row !== undefined)) throw new BadRequestException({ message: 'Asal draft analisis massal tidak valid.' })
+    if ((!sourceAnalysisId && sourceInput?.row !== undefined) || (sourceInput?.row !== undefined && (!Number.isInteger(sourceRow) || sourceRow < 1))) throw new BadRequestException({ message: 'Asal draft analisis tidak valid.' })
     const kinds = ['OLT','JOINT_CLOSURE','HANDHOLE','ODC','ODP','POLE','ROUTE']
     const designId = randomUUID()
     const features = input.map((value) => {
@@ -148,13 +207,19 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       const routeType = kind === 'ROUTE' && (feature.routeType === 'FEEDER' || feature.routeType === 'DISTRIBUTION') ? feature.routeType : null
       if (kind === 'ROUTE' && !routeType) throw new BadRequestException({ message: 'Jenis jalur FTTH harus feeder atau distribusi.' })
       const category = kind === 'JOINT_CLOSURE' ? 'JC' : kind === 'HANDHOLE' ? 'HANDHOLE' : kind
-      const attributes = { folderPath: `FTTH Draft / ${designId} / ${category}`, ftthDesignId: designId, assetKind: kind, source: 'ftth-design', poleHeight, routeType, lineColor: routeType === 'FEEDER' ? '#ff0000' : routeType === 'DISTRIBUTION' ? '#a000ff' : undefined }
+      const attributes = { folderPath: `FTTH Draft / ${designId} / ${category}`, ftthDesignId: designId, assetKind: kind, source: 'ftth-design', poleHeight, routeType, coverageRadiusMeters: kind === 'OLT' ? 500 : undefined, lineColor: routeType === 'FEEDER' ? '#ff0000' : routeType === 'DISTRIBUTION' ? '#a000ff' : undefined }
       return { id: randomUUID(),kind,name,poleHeight,routeType,geometry,geometryJson: JSON.stringify({ type: geometry.type, coordinates }),attributes: JSON.stringify(attributes) }
     })
     const historyId = await this.db.transaction(async (client) => {
       if (sourceAnalysisId) {
-        const { rows: parent } = await client.query("SELECT result FROM analysis_history WHERE id=$1 AND user_id=$2 AND analysis_type='BULK' FOR UPDATE", [sourceAnalysisId,userId])
-        if (!parent.length || !Array.isArray(parent[0].result?.rows) || !parent[0].result.rows.some((row: { row?: number }) => Number(row.row) === sourceRow)) throw new NotFoundException({ message: 'Baris analisis massal tidak ditemukan.' })
+        const { rows: parent } = await client.query("SELECT h.analysis_type,h.result,j.id AS job_id FROM analysis_history h LEFT JOIN analysis_bulk_jobs j ON j.history_id=h.id WHERE h.id=$1 AND h.user_id=$2 AND h.analysis_type IN ('ADDRESS','BULK') FOR UPDATE OF h", [sourceAnalysisId,userId])
+        if (!parent.length) throw new NotFoundException({ message: 'Riwayat analisis tidak ditemukan.' })
+        if (parent[0].analysis_type === 'ADDRESS' && sourceInput?.row !== undefined) throw new BadRequestException({ message: 'Analisis alamat tunggal tidak memakai nomor baris.' })
+        if (parent[0].analysis_type === 'BULK') {
+          if (!Number.isInteger(sourceRow) || sourceRow < 1) throw new BadRequestException({ message: 'Nomor baris analisis massal tidak valid.' })
+          const asyncRow = parent[0].job_id ? await client.query("SELECT 1 FROM analysis_bulk_job_rows WHERE job_id=$1 AND row_number=$2 AND status='OK'", [parent[0].job_id,sourceRow]) : { rows: [] }
+          if (!asyncRow.rows.length && (!Array.isArray(parent[0].result?.rows) || !parent[0].result.rows.some((row: { row?: number }) => Number(row.row) === sourceRow))) throw new NotFoundException({ message: 'Baris analisis massal tidak ditemukan atau belum berhasil.' })
+        }
       }
       for (const feature of features) {
         const isRoute = feature.kind === 'ROUTE'
@@ -444,8 +509,11 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return rows
   }
   async markNotificationRead(id: string, userId: string) {
-    const { rowCount } = await this.db.query('UPDATE notifications SET read_at=now() WHERE id=$1 AND user_id=$2', [id,userId])
-    if (!rowCount) throw new NotFoundException({ message: 'Notifikasi tidak ditemukan.' })
+    await this.db.transaction(async (client) => {
+      const { rowCount } = await client.query('UPDATE notifications SET read_at=now() WHERE id=$1 AND user_id=$2', [id,userId])
+      if (!rowCount) throw new NotFoundException({ message: 'Notifikasi tidak ditemukan.' })
+      await this.audit(client,userId,'NOTIFICATION_READ','NOTIFICATION',id,{ read: true })
+    })
     return { id, read: true }
   }
 }

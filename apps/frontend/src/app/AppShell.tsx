@@ -125,6 +125,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             </li>
             <li>{navLink(navSections[3].items[0], pathname)}</li>
             {isAdmin && <li>{navLink({ to: "/audit-trails", label: "Audit Trails", icon: "bi-journal-text" }, pathname)}</li>}
+            {isAdmin && <li>{navLink({ to: "/pengaturan", label: "Pengaturan", icon: "bi-gear" }, pathname)}</li>}
           </ul>
         </nav>
         <nav className="mobile-nav" aria-label="Navigasi utama">
@@ -143,6 +144,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             </li>
             <li>{navLink(navSections[3].items[0], pathname)}</li>
             {isAdmin && <li>{navLink({ to: "/audit-trails", label: "Audit Trails", icon: "bi-journal-text" }, pathname)}</li>}
+            {isAdmin && <li>{navLink({ to: "/pengaturan", label: "Pengaturan", icon: "bi-gear" }, pathname)}</li>}
           </ul>
         </nav>
         <div className="sidebar-footer">

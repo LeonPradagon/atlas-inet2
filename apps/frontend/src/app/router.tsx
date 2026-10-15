@@ -10,8 +10,9 @@ const historyRoute = createRoute({ getParentRoute: () => rootRoute, path: '/riwa
 const bookingRoute = createRoute({ getParentRoute: () => rootRoute, path: '/booking-core', component: lazyRouteComponent(() => import('../features/core-booking/CoreBookingPage'), 'CoreBookingPage') })
 const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: '/audit-trails', component: lazyRouteComponent(() => import('../features/audit/AuditTrailsPage'), 'AuditTrailsPage') })
 const profileRoute = createRoute({ getParentRoute: () => rootRoute, path: '/profil', component: lazyRouteComponent(() => import('../features/profile/ProfilePage'), 'ProfilePage') })
+const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/pengaturan', component: lazyRouteComponent(() => import('../features/settings/SettingsPage'), 'SettingsPage') })
 
-const routeTree = rootRoute.addChildren([dashboardRoute, mapRoute, addressRoute, bulkRoute, historyRoute, bookingRoute, auditRoute, profileRoute])
+const routeTree = rootRoute.addChildren([dashboardRoute, mapRoute, addressRoute, bulkRoute, historyRoute, bookingRoute, auditRoute, profileRoute, settingsRoute])
 export const router = createRouter({ routeTree })
 
 declare module '@tanstack/react-router' {
