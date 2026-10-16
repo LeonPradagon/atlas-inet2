@@ -15,7 +15,9 @@ export class AuthService {
   async requireUser(request: IncomingMessage) {
     const session = await this.session(request)
     if (!session) throw new UnauthorizedException({ message: 'Silakan masuk untuk melanjutkan.' })
-    return session.user as typeof session.user & { role?: 'ADMIN' | 'PRESALES' }
+    const user = session.user as typeof session.user & { role?: string }
+    if (!['ADMIN', 'PRESALES'].includes(user.role ?? '')) throw new ForbiddenException({ message: 'Peran akun tidak diizinkan.' })
+    return user as typeof session.user & { role: 'ADMIN' | 'PRESALES' }
   }
 
   async requireAdmin(request: IncomingMessage) {

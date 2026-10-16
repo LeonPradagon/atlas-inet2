@@ -6,6 +6,17 @@ type GraphHopperResponse = { paths?: { distance: number; time: number; points: {
 
 @Injectable()
 export class RoutingService {
+  async status(): Promise<'ok' | 'unavailable'> {
+    const baseUrl = process.env.ROUTING_URL
+    if (!baseUrl) return 'unavailable'
+    try {
+      const response = await fetch(new URL('info', `${baseUrl.replace(/\/$/, '')}/`), { signal: AbortSignal.timeout(3_000) })
+      return response.ok ? 'ok' : 'unavailable'
+    } catch {
+      return 'unavailable'
+    }
+  }
+
   async preview(coordinates: Coordinate[]) {
     return this.route(coordinates, process.env.ROUTING_PROFILE ?? 'car')
   }

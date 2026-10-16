@@ -21,6 +21,7 @@ async function bootstrap() {
   const atlas = app.get(AtlasService)
   express.disable('x-powered-by')
   app.use((_request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse, next: (error?: unknown) => void) => {
+    response.setHeader('Cache-Control', 'no-store')
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('X-Frame-Options', 'DENY')
     response.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
@@ -40,6 +41,7 @@ async function bootstrap() {
     next()
   })
   app.setGlobalPrefix('api')
+  app.enableShutdownHooks()
   const authHandler = toNodeHandler(auth)
   app.getHttpAdapter().getInstance().use('/api/auth', (request: import('node:http').IncomingMessage, response: import('node:http').ServerResponse, next: (error?: unknown) => void) => {
     if (request.method === 'POST' && request.url?.split('?')[0] === '/sign-in/email') {

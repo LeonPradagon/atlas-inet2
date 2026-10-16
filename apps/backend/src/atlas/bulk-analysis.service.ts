@@ -11,7 +11,9 @@ type InputRow = { row: number; address: string; latitude: number | null; longitu
 @Injectable()
 export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
   private timer?: NodeJS.Timeout
-  private running = false
+  private activeWorkers = 0
+  // ponytail: two rows per process; raise only after measuring Photon, GraphHopper, and database capacity.
+  private readonly maxConcurrentRows = 2
   private lastRecoveryAt = 0
 
   constructor(
@@ -103,19 +105,19 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async workOne() {
-    if (this.running) return
-    this.running = true
+    if (this.activeWorkers >= this.maxConcurrentRows) return
+    this.activeWorkers += 1
     try {
       if (Date.now() - this.lastRecoveryAt > 15_000) {
-        await this.recoverStaleRows()
         this.lastRecoveryAt = Date.now()
+        await this.recoverStaleRows()
       }
       const claim = await this.db.transaction(async (client) => {
         const { rows } = await client.query(`WITH candidate AS (
           SELECT r.id,r.job_id,r.row_number,r.input,j.user_id,j.history_id
           FROM analysis_bulk_job_rows r JOIN analysis_bulk_jobs j ON j.id=r.job_id
           WHERE r.status='QUEUED' AND j.cancel_requested_at IS NULL
-          ORDER BY j.created_at,r.row_number LIMIT 1 FOR UPDATE OF r SKIP LOCKED
+          ORDER BY r.row_number,j.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED
         ) UPDATE analysis_bulk_job_rows r SET status='PROCESSING',attempts=attempts+1,processing_started_at=now()
           FROM candidate c WHERE r.id=c.id
           RETURNING r.id,r.attempts,c.job_id,c.row_number,c.input,c.user_id,c.history_id`)
@@ -161,7 +163,7 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
         await this.finishRow(claim, { address: input.address, latitude: input.latitude, longitude: input.longitude, status: payload.code ?? 'ANALYSIS_FAILED', message }, 'ERROR')
       }
     } catch (error) { console.error('Bulk analysis worker failed', error) }
-    finally { this.running = false }
+    finally { this.activeWorkers -= 1 }
   }
 
   private async recoverStaleRows() {

@@ -171,6 +171,18 @@ export class AtlasController {
     return this.atlas.createBooking(body, user.id)
   }
 
+  @Post('bookings/:id/approve')
+  async approveBooking(@Req() req: IncomingMessage, @Param('id') id: string) {
+    const user = await this.auth.requireAdmin(req)
+    return this.atlas.approveBooking(id, user.id)
+  }
+
+  @Post('bookings/:id/reject')
+  async rejectBooking(@Req() req: IncomingMessage, @Param('id') id: string) {
+    const user = await this.auth.requireAdmin(req)
+    return this.atlas.rejectBooking(id, user.id)
+  }
+
   @Post('bookings/:id/release')
   async releaseBooking(@Req() req: IncomingMessage, @Param('id') id: string) {
     const user = await this.auth.requireUser(req)

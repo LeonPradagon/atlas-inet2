@@ -212,6 +212,15 @@ function firstCoordinate(geometry: NetworkAsset["geometry"]): Coordinate {
   return child ? firstCoordinate(child) : [106.79, -6.26];
 }
 
+function matchesAssetSearch(asset: NetworkAsset, query: string) {
+  if (!query) return true;
+  const searchable = [asset.name, asset.area, asset.cableType, asset.assetType, asset.pole, asset.odc, asset.odp,
+    ...Object.values(asset.attributes ?? {}).filter((value) => typeof value === "string" || typeof value === "number")]
+    .map((value) => String(value ?? "").toLocaleLowerCase("id-ID"))
+    .join(" ");
+  return searchable.includes(query);
+}
+
 export function MapPage() {
   const { data: networkSegments = [] } = useQuery({ queryKey: ["segments"], queryFn: () => api<NetworkAsset[]>("/assets"), refetchInterval: 30_000 });
   const [mapBounds, setMapBounds] = useState<[number, number, number, number] | null>(null);
@@ -231,6 +240,7 @@ export function MapPage() {
   const importInput = useRef<HTMLInputElement>(null);
   const xlsxImportInput = useRef<HTMLInputElement>(null);
   const iconFilter = useRef<HTMLDetailsElement>(null);
+  const assetDetails = useRef<HTMLDetailsElement>(null);
   const modeRef = useRef<SelectMode>("idle");
   const pointsRef = useRef<Coordinate[]>([]);
   const [selectedId, setSelectedId] = useState<string>("");
@@ -330,13 +340,17 @@ export function MapPage() {
   });
   const updateAsset = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => api(`/assets/${id}`, { method: "PATCH", data }),
-    onSuccess: invalidateNetwork,
+    onSuccess: (_, { id }) => {
+      if (selectedSegment?.id === id && assetDetails.current) assetDetails.current.open = false;
+      return invalidateNetwork();
+    },
   });
   useEffect(() => {
     updateCore.reset();
     updateAsset.reset();
   }, [selectedSegment?.id, updateCore.reset, updateAsset.reset]);
-  const filteredSegments = networkSegments.filter((item) => item.source !== "kml" && item.assetType === "segment" && `${item.name} ${item.area}`.toLowerCase().includes(search.toLowerCase()));
+  const normalizedSearch = search.trim().toLocaleLowerCase("id-ID");
+  const filteredSegments = networkSegments.filter((item) => item.source !== "kml" && item.assetType === "segment" && matchesAssetSearch(item, normalizedSearch));
   const ftthDraftGroups = new Map<string, typeof filteredSegments>();
   const standaloneSegments = filteredSegments.filter((segment) => {
     const groupId = ftthDesignGroupId(segment);
@@ -347,7 +361,7 @@ export function MapPage() {
     return false;
   });
   const getDraftFeatureCount = (groupId: string) => networkSegments.filter((asset) => ftthDesignGroupId(asset) === groupId).length;
-  const matchedImported = imported.filter((item) => (item.source === "kml" || item.assetType !== "segment") && item.name.toLowerCase().includes(search.toLowerCase()));
+  const matchedImported = imported.filter((item) => (item.source === "kml" || item.assetType !== "segment") && matchesAssetSearch(item, normalizedSearch));
   const filteredImported = matchedImported.slice(0, 100);
 
   useEffect(() => {
@@ -785,13 +799,13 @@ export function MapPage() {
           <div className="map-tools">
             <div className="map-search">
               <label className="form-label fw-semibold">
-                Daftar segmen <span className="text-muted fw-normal">({standaloneSegments.length + ftthDraftGroups.size + filteredImported.length})</span>
+                Daftar aset jaringan <span className="text-muted fw-normal">({standaloneSegments.length + ftthDraftGroups.size + filteredImported.length})</span>
               </label>
               <div className="input-group">
                 <span className="input-group-text bg-white">
                   <i className="bi bi-search" />
                 </span>
-                <input className="form-control" placeholder="Cari nama kabel atau area" value={search} onChange={(event) => setSearch(event.target.value)} />
+                <input className="form-control" placeholder="Cari kabel, area, tiang, ODC/ODP, atau lokasi" value={search} onChange={(event) => setSearch(event.target.value)} />
               </div>
             </div>
             <div className="map-tool-actions">
@@ -904,7 +918,7 @@ export function MapPage() {
               </button>
             ))}
             {matchedImported.length > filteredImported.length && <div className="map-empty-list">Menampilkan 100 dari {matchedImported.length} aset impor. Gunakan pencarian untuk mempersempit daftar.</div>}
-            {filteredSegments.length + matchedImported.length === 0 && <div className="map-empty-list">Tidak ada segmen yang cocok.</div>}
+            {filteredSegments.length + matchedImported.length === 0 && <div className="map-empty-list">Tidak ada aset jaringan yang cocok.</div>}
           </div>
           <div className="segment-detail">
             <div className="detail-label">{selectedSegment ? "DETAIL SEGMEN" : "DETAIL DATA IMPOR"}</div>
@@ -932,7 +946,7 @@ export function MapPage() {
                 </div>
                 <div className="core-breakdown">
                   {[
-                    ["Used", selectedSegment.usedCores, "used"],
+                    ["Terpakai (Used)", selectedSegment.usedCores, "used"],
                     ["Booked", selectedSegment.bookedCores, "booked"],
                     ["Idle / tersedia", selectedSegment.idleCores, "available"],
                     ["Waiting list", bookings.filter((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List").length, "booked"],
@@ -964,11 +978,11 @@ export function MapPage() {
                               disabled={updateCore.isPending}
                               onChange={(event) => updateCore.mutate({ coreNumber: core.coreNumber, status: event.target.value as "Available" | "Used" })}
                             >
-                              <option value="Available">Available</option>
-                              <option value="Used">Used</option>
+                              <option value="Available">Tersedia</option>
+                              <option value="Used">Terpakai</option>
                             </select>
                           ) : (
-                            <span className={`status-pill ${core.status === "Used" ? "is-released" : "is-waiting"}`}>{core.status}</span>
+                            <span className={`status-pill ${core.status === "Used" ? "is-released" : "is-waiting"}`}>{core.status === "Used" ? "Terpakai" : "Tersedia"}</span>
                           )}
                         </div>
                       ))}
@@ -978,7 +992,7 @@ export function MapPage() {
                 </details>
                 <details className="core-list-details"><summary>Waiting list · {bookings.filter((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List").length}</summary>
                   {bookingsPending ? <small role="status">Memuat antrean...</small> : bookingsError ? <small className="text-danger">Antrean tidak dapat dimuat.</small> : <div className="segment-waiting-list">
-                    {bookings.filter((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List").sort((a, b) => Date.parse(a.requestedAt) - Date.parse(b.requestedAt) || a.id.localeCompare(b.id)).map((booking, index) => <div className="segment-waiting-item" key={booking.id}><b>{index + 1}. {booking.customer} · {booking.cores} core</b><small>PIC customer: {booking.picCustomer}<br />PIC presales: {booking.picPresales}<br />{new Date(booking.requestedAt).toLocaleString('id-ID')}</small></div>)}
+                    {bookings.filter((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List").sort((a, b) => Date.parse(a.approvedAt ?? a.requestedAt) - Date.parse(b.approvedAt ?? b.requestedAt) || a.id.localeCompare(b.id)).map((booking, index) => <div className="segment-waiting-item" key={booking.id}><b>{index + 1}. {booking.customer} · {booking.cores} core</b><small>PIC customer: {booking.picCustomer}<br />PIC presales: {booking.picPresales}<br />Masuk antrean: {new Date(booking.approvedAt ?? booking.requestedAt).toLocaleString('id-ID')}</small></div>)}
                     {!bookings.some((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List") && <small className="text-secondary">Belum ada permintaan waiting list.</small>}
                     <small className="text-secondary d-block mt-2">FIFO ketat: permintaan berikutnya menunggu jika kapasitas belum cukup untuk antrean pertama.</small>
                   </div>}
@@ -994,12 +1008,13 @@ export function MapPage() {
                 </div>
                 <SegmentRelations key={selectedSegment.id} segmentId={selectedSegment.id} isAdmin={user?.role === "ADMIN"} />
                 {selectedSegment.source !== "managed" && <details className="admin-settings mt-3"><summary>Atribut sumber impor</summary><div className="import-detail-list mt-2">{Object.entries(selectedSegment.attributes ?? {}).filter(([key]) => key !== "__kmlStyle").map(([key, value]) => <div key={key}><span>{key}</span><b>{String(value)}</b></div>)}</div></details>}
-                {user?.role === "ADMIN" && <details className="admin-settings mt-4">
+                {user?.role === "ADMIN" && <details ref={assetDetails} className="admin-settings mt-4">
                   <summary><i className="bi bi-pencil-square me-2" />Ubah detail aset</summary>
                   <form key={selectedSegment.id} className="mt-3" onSubmit={saveAssetDetails}>
                     <label className="form-label">Area</label><input name="area" className="form-control form-control-sm mb-2" defaultValue={selectedSegment.area} />
                     <label className="form-label">Tipe kabel</label><input name="cableType" className="form-control form-control-sm mb-2" defaultValue={selectedSegment.cableType} />
-                    <label className="form-label">Jumlah core</label><input name="totalCores" type="number" min="0" max="4096" required className="form-control form-control-sm mb-2" defaultValue={selectedSegment.totalCores} />
+                    <label className="form-label">Jumlah core total</label><input name="totalCores" type="number" min="0" max="4096" required className="form-control form-control-sm" defaultValue={selectedSegment.totalCores} />
+                    <small className="form-text d-block mb-2">Core terpakai diatur per nomor di Rincian core; jumlahnya dihitung otomatis.</small>
                     <label className="form-label">Metode instalasi</label><select name="installation" className="form-select form-select-sm mb-2" defaultValue={selectedSegment.installation}><option value="Aerial">Aerial</option><option value="Burial">Burial</option></select>
                     <label className="form-label">Sisi jalan</label><select name="side" className="form-select form-select-sm mb-2" defaultValue={selectedSegment.side}><option value="Kiri">Kiri</option><option value="Kanan">Kanan</option></select>
                     <button className="btn btn-sm btn-outline-primary" disabled={updateAsset.isPending}>{updateAsset.isPending ? "Menyimpan..." : "Simpan detail"}</button>

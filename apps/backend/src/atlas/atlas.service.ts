@@ -384,7 +384,8 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
 
   async listBookings() {
     const { rows } = await this.db.query(`SELECT b.id,b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",
-      b.segment_id AS "segmentId",b.cores,b.status,b.requested_at AS "requestedAt",b.expires_at AS "expiresAt",a.name AS "segmentName",a.area
+      b.segment_id AS "segmentId",b.cores,b.status,b.requested_at AS "requestedAt",b.expires_at AS "expiresAt",
+      b.approved_at AS "approvedAt",b.rejected_at AS "rejectedAt",a.name AS "segmentName",a.area
       FROM bookings b JOIN network_assets a ON a.id=b.segment_id ORDER BY b.requested_at DESC,b.id DESC`)
     return rows
   }
@@ -423,12 +424,46 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       if (cores > assets[0].total_cores) throw new BadRequestException({ message: 'Jumlah booking melebihi kapasitas total segmen.' })
       const id = `BKG-${randomUUID().toUpperCase()}`
       await client.query(`INSERT INTO bookings(id,customer,pic_customer,pic_presales,segment_id,cores,status,requested_by,requested_at)
-        VALUES($1,$2,$3,$4,$5,$6,'Waiting List',$7,clock_timestamp())`, [id,customer,picCustomer,picPresales,segmentId,cores,userId])
-      await this.allocateWaiting(client,segmentId,userId)
-      const { rows } = await client.query('SELECT status FROM bookings WHERE id=$1', [id])
-      const status = rows[0].status
-      await this.audit(client,userId,'BOOKING_CREATED','BOOKING',id,{ segmentId,cores,status })
-      return { id, customer, picCustomer, picPresales, segmentId, cores, status }
+        VALUES($1,$2,$3,$4,$5,$6,'Pending Approval',$7,clock_timestamp())`, [id,customer,picCustomer,picPresales,segmentId,cores,userId])
+      await this.notifyAdmins(client,'Persetujuan booking core diperlukan',`${customer} meminta ${cores} core pada segmen ${segmentId}.`)
+      await this.audit(client,userId,'BOOKING_CREATED','BOOKING',id,{ segmentId,cores,status:'Pending Approval' })
+      return { id, customer, picCustomer, picPresales, segmentId, cores, status: 'Pending Approval' }
+    })
+  }
+
+  async approveBooking(id: string, userId: string) {
+    return this.db.transaction(async (client) => {
+      const { rows: targets } = await client.query('SELECT segment_id FROM bookings WHERE id=$1', [id])
+      if (!targets.length) throw new NotFoundException({ message: 'Booking tidak ditemukan.' })
+      await client.query('SELECT id FROM network_assets WHERE id=$1 FOR UPDATE', [targets[0].segment_id])
+      const { rows } = await client.query('SELECT * FROM bookings WHERE id=$1 FOR UPDATE', [id])
+      const booking = rows[0]
+      if (booking.status !== 'Pending Approval') throw new ConflictException({ message: 'Hanya booking yang menunggu persetujuan yang dapat disetujui.' })
+      await client.query("UPDATE bookings SET status='Waiting List',approved_by=$2,approved_at=clock_timestamp() WHERE id=$1", [id,userId])
+      const allocatedBookingIds = await this.allocateWaiting(client,booking.segment_id,userId)
+      const { rows: result } = await client.query('SELECT status FROM bookings WHERE id=$1', [id])
+      const status = result[0].status as string
+      await this.audit(client,userId,'BOOKING_APPROVED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores,status,allocatedBookingIds })
+      const message = status === 'Booked'
+        ? `Booking ${id} disetujui dan ${booking.cores} core telah dialokasikan.`
+        : `Booking ${id} disetujui dan masuk waiting list karena kapasitas belum mencukupi.`
+      await this.notifyPresales(client,'Booking core disetujui',message,booking.requested_by)
+      return { id,status,allocatedBookingIds }
+    })
+  }
+
+  async rejectBooking(id: string, userId: string) {
+    return this.db.transaction(async (client) => {
+      const { rows: targets } = await client.query('SELECT segment_id FROM bookings WHERE id=$1', [id])
+      if (!targets.length) throw new NotFoundException({ message: 'Booking tidak ditemukan.' })
+      await client.query('SELECT id FROM network_assets WHERE id=$1 FOR UPDATE', [targets[0].segment_id])
+      const { rows } = await client.query('SELECT * FROM bookings WHERE id=$1 FOR UPDATE', [id])
+      const booking = rows[0]
+      if (booking.status !== 'Pending Approval') throw new ConflictException({ message: 'Hanya booking yang menunggu persetujuan yang dapat ditolak.' })
+      await client.query("UPDATE bookings SET status='Rejected',rejected_by=$2,rejected_at=clock_timestamp() WHERE id=$1", [id,userId])
+      await this.audit(client,userId,'BOOKING_REJECTED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores })
+      await this.notifyPresales(client,'Booking core ditolak',`Permintaan booking ${id} untuk ${booking.customer} ditolak oleh ADMIN.`,booking.requested_by)
+      return { id,status:'Rejected' }
     })
   }
 
@@ -459,7 +494,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
 
   // All callers hold the segment lock; the first unfulfilled request blocks later requests.
   private async allocateWaiting(client: PoolClient, segmentId: string, actorId: string | null = null) {
-    const { rows: queue } = await client.query("SELECT * FROM bookings WHERE segment_id=$1 AND status='Waiting List' ORDER BY requested_at,id FOR UPDATE", [segmentId])
+    const { rows: queue } = await client.query("SELECT * FROM bookings WHERE segment_id=$1 AND status='Waiting List' ORDER BY COALESCE(approved_at,requested_at),requested_at,id FOR UPDATE", [segmentId])
     const { rows: settings } = await client.query("SELECT value FROM app_settings WHERE key='booking_duration_days'")
     const days = Number(settings[0]?.value ?? 30)
     const allocated: string[] = []
@@ -480,6 +515,11 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       SELECT id,$1,$2 FROM "user" WHERE role='PRESALES' OR id=$3`, [title,message,requestorId ?? ''])
   }
 
+  private async notifyAdmins(client: PoolClient, title: string, message: string) {
+    await client.query(`INSERT INTO notifications(user_id,title,message)
+      SELECT id,$1,$2 FROM "user" WHERE role='ADMIN'`, [title,message])
+  }
+
   async expireBookings() {
     const { rows } = await this.db.query("SELECT id,segment_id FROM bookings WHERE status='Booked' AND expires_at <= now() ORDER BY expires_at LIMIT 50")
     for (const { id, segment_id } of rows) await this.db.transaction(async (client) => {
@@ -490,6 +530,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       await client.query("UPDATE network_cores SET status='Available' WHERE id IN (SELECT core_id FROM booking_cores WHERE booking_id=$1)", [id])
       await client.query('DELETE FROM booking_cores WHERE booking_id=$1', [id])
       await client.query("UPDATE bookings SET status='Expired',released_at=now() WHERE id=$1", [id])
+      await this.notifyPresales(client,'Booking core kedaluwarsa',`${booking.customer}: masa booking ${booking.id} berakhir dan ${booking.cores} core dilepas.`,booking.requested_by)
       const allocatedBookingIds = await this.allocateWaiting(client,booking.segment_id)
       await this.audit(client,null,'BOOKING_EXPIRED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores,allocatedBookingIds })
     })
