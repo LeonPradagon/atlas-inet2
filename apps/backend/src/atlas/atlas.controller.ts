@@ -5,8 +5,68 @@ import { AuthService } from '../auth/auth.service'
 import { AtlasService } from './atlas.service'
 import { NetworkImportService } from '../network/network-import.service'
 import { RoutingService } from '../geospatial/routing.service'
-import { GeocodingService, type StructuredAddress } from '../geospatial/geocoding.service'
+import { GeocodingService, type PhotonSearchOptions, type StructuredAddress } from '../geospatial/geocoding.service'
 import { BulkAnalysisService } from './bulk-analysis.service'
+
+function queryValues(query: Record<string, unknown>, key: string) {
+  const value = query[key]
+  return (Array.isArray(value) ? value : [value])
+    .flatMap((item) => typeof item === 'string' ? [item] : [])
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function photonSearchOptions(query: Record<string, unknown>): PhotonSearchOptions {
+  const first = (key: string) => queryValues(query, key)[0]
+  const number = (key: string, min: number, max: number) => {
+    const value = first(key)
+    if (value === undefined) return undefined
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed) || parsed < min || parsed > max) throw new BadRequestException({ message: `Parameter ${key} tidak valid.` })
+    return parsed
+  }
+  const latitude = number('lat', -90, 90)
+  const longitude = number('lon', -180, 180)
+  if ((latitude === undefined) !== (longitude === undefined)) throw new BadRequestException({ message: 'Parameter lat dan lon harus dikirim bersama.' })
+  const lang = first('lang') ?? 'id'
+  if (!/^[a-z]{2}(?:-[A-Z]{2})?$/.test(lang)) throw new BadRequestException({ message: 'Parameter lang tidak valid.' })
+  const layers = queryValues(query, 'layer').flatMap((value) => value.split(',').map((layer) => layer.trim()).filter(Boolean))
+  const supportedLayers = new Set(['house', 'street', 'locality', 'district', 'city', 'county', 'state', 'country', 'other'])
+  if (layers.some((layer) => !supportedLayers.has(layer))) throw new BadRequestException({ message: 'Layer Photon tidak dikenal.' })
+  const categories = (key: string) => {
+    const values = queryValues(query, key)
+    if (values.length > 10 || values.some((value) => value.length > 100 || value.split(',').some((category) => !/^[\w-]+(?:\.[\w-]+){1,3}$/.test(category)))) {
+      throw new BadRequestException({ message: `Filter ${key} tidak valid.` })
+    }
+    return values
+  }
+  const osmTags = queryValues(query, 'osm_tag')
+  if (osmTags.length > 10 || osmTags.some((value) => value.length > 100 || !/^(?:!?[\w.-]+(?::!?[\w.-]+)?|:!?[\w.-]+)$/.test(value))) throw new BadRequestException({ message: 'Filter osm_tag tidak valid.' })
+  const bboxValues = first('bbox')?.split(',').map(Number)
+  let bbox: PhotonSearchOptions['bbox']
+  if (bboxValues) {
+    if (bboxValues.length !== 4 || bboxValues.some((value) => !Number.isFinite(value)) || bboxValues[0] < -180 || bboxValues[2] > 180 || bboxValues[1] < -90 || bboxValues[3] > 90 || bboxValues[0] >= bboxValues[2] || bboxValues[1] >= bboxValues[3]) {
+      throw new BadRequestException({ message: 'Parameter bbox tidak valid.' })
+    }
+    bbox = bboxValues as [number, number, number, number]
+  }
+  const dedupeText = first('dedupe')
+  if (dedupeText !== undefined && !['0', '1', 'true', 'false'].includes(dedupeText.toLowerCase())) throw new BadRequestException({ message: 'Parameter dedupe tidak valid.' })
+  return {
+    lang,
+    latitude,
+    longitude,
+    zoom: number('zoom', 0, 22),
+    locationBiasScale: number('location_bias_scale', 0, 1),
+    bbox,
+    layers,
+    include: categories('include'),
+    exclude: categories('exclude'),
+    osmTags,
+    dedupe: dedupeText === undefined ? undefined : ['1', 'true'].includes(dedupeText.toLowerCase()),
+    limit: number('limit', 1, 5),
+  }
+}
 
 @Controller()
 export class AtlasController {
@@ -175,10 +235,12 @@ export class AtlasController {
   }
 
   @Get('analysis/address/suggestions')
-  async addressSuggestions(@Req() req: IncomingMessage, @Query('q') query?: string, @Query('subdistrict') subdistrict?: string, @Query('district') district?: string, @Query('city') city?: string, @Query('province') province?: string, @Query('postalCode') postalCode?: string) {
+  async addressSuggestions(@Req() req: IncomingMessage, @Query() query: Record<string, unknown>) {
     await this.auth.requireUser(req)
-    if (!query?.trim() || query.trim().length < 3) return []
-    return this.geocoding.suggestAddress(query.trim(), { subdistrict, district, city, province, postalCode })
+    const search = typeof query.q === 'string' ? query.q.trim() : ''
+    if (!search || search.length < 3) return []
+    const first = (key: string) => queryValues(query, key)[0]
+    return this.geocoding.suggestAddress(search, { subdistrict: first('subdistrict'), district: first('district'), city: first('city'), province: first('province'), postalCode: first('postalCode') }, photonSearchOptions(query))
   }
 
   @Get('analysis/address/reverse')

@@ -44,9 +44,16 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
   const notificationMenu = useRef<HTMLDetailsElement>(null);
   const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const previousPathname = useRef(pathname);
   const analysisPath = pathname.startsWith("/analisis") || pathname === "/riwayat-analisis";
   useEffect(() => {
     mobileAnalysisMenu.current?.removeAttribute("open");
+  }, [pathname]);
+  useEffect(() => {
+    if (previousPathname.current === "/analisis-massal" && pathname !== "/analisis-massal") {
+      localStorage.removeItem("atlas-bulk-job");
+    }
+    previousPathname.current = pathname;
   }, [pathname]);
   useEffect(() => {
     const closeOnOutsideClick = (event: PointerEvent) => {

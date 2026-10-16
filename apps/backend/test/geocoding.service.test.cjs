@@ -93,3 +93,28 @@ test('does not accept a same-named street from another city', async (t) => {
     (error) => error.getResponse?.().code === 'GEOCODING_NO_MATCH',
   )
 })
+
+test('maps Indonesian autocomplete language to Photon default', async (t) => {
+  const previous = { fetch: global.fetch, geocoder: process.env.GEOCODER_URL }
+  process.env.GEOCODER_URL = 'http://photon.test/'
+  const requests = []
+  global.fetch = async (input) => {
+    const url = new URL(typeof input === 'string' ? input : input.toString())
+    requests.push(url)
+    return response({ features: [{
+      properties: { name: 'Jalan Raya Darmo', street: 'Jalan Raya Darmo', city: 'Surabaya', country: 'Indonesia', countrycode: 'ID', osm_type: 'W', osm_id: 1 },
+      geometry: { coordinates: [112.7391342, -7.2975725] },
+    }] })
+  }
+  t.after(() => {
+    global.fetch = previous.fetch
+    if (previous.geocoder === undefined) delete process.env.GEOCODER_URL
+    else process.env.GEOCODER_URL = previous.geocoder
+  })
+
+  const suggestions = await new GeocodingService().suggestAddress('Jalan Raya Darmo', {}, { lang: 'id', latitude: -7.3, longitude: 112.7, zoom: 12.5 })
+
+  assert.equal(suggestions.length, 1)
+  assert.equal(requests[0].searchParams.get('lang'), 'default')
+  assert.equal(requests[0].searchParams.get('zoom'), '13')
+})

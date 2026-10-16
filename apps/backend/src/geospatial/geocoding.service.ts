@@ -12,12 +12,26 @@ export type StructuredAddress = {
   province?: string
   postalCode?: string
 }
+export type PhotonSearchOptions = {
+  lang?: string
+  latitude?: number
+  longitude?: number
+  zoom?: number
+  locationBiasScale?: number
+  bbox?: [number, number, number, number]
+  layers?: string[]
+  include?: string[]
+  exclude?: string[]
+  osmTags?: string[]
+  dedupe?: boolean
+  limit?: number
+}
 
 type PhotonFeature = {
-  properties?: { name?: string; street?: string; housenumber?: string; locality?: string; district?: string; city?: string; county?: string; state?: string; postcode?: string; countrycode?: string; type?: string; osm_type?: string; osm_id?: number }
+  properties?: { name?: string; street?: string; housenumber?: string; locality?: string; district?: string; city?: string; county?: string; state?: string; country?: string; postcode?: string; countrycode?: string; type?: string; osm_key?: string; osm_value?: string; osm_type?: string; osm_id?: number }
   geometry?: { coordinates?: unknown }
 }
-export type AddressSuggestion = { id: string; label: string; longitude: number; latitude: number; street?: string; number?: string; subdistrict?: string; district?: string; city?: string; province?: string; postalCode?: string; matchQuality: 'approximate' }
+export type AddressSuggestion = { id: string; label: string; category?: string; location?: string; longitude: number; latitude: number; street?: string; number?: string; subdistrict?: string; district?: string; city?: string; province?: string; postalCode?: string; matchQuality: 'approximate' }
 type NominatimAddress = Record<string, string | undefined> & {
   suburb?: string
   village?: string
@@ -36,6 +50,7 @@ type NominatimAddress = Record<string, string | undefined> & {
 type NominatimFeature = { lat: string; lon: string; name?: string; display_name?: string; address?: NominatimAddress; country_code?: string }
 type BigBoundaryResponse = { features?: Array<{ attributes?: Record<string, string | number | null> }> }
 const BIG_BOUNDARY_QUERY_URL = 'https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_DESAKEL_AR/MapServer/0/query'
+const PUBLIC_PHOTON_URL = 'https://photon.komoot.io/'
 
 function tokens(value: string) {
   return canonicalStreet(value).toLocaleLowerCase('id')
@@ -109,11 +124,28 @@ export class GeocodingService {
     }
   }
 
-  private async search(path: 'api' | 'structured' | 'reverse', params: URLSearchParams): Promise<PhotonFeature[]> {
-    const baseUrl = process.env.GEOCODER_URL
+  private photonParams(params: URLSearchParams, options: PhotonSearchOptions = {}) {
+    params.set('lang', !options.lang || /^id(?:-|$)/i.test(options.lang) ? 'default' : options.lang)
+    if (options.limit) params.set('limit', String(options.limit))
+    if (options.latitude !== undefined && options.longitude !== undefined) {
+      params.set('lat', String(options.latitude))
+      params.set('lon', String(options.longitude))
+      if (options.zoom !== undefined) params.set('zoom', String(Math.round(options.zoom)))
+      if (options.locationBiasScale !== undefined) params.set('location_bias_scale', String(options.locationBiasScale))
+    }
+    if (options.bbox) params.set('bbox', options.bbox.join(','))
+    for (const layer of options.layers ?? []) params.append('layer', layer)
+    for (const category of options.include ?? []) params.append('include', category)
+    for (const category of options.exclude ?? []) params.append('exclude', category)
+    for (const tag of options.osmTags ?? []) params.append('osm_tag', tag)
+    if (options.dedupe === false) params.set('dedupe', '0')
+    return params
+  }
+
+  private async search(path: 'api' | 'structured' | 'reverse', params: URLSearchParams, baseUrl = process.env.GEOCODER_URL, options: PhotonSearchOptions = {}): Promise<PhotonFeature[]> {
     if (!baseUrl) throw new ServiceUnavailableException({ code: 'GEOCODING_UNAVAILABLE', message: 'Provider geocoding belum dikonfigurasi. Data alamat belum dianalisis.' })
     const url = new URL(path, `${baseUrl.replace(/\/$/, '')}/`)
-    url.search = params.toString()
+    url.search = this.photonParams(params, options).toString()
     let response: Response
     try { response = await fetch(url, { headers: { 'User-Agent': 'ATLAS-INET/1.0' }, signal: AbortSignal.timeout(15_000) }) }
     catch { throw new ServiceUnavailableException({ code: 'GEOCODING_UNAVAILABLE', message: 'Layanan geocoding tidak dapat dihubungi.' }) }
@@ -127,7 +159,7 @@ export class GeocodingService {
     return this.coordinates(features[0])
   }
 
-  async suggestAddress(query: string, context: StructuredAddress = {}): Promise<AddressSuggestion[]> {
+  async suggestAddress(query: string, context: StructuredAddress = {}, options: PhotonSearchOptions = {}): Promise<AddressSuggestion[]> {
     const rawQuery = query.slice(0, 200).trim().toLocaleLowerCase('id')
     const normalizedQuery = canonicalStreet(rawQuery).replace(/\bkec\.?\b/gi, 'Kecamatan').replace(/\bno\.?\s*(?=\d)/gi, 'Nomor ')
     const queryVariants = [...new Set([normalizedQuery, rawQuery])]
@@ -147,37 +179,60 @@ export class GeocodingService {
       .filter((token) => !['kyai', 'haji', 'jalan', 'gang', 'kampung', 'raya', 'arteri', 'utama'].includes(token))
     const matchesRequestedStreet = (feature: PhotonFeature) => {
       const properties = feature.properties ?? {}
-      const regionTokens = new Set(tokens([properties.city, properties.county, properties.state, properties.postcode].filter(Boolean).join(' ')))
+      if (properties.countrycode && properties.countrycode.toLowerCase() !== 'id') return false
+      const regionTokens = new Set(tokens([properties.city, properties.county, properties.state, properties.postcode, properties.country].filter(Boolean).join(' ')))
       const requestedStreet = streetNeedles.filter((token) => !regionTokens.has(token))
       if (!requestedStreet.length) return false
-      const actualStreet = tokens(properties.street ?? properties.name ?? '').filter((token) => !regionTokens.has(token))
+      const actualStreet = tokens([properties.street, properties.name].filter(Boolean).join(' ')).filter((token) => !regionTokens.has(token))
       return requestedStreet.every((token) => matchesStreetToken(token, actualStreet))
     }
-    let features: PhotonFeature[] = []
-    const searched = new Set<string>()
-    for (const parts of searches) {
-      const searchText = parts.filter(Boolean).join(', ')
-      if (searched.has(searchText)) continue
-      searched.add(searchText)
-      const results = await this.search('api', new URLSearchParams({ q: searchText, countrycode: 'id', limit: '5' }))
-      if (!results.length) continue
-      if (!features.length) features = results
-      if (results.some(matchesRequestedStreet)) { features = results; break }
+    const collectSuggestions = async (baseUrl?: string) => {
+      let features: PhotonFeature[] = []
+      const searched = new Set<string>()
+      for (const parts of searches) {
+        const searchText = parts.filter(Boolean).join(', ')
+        if (searched.has(searchText)) continue
+        searched.add(searchText)
+        const results = await this.search('api', new URLSearchParams({ q: searchText, countrycode: 'id', limit: '5' }), baseUrl, options)
+        if (!results.length) continue
+        if (!features.length) features = results
+        if (results.some(matchesRequestedStreet)) { features = results; break }
+      }
+      const exactMatch = features.some(matchesRequestedStreet)
+      const unique = new Set<string>()
+      const suggestions = features.flatMap((feature) => {
+        try {
+          const properties = feature.properties ?? {}
+          if (properties.countrycode && properties.countrycode.toLowerCase() !== 'id') return []
+          const [longitude, latitude] = this.coordinates(feature)
+          const id = `${properties.osm_type ?? 'feature'}:${properties.osm_id ?? `${longitude},${latitude}`}`
+          if (unique.has(id)) return []
+          unique.add(id)
+          const street = properties.street ?? (properties.type === 'street' ? properties.name : undefined)
+          const title = properties.name ?? properties.street ?? 'Lokasi tanpa nama'
+          const location = [...new Set([properties.housenumber && `No. ${properties.housenumber}`, properties.locality, properties.district, properties.city ?? properties.county, properties.state, properties.country])].filter(Boolean).join(', ')
+          const category = properties.osm_key && properties.osm_value ? `${properties.osm_key}:${properties.osm_value}` : properties.osm_value ?? properties.type
+          return [{ id, label: title, category, location, longitude, latitude, street, number: properties.housenumber, subdistrict: properties.locality, district: properties.district, city: properties.city ?? properties.county, province: properties.state, postalCode: properties.postcode, matchQuality: 'approximate' as const }]
+        } catch { return [] }
+      })
+      return { suggestions, exactMatch }
     }
-    const unique = new Set<string>()
-    return features.flatMap((feature) => {
-      try {
-        const properties = feature.properties ?? {}
-        if (!matchesRequestedStreet(feature)) return []
-        const [longitude, latitude] = this.coordinates(feature)
-        const id = `${properties.osm_type ?? 'feature'}:${properties.osm_id ?? `${longitude},${latitude}`}`
-        if (unique.has(id)) return []
-        unique.add(id)
-        const street = properties.street ?? properties.name
-        const fields = [properties.name, properties.street, properties.housenumber && `No. ${properties.housenumber}`, properties.locality, properties.district, properties.city, properties.postcode]
-        return [{ id, label: [...new Set(fields.filter(Boolean))].join(', '), longitude, latitude, street, number: properties.housenumber, subdistrict: properties.locality, district: properties.district, city: properties.city ?? properties.county, province: properties.state, postalCode: properties.postcode, matchQuality: 'approximate' as const }]
-      } catch { return [] }
-    })
+    let localSuggestions: AddressSuggestion[] = []
+    try {
+      const local = await collectSuggestions()
+      localSuggestions = local.suggestions
+      if (local.exactMatch && localSuggestions.length) return localSuggestions
+    } catch {
+      // Keep address search usable if the self-hosted Photon instance has no data or is unavailable.
+      return (await collectSuggestions(PUBLIC_PHOTON_URL)).suggestions
+    }
+    try {
+      const publicSuggestions = await collectSuggestions(PUBLIC_PHOTON_URL)
+      return publicSuggestions.suggestions.length ? publicSuggestions.suggestions : localSuggestions
+    } catch (error) {
+      if (localSuggestions.length) return localSuggestions
+      throw error
+    }
   }
 
   async reverseAddress(longitude: number, latitude: number): Promise<StructuredAddress | null> {
@@ -227,6 +282,19 @@ export class GeocodingService {
       return { ...photon, ...refined }
     } catch {
       return photon
+    }
+  }
+
+  async photonStatus(): Promise<{ status: 'ok' | 'unavailable'; details?: unknown }> {
+    const baseUrl = process.env.GEOCODER_URL
+    if (!baseUrl) return { status: 'unavailable' }
+    try {
+      const url = new URL('status', `${baseUrl.replace(/\/$/, '')}/`)
+      const response = await fetch(url, { headers: { 'User-Agent': 'ATLAS-INET/1.0' }, signal: AbortSignal.timeout(5_000) })
+      if (!response.ok) return { status: 'unavailable' }
+      return { status: 'ok', details: await response.json() }
+    } catch {
+      return { status: 'unavailable' }
     }
   }
 

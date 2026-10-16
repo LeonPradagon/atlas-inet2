@@ -27,6 +27,8 @@ type AddressFields = { street: string; number: string; postalCode: string; provi
 type AddressSuggestion = {
   id: string;
   label: string;
+  category?: string;
+  location?: string;
   longitude: number;
   latitude: number;
   street?: string;
@@ -72,13 +74,16 @@ function regionParams(fields: Partial<AddressSuggestion>) {
   return params;
 }
 type SelectedPoint = { longitude: number; latitude: number; label: string; provider: "photon" | "manual"; matchQuality?: "approximate"; matchedStreet?: string; confirmed: boolean };
+type SearchViewport = { longitude: number; latitude: number; zoom: number };
 
-function AddressPinPicker({ point, regionView, onChange }: { point: SelectedPoint | null; regionView: { longitude: number; latitude: number; zoom: number } | null; onChange: (longitude: number, latitude: number) => void }) {
+function AddressPinPicker({ point, regionView, onChange, onViewportChange }: { point: SelectedPoint | null; regionView: SearchViewport | null; onChange: (longitude: number, latitude: number) => void; onViewportChange: (viewport: SearchViewport) => void }) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markerRef = useRef<Marker | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const onViewportChangeRef = useRef(onViewportChange);
+  onViewportChangeRef.current = onViewportChange;
   const pointRef = useRef(point);
   pointRef.current = point;
 
@@ -99,8 +104,14 @@ function AddressPinPicker({ point, regionView, onChange }: { point: SelectedPoin
     });
     markerRef.current = marker;
     mapRef.current = map;
+    const reportViewport = () => {
+      const center = map.getCenter();
+      onViewportChangeRef.current({ longitude: center.lng, latitude: center.lat, zoom: map.getZoom() });
+    };
+    map.on("moveend", reportViewport);
     map.on("load", () => {
       if (pointRef.current) marker.setLngLat([pointRef.current.longitude, pointRef.current.latitude]).addTo(map);
+      reportViewport();
     });
     map.on("click", (event) => {
       marker.setLngLat(event.lngLat).addTo(map);
@@ -388,6 +399,7 @@ function AddressResultMap({ latitude, longitude, anchorKind, design }: { latitud
 export function AddressAnalysisPage() {
   const [address, setAddress] = useState<AddressFields>({ street: "", number: "", postalCode: "", provinceCode: "", cityCode: "", districtCode: "", subdistrictCode: "" });
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint | null>(null);
+  const [searchViewport, setSearchViewport] = useState<SearchViewport | null>(null);
   const [showPinPicker, setShowPinPicker] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [coordinateCopyStatus, setCoordinateCopyStatus] = useState<"idle" | "copied" | "error">("idle");
@@ -466,21 +478,6 @@ export function AddressAnalysisPage() {
   ]
     .filter(Boolean)
     .join(", ");
-  const suggestionsQuery = useQuery({
-    queryKey: ["address-suggestions", debouncedQuery, address.subdistrictCode, address.districtCode, address.cityCode, address.provinceCode, address.postalCode],
-    enabled: debouncedQuery.length >= 3 && debouncedQuery === addressQuery,
-    staleTime: 60_000,
-    retry: false,
-    queryFn: ({ signal }) => {
-      const params = new URLSearchParams({ q: debouncedQuery });
-      if (subdistrict?.name) params.set("subdistrict", subdistrict.name);
-      if (district?.name) params.set("district", district.name);
-      if (city?.name) params.set("city", city.name);
-      if (province?.name) params.set("province", province.name);
-      if (address.postalCode) params.set("postalCode", address.postalCode);
-      return api<AddressSuggestion[]>(`/analysis/address/suggestions?${params}`, { signal });
-    },
-  });
   const selectedRegionName = subdistrict?.name ?? district?.name ?? city?.name ?? province?.name;
   const regionMapQuery = useQuery({
     queryKey: ["address-region-map", address.subdistrictCode, address.districtCode, address.cityCode, address.provinceCode],
@@ -498,6 +495,25 @@ export function AddressAnalysisPage() {
       if (!candidate) return null;
       const zoom = subdistrict ? 13 : district ? 12 : city ? 10 : 7;
       return { longitude: candidate.longitude, latitude: candidate.latitude, zoom };
+    },
+  });
+  const suggestionsQuery = useQuery({
+    queryKey: ["address-suggestions", debouncedQuery, address.subdistrictCode, address.districtCode, address.cityCode, address.provinceCode, address.postalCode, searchViewport?.longitude, searchViewport?.latitude, searchViewport?.zoom],
+    enabled: debouncedQuery.length >= 3 && debouncedQuery === addressQuery && !selectedPoint,
+    staleTime: 60_000,
+    retry: false,
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({ q: debouncedQuery, lang: "id" });
+      if (subdistrict?.name) params.set("subdistrict", subdistrict.name);
+      if (district?.name) params.set("district", district.name);
+      if (city?.name) params.set("city", city.name);
+      if (province?.name) params.set("province", province.name);
+      if (address.postalCode) params.set("postalCode", address.postalCode);
+      const bias = searchViewport ?? regionMapQuery.data ?? { longitude: 118, latitude: -2, zoom: 4.5 };
+      params.set("lon", String(bias.longitude));
+      params.set("lat", String(bias.latitude));
+      params.set("zoom", String(bias.zoom));
+      return api<AddressSuggestion[]>(`/analysis/address/suggestions?${params}`, { signal });
     },
   });
   const analyze = useMutation({
@@ -623,7 +639,7 @@ export function AddressAnalysisPage() {
   };
   const selectSuggestion = async (suggestion: AddressSuggestion) => {
     const lookupId = ++regionLookupId.current;
-    const selectedLabel = [suggestion.street || suggestion.label, suggestion.number && `No. ${suggestion.number}`].filter(Boolean).join(", ");
+    const selectedLabel = suggestion.label;
     setSelectedPoint({ longitude: suggestion.longitude, latitude: suggestion.latitude, label: selectedLabel, provider: "photon", matchQuality: "approximate", matchedStreet: suggestion.street, confirmed: false });
     analyze.reset();
     let resolved: ResolvedRegion | null = null;
@@ -635,7 +651,7 @@ export function AddressAnalysisPage() {
     if (lookupId !== regionLookupId.current) return;
     setAddress((current) => ({
       ...current,
-      street: suggestion.street || current.street,
+      street: suggestion.street || suggestion.label,
       number: suggestion.number || current.number,
       postalCode: resolved?.postalCode ?? suggestion.postalCode ?? current.postalCode,
       ...(resolved ? { provinceCode: resolved.provinceCode, cityCode: resolved.cityCode, districtCode: resolved.districtCode ?? "", subdistrictCode: resolved.subdistrictCode ?? "" } : {}),
@@ -797,7 +813,7 @@ export function AddressAnalysisPage() {
                             {suggestionsQuery.data.map((suggestion) => (
                               <button type="button" role="option" aria-selected={false} className="list-group-item list-group-item-action text-start" key={suggestion.id} onClick={() => void selectSuggestion(suggestion)}>
                                 <b className="d-block">{suggestion.label}</b>
-                                <small className="text-secondary">Kandidat Photon · periksa pin pada peta</small>
+                                <small className="text-secondary">{[suggestion.category, suggestion.location].filter(Boolean).join(", ") || "Kandidat Photon"} · periksa pin pada peta</small>
                               </button>
                             ))}
                             <button type="button" className="list-group-item list-group-item-action text-start text-primary" onClick={() => setShowPinPicker(true)}>
@@ -955,6 +971,7 @@ export function AddressAnalysisPage() {
                     <AddressPinPicker
                       point={selectedPoint}
                       regionView={regionMapQuery.data ?? null}
+                      onViewportChange={setSearchViewport}
                       onChange={(longitude, latitude) => {
                         void resolvePointRegions(longitude, latitude);
                         setSelectedPoint((current) => ({

@@ -144,7 +144,7 @@ function downloadWorkbook(workbook: ExcelJS.Workbook, name: string) {
 
 export function BulkAnalysisPage() {
   const input = useRef<HTMLInputElement>(null)
-  const [jobId, setJobId] = useState(() => new URLSearchParams(window.location.search).get('jobId') ?? localStorage.getItem('atlas-bulk-job') ?? '')
+  const [jobId, setJobId] = useState(() => new URLSearchParams(window.location.search).get('jobId') ?? '')
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
@@ -182,7 +182,6 @@ export function BulkAnalysisPage() {
   const draftCandidates = rows.filter((row) => row.status === 'OK' && Number.isFinite(row.latitude) && Number.isFinite(row.longitude) && !savedDraftRowSet.has(row.row) && !draftOverlays.some((overlay) => overlay.row === row.row))
   const unsavedDrafts = draftOverlays.filter((overlay) => !savedDraftRowSet.has(overlay.row))
   const onSelectMapRow = useCallback((row: number) => { setSelectedRowNumber(row); setPage(Math.floor((row - 1) / 50) + 1); setSearch(''); setStatusFilter('') }, [])
-  useEffect(() => { if (jobId) localStorage.setItem('atlas-bulk-job',jobId) }, [jobId])
   const clearCurrentJob = () => {
     if (draftBatchProgress || saveBatchProgress) return
     const url = new URL(window.location.href); url.searchParams.delete('jobId'); window.history.replaceState(window.history.state, '', url)
