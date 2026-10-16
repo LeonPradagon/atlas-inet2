@@ -4,8 +4,11 @@ export type StructuredAddress = {
   street?: string
   number?: string
   subdistrict?: string
+  subdistrictCandidates?: string[]
   district?: string
+  districtCandidates?: string[]
   city?: string
+  cityCandidates?: string[]
   province?: string
   postalCode?: string
 }
@@ -15,12 +18,30 @@ type PhotonFeature = {
   geometry?: { coordinates?: unknown }
 }
 export type AddressSuggestion = { id: string; label: string; longitude: number; latitude: number; street?: string; number?: string; subdistrict?: string; district?: string; city?: string; province?: string; postalCode?: string; matchQuality: 'approximate' }
-type NominatimFeature = { lat: string; lon: string; name?: string; display_name?: string; address?: Record<string, string>; country_code?: string }
+type NominatimAddress = Record<string, string | undefined> & {
+  suburb?: string
+  village?: string
+  neighbourhood?: string
+  hamlet?: string
+  district?: string
+  city_district?: string
+  city?: string
+  town?: string
+  municipality?: string
+  county?: string
+  state?: string
+  postcode?: string
+  country_code?: string
+}
+type NominatimFeature = { lat: string; lon: string; name?: string; display_name?: string; address?: NominatimAddress; country_code?: string }
+type BigBoundaryResponse = { features?: Array<{ attributes?: Record<string, string | number | null> }> }
+const BIG_BOUNDARY_QUERY_URL = 'https://geoservices.big.go.id/rbi/rest/services/BATASWILAYAH/BATAS_DESAKEL_AR/MapServer/0/query'
 
 function tokens(value: string) {
   return canonicalStreet(value).toLocaleLowerCase('id')
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\brachmat\b/g, 'rahmat')
     .replace(/\b(?:k\s+h|kh)\b/g, 'kyai haji')
     .replace(/\bpal merah\b/g, 'palmerah')
     .split(/\s+/).filter((token) => token && token !== 'jalan' && token !== 'no')
@@ -28,12 +49,13 @@ function tokens(value: string) {
 
 function canonicalStreet(value: string) {
   return value
+    .replace(/\b(?:[A-Z]\.?\s*){2,}(?=[A-Z][a-z])/g, (initials) => `${initials.replace(/[.\s]/g, '')} `)
     .replace(/^\s*(?:jln|jl)\.?\s*/i, 'Jalan ')
     .replace(/\bk\s*\.?\s*h\.?\s*/gi, 'Kyai Haji ')
     .replace(/\bkh\.?\s*/gi, 'Kyai Haji ')
     .replace(/\bhj\.?\s*/gi, 'Hajjah ')
     .replace(/\bh\.?\s+(?=[\p{L}])/giu, 'Haji ')
-    .replace(/\br\s*\.?\s*a\.?\s*/gi, 'Raden Ajeng ')
+    .replace(/\br\.?\s*a\.?\s+(?=[\p{L}])/giu, 'Raden Ajeng ')
     .replace(/\br\.?\s+(?=[\p{L}])/giu, 'Raden ')
     .replace(/\bprof\.?\s*/gi, 'Profesor ')
     .replace(/\bdr\.?\s+(?=[\p{L}])/giu, 'Doktor ')
@@ -69,6 +91,23 @@ export class GeocodingService {
   private nominatimLastRequest = 0
   private nominatimQueue: Promise<void> = Promise.resolve()
   private readonly nominatimCache = new Map<string, [number, number]>()
+  private readonly nominatimReverseCache = new Map<string, StructuredAddress>()
+  private readonly boundaryCache = new Map<string, StructuredAddress>()
+
+  private async fetchNominatim(url: URL) {
+    let release!: () => void
+    const previous = this.nominatimQueue
+    this.nominatimQueue = new Promise<void>((resolve) => { release = resolve })
+    await previous
+    try {
+      const delay = Math.max(0, 1000 - (Date.now() - this.nominatimLastRequest))
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
+      this.nominatimLastRequest = Date.now()
+      return await fetch(url, { headers: { 'User-Agent': 'ATLAS-INET/1.0 (address network analysis)' }, signal: AbortSignal.timeout(15_000) })
+    } finally {
+      release()
+    }
+  }
 
   private async search(path: 'api' | 'structured' | 'reverse', params: URLSearchParams): Promise<PhotonFeature[]> {
     const baseUrl = process.env.GEOCODER_URL
@@ -101,14 +140,18 @@ export class GeocodingService {
         [streetWithoutNumber],
       ]
     })
-    const streetNeedles = tokens(normalizedQuery.replace(/\s+(?:no(?:mor)?\.?\s*)?\d+[a-z]?$/i, ''))
+    const streetNeedles = tokens(normalizedQuery
+      .replace(/\b(?:no(?:mor)?\.?)\s*\d+[a-z]?\b/gi, ' ')
+      .replace(/\b\d{5}\b/g, ' ')
+      .replace(/\s+\d+[a-z]?$/i, ' '))
       .filter((token) => !['kyai', 'haji', 'jalan', 'gang', 'kampung', 'raya', 'arteri', 'utama'].includes(token))
     const matchesRequestedStreet = (feature: PhotonFeature) => {
       const properties = feature.properties ?? {}
-      const actualStreet = tokens(properties.street ?? '')
-      const actualName = tokens(properties.name ?? '')
-      const matches = (actual: string[]) => streetNeedles.every((token) => matchesStreetToken(token, actual))
-      return !streetNeedles.length || matches(actualStreet) || matches(actualName)
+      const regionTokens = new Set(tokens([properties.city, properties.county, properties.state, properties.postcode].filter(Boolean).join(' ')))
+      const requestedStreet = streetNeedles.filter((token) => !regionTokens.has(token))
+      if (!requestedStreet.length) return false
+      const actualStreet = tokens(properties.street ?? properties.name ?? '').filter((token) => !regionTokens.has(token))
+      return requestedStreet.every((token) => matchesStreetToken(token, actualStreet))
     }
     let features: PhotonFeature[] = []
     const searched = new Set<string>()
@@ -138,15 +181,92 @@ export class GeocodingService {
   }
 
   async reverseAddress(longitude: number, latitude: number): Promise<StructuredAddress | null> {
-    const features = await this.search('reverse', new URLSearchParams({ lon: String(longitude), lat: String(latitude), limit: '1' }))
+    let features: PhotonFeature[] = []
+    try {
+      features = await this.search('reverse', new URLSearchParams({ lon: String(longitude), lat: String(latitude), limit: '1' }))
+    } catch {
+      // The administrative boundary lookup can still resolve coordinates when Photon is unavailable.
+    }
     const properties = features[0]?.properties
-    if (!properties) return null
-    return {
+    const photon: StructuredAddress | null = properties ? {
       subdistrict: properties.locality,
       district: properties.district,
       city: properties.city ?? properties.county,
       province: properties.state,
       postalCode: properties.postcode,
+    } : null
+
+    const boundary = await this.reverseBigBoundary(longitude, latitude)
+    if (boundary) return { ...photon, ...boundary }
+    if (photon?.subdistrict && !/^(?:rt|rw)\s*\d/i.test(photon.subdistrict)) return photon
+
+    const key = `${longitude.toFixed(6)},${latitude.toFixed(6)}`
+    const cached = this.nominatimReverseCache.get(key)
+    if (cached) return { ...photon, ...cached }
+    try {
+      const serviceUrl = new URL(process.env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org/search')
+      serviceUrl.pathname = serviceUrl.pathname.replace(/\/search(?:\.php)?\/?$/, '/reverse')
+      serviceUrl.search = new URLSearchParams({ lat: String(latitude), lon: String(longitude), format: 'jsonv2', addressdetails: '1', zoom: '18', 'accept-language': 'id' }).toString()
+      const response = await this.fetchNominatim(serviceUrl)
+      if (!response.ok) return photon
+      const address = (await response.json() as NominatimFeature).address
+      if (!address || (address.country_code && address.country_code.toLowerCase() !== 'id')) return photon
+      const candidates = (...values: Array<string | undefined>) => [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))]
+      const refined: StructuredAddress = {
+        subdistrict: address.suburb ?? address.village ?? address.neighbourhood,
+        subdistrictCandidates: candidates(address.suburb, address.village, address.neighbourhood, address.hamlet, photon?.subdistrict),
+        district: address.district ?? address.city_district ?? photon?.district,
+        districtCandidates: candidates(address.district, address.city_district, address.county, photon?.district),
+        city: address.city ?? address.town ?? address.municipality ?? address.county ?? photon?.city,
+        cityCandidates: candidates(address.city, address.town, address.municipality, address.county, address.city_district, photon?.city, photon?.district),
+        province: address.state ?? photon?.province,
+        postalCode: address.postcode ?? photon?.postalCode,
+      }
+      this.nominatimReverseCache.set(key, refined)
+      if (this.nominatimReverseCache.size > 1000) this.nominatimReverseCache.delete(this.nominatimReverseCache.keys().next().value!)
+      return { ...photon, ...refined }
+    } catch {
+      return photon
+    }
+  }
+
+  private async reverseBigBoundary(longitude: number, latitude: number): Promise<StructuredAddress | null> {
+    const key = `${longitude.toFixed(6)},${latitude.toFixed(6)}`
+    const cached = this.boundaryCache.get(key)
+    if (cached) return cached
+    const url = new URL(BIG_BOUNDARY_QUERY_URL)
+    url.search = new URLSearchParams({
+      geometry: JSON.stringify({ x: longitude, y: latitude, spatialReference: { wkid: 4326 } }),
+      geometryType: 'esriGeometryPoint',
+      inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects',
+      outFields: 'wadmkd,wadmkc,wadmkk,wadmpr',
+      returnGeometry: 'false',
+      f: 'json',
+    }).toString()
+    try {
+      const response = await fetch(url, { headers: { 'User-Agent': 'ATLAS-INET/1.0 (administrative boundary lookup)' }, signal: AbortSignal.timeout(7_000) })
+      if (!response.ok) return null
+      const result = await response.json() as BigBoundaryResponse
+      const attributes = result.features?.[0]?.attributes
+      if (!attributes) return null
+      const value = (name: string) => {
+        const field = Object.keys(attributes).find((key) => key.toLowerCase() === name)
+        const fieldValue = field ? attributes[field] : undefined
+        return typeof fieldValue === 'string' ? fieldValue.trim() || undefined : undefined
+      }
+      const boundary: StructuredAddress = {
+        subdistrict: value('wadmkd'),
+        district: value('wadmkc'),
+        city: value('wadmkk'),
+        province: value('wadmpr'),
+      }
+      if (!boundary.subdistrict || !boundary.city) return null
+      this.boundaryCache.set(key, boundary)
+      if (this.boundaryCache.size > 1000) this.boundaryCache.delete(this.boundaryCache.keys().next().value!)
+      return boundary
+    } catch {
+      return null
     }
   }
 
@@ -222,46 +342,42 @@ export class GeocodingService {
     const importantStreetTokens = expectedStreetTokens.filter((token) => token.length > 3 && token !== 'kyai' && token !== 'haji')
     if (!street || !importantStreetTokens.length) return null
 
-    const query = [
-      street,
-      address.subdistrict, address.district,
-      address.city?.replace(/^(?:Kota Administrasi|Kota|Kabupaten Administrasi|Kabupaten|Kab)\s+/i, ''),
-      address.province, address.postalCode, 'Indonesia',
-    ].filter(Boolean).join(', ')
-    const cacheKey = query.toLocaleLowerCase('id')
-    const cached = this.nominatimCache.get(cacheKey)
-    if (cached) return cached
+    const location = geocoderCity(address.city)
+    const city = location.city ?? location.county ?? address.city?.replace(/^(?:Kota Administrasi|Kota|Kabupaten Administrasi|Kabupaten|Kab)\s+/i, '')
+    const queries = [...new Set([
+      [street, address.subdistrict, address.district, city, address.province, address.postalCode, 'Indonesia'].filter(Boolean).join(', '),
+      ...(city ? [[street, city, address.province, 'Indonesia'].filter(Boolean).join(', ')] : []),
+    ])]
 
     const serviceUrl = process.env.NOMINATIM_URL ?? 'https://nominatim.openstreetmap.org/search'
-    const url = new URL(serviceUrl)
-    url.search = new URLSearchParams({ q: query, format: 'jsonv2', addressdetails: '1', countrycodes: 'id', limit: '5' }).toString()
-    let release!: () => void
-    const previous = this.nominatimQueue
-    this.nominatimQueue = new Promise<void>((resolve) => { release = resolve })
-    await previous
     try {
-      const delay = Math.max(0, 1000 - (Date.now() - this.nominatimLastRequest))
-      if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
-      this.nominatimLastRequest = Date.now()
-      const response = await fetch(url, { headers: { 'User-Agent': 'ATLAS-INET/1.0 (address network analysis)' }, signal: AbortSignal.timeout(15_000) })
-      if (!response.ok) throw new ServiceUnavailableException({ code: 'OSM_GEOCODING_UNAVAILABLE', message: 'Provider OpenStreetMap sedang tidak dapat memproses alamat.' })
-      const features = await response.json() as NominatimFeature[]
-      const match = features.find((feature) => {
-        if (feature.country_code && feature.country_code.toLowerCase() !== 'id') return false
-        const details = feature.address ?? {}
-        const streetText = tokens([feature.name, feature.display_name, details.road].filter(Boolean).join(' '))
-        return expectedStreetTokens.every((token) => matchesStreetToken(token, streetText))
-      })
-      if (!match) return null
-      const coordinates: [number, number] = [Number(match.lon), Number(match.lat)]
-      if (!coordinates.every(Number.isFinite) || Math.abs(coordinates[0]) > 180 || Math.abs(coordinates[1]) > 90) return null
-      this.nominatimCache.set(cacheKey, coordinates)
-      if (this.nominatimCache.size > 500) this.nominatimCache.delete(this.nominatimCache.keys().next().value!)
-      return coordinates
+      for (const query of queries) {
+        const cacheKey = query.toLocaleLowerCase('id')
+        const cached = this.nominatimCache.get(cacheKey)
+        if (cached) return cached
+        const url = new URL(serviceUrl)
+        url.search = new URLSearchParams({ q: query, format: 'jsonv2', addressdetails: '1', countrycodes: 'id', limit: '5' }).toString()
+        const response = await this.fetchNominatim(url)
+        if (!response.ok) throw new ServiceUnavailableException({ code: 'OSM_GEOCODING_UNAVAILABLE', message: 'Provider OpenStreetMap sedang tidak dapat memproses alamat.' })
+        const features = await response.json() as NominatimFeature[]
+        const match = features.find((feature) => {
+          if (feature.country_code && feature.country_code.toLowerCase() !== 'id') return false
+          const details = feature.address ?? {}
+          const actualCity = details.city ?? details.town ?? details.county ?? details.municipality
+          if (city && actualCity && !this.samePlace(actualCity, city)) return false
+          const streetText = tokens(details.road ?? feature.name ?? feature.display_name ?? '')
+          return expectedStreetTokens.every((token) => matchesStreetToken(token, streetText))
+        })
+        if (!match) continue
+        const coordinates: [number, number] = [Number(match.lon), Number(match.lat)]
+        if (!coordinates.every(Number.isFinite) || Math.abs(coordinates[0]) > 180 || Math.abs(coordinates[1]) > 90) continue
+        this.nominatimCache.set(cacheKey, coordinates)
+        if (this.nominatimCache.size > 500) this.nominatimCache.delete(this.nominatimCache.keys().next().value!)
+        return coordinates
+      }
+      return null
     } catch {
       throw new ServiceUnavailableException({ code: 'OSM_GEOCODING_UNAVAILABLE', message: 'Provider OpenStreetMap tidak dapat dihubungi.' })
-    } finally {
-      release()
     }
   }
 

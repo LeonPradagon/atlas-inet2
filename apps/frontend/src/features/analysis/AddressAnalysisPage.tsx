@@ -32,12 +32,45 @@ type AddressSuggestion = {
   street?: string;
   number?: string;
   subdistrict?: string;
+  subdistrictCandidates?: string[];
   district?: string;
+  districtCandidates?: string[];
   city?: string;
+  cityCandidates?: string[];
   province?: string;
   postalCode?: string;
   matchQuality: "approximate";
 };
+type ResolvedRegion = { provinceCode: string; cityCode: string; districtCode: string | null; subdistrictCode: string | null; postalCode?: string | null };
+
+async function resolveRegionParams(params: URLSearchParams) {
+  let result = await api<ResolvedRegion | null>(`/regions/resolve?${params}`);
+  if (!result && params.has("province")) {
+    const withoutProviderProvince = new URLSearchParams(params);
+    withoutProviderProvince.delete("province");
+    result = await api<ResolvedRegion | null>(`/regions/resolve?${withoutProviderProvince}`);
+  }
+  return result;
+}
+function regionParams(fields: Partial<AddressSuggestion>) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries({
+    city: fields.city,
+    district: fields.district,
+    subdistrict: fields.subdistrict,
+    province: fields.province,
+    postalCode: fields.postalCode,
+    street: fields.street,
+  }))
+    if (value) params.set(key, value);
+  for (const [key, values] of Object.entries({
+    cityCandidate: fields.cityCandidates,
+    districtCandidate: fields.districtCandidates,
+    subdistrictCandidate: fields.subdistrictCandidates,
+  }))
+    for (const value of values ?? []) params.append(key, value);
+  return params;
+}
 type SelectedPoint = { longitude: number; latitude: number; label: string; provider: "photon" | "manual"; matchQuality?: "approximate"; matchedStreet?: string; confirmed: boolean };
 
 function AddressPinPicker({ point, regionView, onChange }: { point: SelectedPoint | null; regionView: { longitude: number; latitude: number; zoom: number } | null; onChange: (longitude: number, latitude: number) => void }) {
@@ -365,6 +398,7 @@ export function AddressAnalysisPage() {
   const [designError, setDesignError] = useState("");
   const [designNotice, setDesignNotice] = useState("");
   const [designLoading, setDesignLoading] = useState(false);
+  const regionLookupId = useRef(0);
   const queryClient = useQueryClient();
   const addressQuery = [address.street, address.number && `No. ${address.number}`].filter(Boolean).join(" ").trim();
   useEffect(() => {
@@ -495,16 +529,13 @@ export function AddressAnalysisPage() {
         area: [city?.name, province?.name].filter(Boolean).join(", "),
         sourceAnalysisId: analyze.data!.historyId,
         features: [
-          ...(!saveAsset.isSuccess
-            ? [
-                {
-                  kind: assetKind,
-                  name: (assetName.trim() || `${assetKind} · ${address.street.trim() || "Titik analisis"}`).slice(0, 150),
-                  poleHeight: assetKind === "POLE" ? poleHeight : undefined,
-                  geometry: { type: "Point", coordinates: [analyze.data!.longitude, analyze.data!.latitude] },
-                },
-              ]
-            : []),
+          {
+            kind: assetKind,
+            name: (assetName.trim() || `${assetKind} · ${address.street.trim() || "Titik analisis"}`).slice(0, 150),
+            poleHeight: assetKind === "POLE" ? poleHeight : undefined,
+            designAnchor: true,
+            geometry: { type: "Point", coordinates: [analyze.data!.longitude, analyze.data!.latitude] },
+          },
           ...designFeatures.map((feature) => ({ ...feature.properties, geometry: feature.geometry })),
         ],
       }),
@@ -516,6 +547,7 @@ export function AddressAnalysisPage() {
   });
   const error = analyze.error as ApiError | null;
   const updateAddress = (field: keyof AddressFields, value: string) => {
+    regionLookupId.current += 1;
     setAddress((current) => ({
       ...current,
       [field]: value,
@@ -525,20 +557,18 @@ export function AddressAnalysisPage() {
     analyze.reset();
   };
   const resolveSuggestionRegions = async (suggestion: AddressSuggestion) => {
-    type ResolvedRegion = { provinceCode: string; cityCode: string; districtCode: string | null; subdistrictCode: string | null; postalCode?: string | null };
     const resolve = (fields: Partial<AddressSuggestion>) => {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries({
+      const params = regionParams({
+        ...fields,
         city: fields.city ?? city?.name,
         district: fields.district ?? district?.name,
         subdistrict: fields.subdistrict && !/^(?:rt|rw)\s*\d/i.test(fields.subdistrict) ? fields.subdistrict : subdistrict?.name,
         province: fields.province ?? province?.name,
         postalCode: fields.postalCode ?? address.postalCode,
         street: fields.street ?? address.street,
-      }))
-        if (value) params.set(key, value);
-      if (!params.has("city")) return Promise.resolve(null);
-      return api<ResolvedRegion | null>(`/regions/resolve?${params}`);
+      });
+      if (!params.has("city") && !params.has("cityCandidate")) return Promise.resolve(null);
+      return resolveRegionParams(params);
     };
     let direct: ResolvedRegion | null = null;
     try {
@@ -557,24 +587,52 @@ export function AddressAnalysisPage() {
     if (!reverse) return direct;
     const refined = await resolve({
       ...suggestion,
+      ...reverse,
       city: reverse.city ?? suggestion.city,
       district: reverse.district ?? suggestion.district,
       subdistrict: reverse.subdistrict && !/^(?:rt|rw)\s*\d/i.test(reverse.subdistrict) ? reverse.subdistrict : suggestion.subdistrict && !/^(?:rt|rw)\s*\d/i.test(suggestion.subdistrict) ? suggestion.subdistrict : undefined,
       province: reverse.province ?? suggestion.province,
       postalCode: reverse.postalCode ?? suggestion.postalCode,
+      cityCandidates: [...(suggestion.cityCandidates ?? []), ...(reverse.cityCandidates ?? [])],
+      districtCandidates: [...(suggestion.districtCandidates ?? []), ...(reverse.districtCandidates ?? [])],
+      subdistrictCandidates: [...(suggestion.subdistrictCandidates ?? []), ...(reverse.subdistrictCandidates ?? [])],
     });
-    return refined?.provinceCode && refined.cityCode && refined.districtCode && refined.subdistrictCode ? refined : direct;
+    return refined ?? direct;
+  };
+  const resolvePointRegions = async (longitude: number, latitude: number) => {
+    const lookupId = ++regionLookupId.current;
+    try {
+      const reverse = await api<Partial<AddressSuggestion> | null>(
+        `/analysis/address/reverse?${new URLSearchParams({ longitude: String(longitude), latitude: String(latitude) })}`,
+      );
+      if (!reverse?.city && !reverse?.cityCandidates?.length) return;
+      const params = regionParams(reverse);
+      const resolved = await resolveRegionParams(params);
+      if (!resolved || lookupId !== regionLookupId.current) return;
+      setAddress((current) => ({
+        ...current,
+        provinceCode: resolved.provinceCode,
+        cityCode: resolved.cityCode,
+        districtCode: resolved.districtCode ?? "",
+        subdistrictCode: resolved.subdistrictCode ?? "",
+        postalCode: resolved.postalCode ?? current.postalCode,
+      }));
+    } catch {
+      // Keep the point usable when reverse geocoding or region lookup is unavailable.
+    }
   };
   const selectSuggestion = async (suggestion: AddressSuggestion) => {
+    const lookupId = ++regionLookupId.current;
     const selectedLabel = [suggestion.street || suggestion.label, suggestion.number && `No. ${suggestion.number}`].filter(Boolean).join(", ");
     setSelectedPoint({ longitude: suggestion.longitude, latitude: suggestion.latitude, label: selectedLabel, provider: "photon", matchQuality: "approximate", matchedStreet: suggestion.street, confirmed: false });
     analyze.reset();
-    let resolved: { provinceCode: string; cityCode: string; districtCode: string | null; subdistrictCode: string | null; postalCode?: string | null } | null = null;
+    let resolved: ResolvedRegion | null = null;
     try {
       resolved = await resolveSuggestionRegions(suggestion);
     } catch {
       /* Keep manual region inputs available if auto-fill is unavailable. */
     }
+    if (lookupId !== regionLookupId.current) return;
     setAddress((current) => ({
       ...current,
       street: suggestion.street || current.street,
@@ -584,34 +642,58 @@ export function AddressAnalysisPage() {
     }));
   };
   useEffect(() => {
-    const normalizeStreet = (value: string) =>
-      value
+    const normalizeStreet = (value: string) => {
+      const romanToArabic: Record<string, string> = {
+        i: "1", ii: "2", iii: "3", iv: "4", v: "5", vi: "6", vii: "7", viii: "8", ix: "9", x: "10",
+        xi: "11", xii: "12", xiii: "13", xiv: "14", xv: "15", xvi: "16", xvii: "17", xviii: "18", xix: "19", xx: "20",
+      };
+      return value
         .toLocaleLowerCase("id")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
         .replace(/^\s*(?:jalan|jln|jl)\.?\s*/, "")
+        .replace(/\b(?:letjen|letjend)\b/g, "letnan jenderal")
+        .replace(/\bmayjen\b/g, "mayor jenderal")
+        .replace(/\bbrigjen\b/g, "brigadir jenderal")
+        .replace(/^(?:(?:brigadir|letnan|mayor)\s+)?jenderal\s+/, "")
+        .replace(/\bkol\.?\b/g, "kolonel")
         .replace(/[^\p{L}\p{N}]+/gu, " ")
         .trim()
-        .replace(/\s+/g, " ");
-    const matchingSuggestions = (suggestionsQuery.data ?? []).filter((candidate) => candidate.street && normalizeStreet(candidate.street) === normalizeStreet(address.street));
-    if (!matchingSuggestions.length) return;
+        .split(/\s+/)
+        .map((token) => romanToArabic[token] ?? token)
+        .join(" ");
+    };
+    const matchingSuggestions = (suggestionsQuery.data ?? []).filter((candidate) => {
+      if (!candidate.street) return false;
+      const regionTokens = new Set(normalizeStreet([candidate.city, candidate.province, candidate.postalCode].filter(Boolean).join(" ")).split(" "));
+      const requestedStreet = normalizeStreet(address.street).split(" ").filter((token) => token && !regionTokens.has(token));
+      const suggestedStreet = normalizeStreet(candidate.street).split(" ").filter((token) => token && !regionTokens.has(token));
+      return requestedStreet.length > 0 && requestedStreet.join(" ") === suggestedStreet.join(" ");
+    });
+    if (!matchingSuggestions.length || selectedPoint) return;
+    const lookupId = regionLookupId.current;
     let cancelled = false;
     void Promise.all(matchingSuggestions.map((suggestion) => resolveSuggestionRegions(suggestion).catch(() => null))).then((results) => {
-      if (cancelled) return;
+      if (cancelled || lookupId !== regionLookupId.current) return;
       const valid = results.filter(
-        (result) => result && (!address.provinceCode || result.provinceCode === address.provinceCode) && (!address.cityCode || result.cityCode === address.cityCode) && result.districtCode && result.subdistrictCode,
+        (result) => result && (!address.provinceCode || result.provinceCode === address.provinceCode) && (!address.cityCode || result.cityCode === address.cityCode),
       );
-      const pairs = new Set(valid.map((result) => `${result!.districtCode}:${result!.subdistrictCode}`));
-      // Fill only when every exact street match with usable region data points to the same wilayah.
-      if (!valid.length || pairs.size !== 1) return;
-      const resolved = valid[0]!;
+      const common = (field: "provinceCode" | "cityCode" | "districtCode" | "subdistrictCode" | "postalCode") => {
+        const values = new Set(valid.map((result) => result?.[field]).filter((value): value is string => Boolean(value)));
+        return values.size === 1 ? values.values().next().value ?? "" : "";
+      };
+      const provinceCode = common("provinceCode");
+      const cityCode = common("cityCode");
+      if (!provinceCode || !cityCode) return;
       setAddress((current) =>
-        current.street === address.street && (!current.cityCode || current.cityCode === resolved.cityCode)
+        current.street === address.street && (!current.cityCode || current.cityCode === cityCode)
           ? {
               ...current,
-              provinceCode: resolved.provinceCode,
-              cityCode: resolved.cityCode,
-              districtCode: resolved.districtCode!,
-              subdistrictCode: resolved.subdistrictCode!,
-              postalCode: resolved.postalCode ?? matchingSuggestions.find((candidate) => candidate.postalCode)?.postalCode ?? current.postalCode,
+              provinceCode,
+              cityCode,
+              districtCode: common("districtCode") || current.districtCode,
+              subdistrictCode: common("subdistrictCode") || current.subdistrictCode,
+              postalCode: common("postalCode") || matchingSuggestions.find((candidate) => candidate.postalCode)?.postalCode || current.postalCode,
             }
           : current,
       );
@@ -619,7 +701,7 @@ export function AddressAnalysisPage() {
     return () => {
       cancelled = true;
     };
-  }, [suggestionsQuery.data, address.street, address.provinceCode, address.cityCode]);
+  }, [suggestionsQuery.data, address.street, address.provinceCode, address.cityCode, selectedPoint]);
   const coordinates = analyze.data ? `${analyze.data.latitude}, ${analyze.data.longitude}` : "";
   const copyCoordinates = async () => {
     try {
@@ -638,10 +720,12 @@ export function AddressAnalysisPage() {
     setDesignFeatures([]);
     saveDesign.reset();
     try {
-      const { features, uncoveredTargets } = await generateFtthDraft([analyze.data.longitude, analyze.data.latitude], assetKind);
+      const { features, uncoveredTargets, generatedOlt } = await generateFtthDraft([analyze.data.longitude, analyze.data.latitude], assetKind);
       setDesignFeatures(features);
-      if (uncoveredTargets)
-        setDesignNotice(`${uncoveredTargets} titik pemerataan tidak dapat dipasangi ODP dengan jalur kabel maksimal 1.500 m pada jaringan GraphHopper. Cakupan mengikuti jalan yang tersedia; sebagian boundary masih belum terlayani.`);
+      setDesignNotice([
+        generatedOlt ? "Sistem mengusulkan OLT otomatis di jalan terhubung dengan prioritas akses yang lebih baik dan rute feeder pendek; verifikasi lokasinya saat survei lapangan." : "",
+        uncoveredTargets ? `${uncoveredTargets} titik pemerataan tidak dapat dipasangi ODP dengan jalur kabel maksimal 1.500 m pada jaringan GraphHopper. Cakupan mengikuti jalan yang tersedia; sebagian boundary masih belum terlayani.` : "",
+      ].filter(Boolean).join(" "));
     } catch (error) {
       setDesignError(error instanceof Error ? error.message : "Draft FTTH tidak dapat dibuat.");
     } finally {
@@ -731,7 +815,7 @@ export function AddressAnalysisPage() {
                     <div className="fw-semibold">
                       Pilih Wilayah <span className="text-danger">(wajib)</span>
                     </div>
-                    <div className="form-text mb-2">Wilayah ini dipakai sebagai filter pencarian, bukan diketik ulang di nama jalan.</div>
+                    <div className="form-text mb-2">Pilih wilayah untuk mempersempit hasil. Jika belum dipilih, Anda juga bisa mencari dengan alamat lengkap.</div>
                     <div className="row g-3">
                       <div className="col-md-6">
                         <label className="form-label fw-semibold" htmlFor="province">
@@ -872,6 +956,7 @@ export function AddressAnalysisPage() {
                       point={selectedPoint}
                       regionView={regionMapQuery.data ?? null}
                       onChange={(longitude, latitude) => {
+                        void resolvePointRegions(longitude, latitude);
                         setSelectedPoint((current) => ({
                           longitude,
                           latitude,
@@ -916,6 +1001,7 @@ export function AddressAnalysisPage() {
                     type="button"
                     className="btn btn-link text-secondary p-0"
                     onClick={() => {
+                      regionLookupId.current += 1;
                       setAddress({ street: "", number: "", postalCode: "", provinceCode: "", cityCode: "", districtCode: "", subdistrictCode: "" });
                       setSelectedPoint(null);
                       setShowPinPicker(false);
@@ -1057,7 +1143,7 @@ export function AddressAnalysisPage() {
                   <small className="d-block text-secondary mt-1">
                     Sistem menempatkan ODC dan ODP berdasarkan boundary 500 m, perkiraan radius layanan ODP 150 m, kapasitas maksimal 4 ODP per ODC, dan jalur yang tersedia di GraphHopper. Jarak kabel distribusi maksimal 1.500 m; jarak
                     antartiang otomatis sekitar 50 m. Tinggi tiang diperkirakan dari kelas jalan: jalan utama 9 m, jalan lokal/gang 7 m. Klik tiang di peta untuk melihat kelas jalan yang terbaca. Perkiraan ini perlu verifikasi survei
-                    lapangan. Jika titik awal bukan OLT, OLT upstream dianggap berada di luar area draft.
+                    lapangan. Jika titik awal bukan OLT, sistem mengusulkan OLT otomatis pada jalan yang dapat dirutekan dengan mempertimbangkan kelas jalan dan rute feeder; titik ini tetap perlu diverifikasi saat survei.
                   </small>
                   <button type="button" className="btn btn-primary w-100 mt-2" onClick={() => void createFtthDraft()} disabled={designLoading}>
                     {designLoading ? (

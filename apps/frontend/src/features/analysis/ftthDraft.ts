@@ -1,7 +1,7 @@
 import type { Feature, LineString, Point } from 'geojson'
 import { api, postJson } from '../../lib/api'
 
-export type DesignFeature = Feature<Point | LineString, { kind: string; name: string; routeType?: 'FEEDER' | 'DISTRIBUTION'; spacingMeters?: number; poleHeight?: string; roadClass?: string }>
+export type DesignFeature = Feature<Point | LineString, { kind: string; name: string; routeType?: 'FEEDER' | 'DISTRIBUTION'; spacingMeters?: number; poleHeight?: string; roadClass?: string; designAnchor?: boolean }>
 
 export function offsetCoordinate([longitude, latitude]: [number, number], meters: number, bearing: number): [number, number] {
   const distance = meters / 6371008.8
@@ -68,6 +68,31 @@ export async function generateFtthDraft(anchor: [number, number], assetKind: str
     }
   }
   const sourceLabel = ({ OLT: 'OLT', JOINT_CLOSURE: 'Joint Closure', HANDHOLE: 'Handhole', ODC: 'ODC', ODP: 'ODP', POLE: 'Tiang' } as Record<string, string>)[assetKind] ?? assetKind
+  let generatedOlt = false
+  if (assetKind !== 'OLT') {
+    const roadPriority: Record<string, number> = { primary: 0, secondary: 20, trunk: 35, tertiary: 45, residential: 65, unclassified: 85, living_street: 95, service: 110 }
+    let best: { coordinate: [number, number]; points: [number, number][]; roadClasses: (string | null)[]; roadClass: string; score: number } | undefined
+    for (const radius of [250, 500]) {
+      const directions = radius === 250 ? [0, 1, 2, 3, 4, 5, 6, 7] : [0, 2, 4, 6]
+      for (const direction of directions) {
+        const candidate = offsetCoordinate(anchor, radius, direction * Math.PI / 4)
+        try {
+          const route = await requestRoute(candidate, anchor, 'OLT otomatis', 2500)
+          const location = route.points[0]
+          if (distanceMeters(location, anchor) < 80) continue
+          const roadClass = route.roadClasses.find(Boolean) ?? ''
+          if (['motorway', 'motorway_link', 'footway', 'path', 'cycleway', 'track'].includes(roadClass)) continue
+          const score = routePriorityScore(route.points, route.roadClasses, roadPriority)
+          if (!best || score < best.score) best = { coordinate: location, points: route.points, roadClasses: route.roadClasses, roadClass, score }
+        } catch { /* Try the next road candidate. */ }
+      }
+      if (best && ['primary', 'secondary', 'tertiary', 'trunk'].includes(best.roadClass)) break
+    }
+    if (!best) throw new Error('Lokasi OLT otomatis tidak dapat ditemukan pada jalan yang terhubung. Periksa titik koordinat atau cakupan data jalan.')
+    features.push({ type: 'Feature', properties: { kind: 'OLT', name: `OLT otomatis · ${sourceLabel}` }, geometry: { type: 'Point', coordinates: best.coordinate } })
+    appendRoute(best.points, best.roadClasses, `Kabel feeder OLT–${sourceLabel}`, 'FEEDER')
+    generatedOlt = true
+  }
   const odcCandidates: { index: number; coordinate: [number, number]; feeder: [number, number][]; roadClasses: (string | null)[]; used: number }[] = []
   const odcLocations = [
     ...[180, 360].flatMap((radius) => Array.from({ length: 8 }, (_, direction) => offsetCoordinate(anchor, radius, 2 * Math.PI * direction / 8))),
@@ -105,5 +130,11 @@ export async function generateFtthDraft(anchor: [number, number], assetKind: str
     if (!placed) uncoveredTargets++
   }
   if (!features.some((feature) => feature.properties.kind === 'ODP')) throw new Error('Tidak ada ODP yang dapat dijangkau melalui data jalan di area ini.')
-  return { features, uncoveredTargets }
+  return { features, uncoveredTargets, generatedOlt }
+}
+
+function routePriorityScore(points: [number, number][], roadClasses: (string | null)[], roadPriority: Record<string, number>): number {
+  const length = points.slice(1).reduce((total, point, index) => total + distanceMeters(points[index], point), 0)
+  const firstRoadClass = roadClasses.find(Boolean) ?? ''
+  return length + (roadPriority[firstRoadClass] ?? 130)
 }

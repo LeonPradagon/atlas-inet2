@@ -34,6 +34,15 @@ async function main() {
     await db.query(`INSERT INTO "user"(id,name,email,role) VALUES('admin','Test Admin','admin@atlas.test','ADMIN'),('presales','Test Presales','presales@atlas.test','PRESALES')`)
     const atlas = new AtlasService(db)
     const q = (sql, values) => db.query(sql, values)
+    const savedDesign = await atlas.saveFtthDesign([
+      { kind:'HANDHOLE',name:'Handhole anchor',designAnchor:true,geometry:{ type:'Point',coordinates:[106.8,-6.2] } },
+      { kind:'ODC',name:'ODC test',geometry:{ type:'Point',coordinates:[106.801,-6.201] } },
+      { kind:'ROUTE',name:'Kabel test',routeType:'FEEDER',geometry:{ type:'LineString',coordinates:[[106.8,-6.2],[106.801,-6.201]] } },
+    ],'admin','Test Area')
+    const savedAnchor = await q("SELECT attributes FROM network_assets WHERE attributes->>'ftthDesignId'=$1 AND attributes->>'designAnchor'='true'",[savedDesign.designId])
+    assert.equal(savedAnchor.rows.length,1)
+    assert.equal(savedAnchor.rows[0].attributes.coverageRadiusMeters,500)
+    console.log('PASS: FTTH design persists its selected anchor and coverage radius')
     const booking = (segmentId, cores) => atlas.createBooking({ segmentId, cores, customer: `Customer ${randomBytes(4).toString('hex')}`, picCustomer: 'Customer PIC', picPresales: 'Presales PIC' }, 'presales')
     const status = async (id) => (await q('SELECT status FROM bookings WHERE id=$1',[id])).rows[0].status
     async function segment(id, count) {
@@ -201,6 +210,8 @@ async function main() {
     }
     assert.equal(progress.processed,4)
     assert.ok(progress.failed >= 2)
+    const terminalRows = await fetch(`${origin}/api/analysis/bulk/jobs/${job.jobId}/rows?page=1&pageSize=50`,{ headers:{ 'x-atlas-test-user':'admin' } }).then((response) => response.json())
+    assert.ok(terminalRows.rows.every((row) => !['QUEUED','PROCESSING'].includes(row.status)))
     const resultPage = await fetch(`${origin}/api/analysis/bulk/jobs/${job.jobId}/rows?page=2&pageSize=2`,{ headers:{ 'x-atlas-test-user':'admin' } }).then((response) => response.json())
     assert.equal(resultPage.total,4)
     assert.equal(resultPage.rows.length,2)

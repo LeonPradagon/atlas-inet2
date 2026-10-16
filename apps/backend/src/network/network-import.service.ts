@@ -21,6 +21,32 @@ type NetworkFeature = { id: string; name: string; assetType: 'segment' | 'asset'
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', parseTagValue: false, trimValues: true, processEntities: false })
 const local = (key: string) => key.includes(':') ? key.slice(key.lastIndexOf(':') + 1) : key
 const list = (value: unknown): unknown[] => value === undefined ? [] : Array.isArray(value) ? value : [value]
+const spreadsheetNamespace = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+
+function normalizeSpreadsheetXml(xml: string) {
+  const root = xml.match(/<([A-Za-z_][\w.-]*):[A-Za-z_][\w.-]*\b[^>]*>/)
+  if (!root) return xml
+  const prefix = root[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const namespaceDeclaration = new RegExp(`\\sxmlns:${prefix}=(['"])(.*?)\\1`).exec(root[0])
+  if (namespaceDeclaration?.[2] !== spreadsheetNamespace) return xml
+  const normalized = xml.replace(new RegExp(`(<\\/?)(?:${prefix}):`, 'g'), '$1')
+  return normalized.replace(new RegExp(`\\sxmlns:${prefix}=(['"])${spreadsheetNamespace}\\1`), ` xmlns="${spreadsheetNamespace}"`)
+}
+
+async function normalizeSpreadsheetNamespacePrefixes(buffer: Buffer) {
+  const archive = await JSZip.loadAsync(buffer)
+  let changed = false
+  for (const [path, entry] of Object.entries(archive.files)) {
+    if (entry.dir || !path.startsWith('xl/') || !path.endsWith('.xml')) continue
+    const xml = await entry.async('string')
+    const normalized = normalizeSpreadsheetXml(xml)
+    if (normalized !== xml) {
+      archive.file(path, normalized)
+      changed = true
+    }
+  }
+  return changed ? archive.generateAsync({ type: 'nodebuffer' }) : buffer
+}
 
 function descendants(value: unknown, tag: string): unknown[] {
   if (!value || typeof value !== 'object') return []
@@ -299,7 +325,7 @@ export class NetworkImportService {
   async importNetworkWorkbook(buffer: Buffer, actorId?: string, fileName = 'network.xlsx') {
     if (buffer.length > 10 * 1024 * 1024) throw new BadRequestException({ message: 'Ukuran file maksimal 10 MB.' })
     const workbook = new ExcelJS.Workbook()
-    try { await workbook.xlsx.load(buffer as never) } catch { throw new BadRequestException({ message: 'File XLSX jaringan tidak dapat dibaca.' }) }
+    try { await workbook.xlsx.load(await normalizeSpreadsheetNamespacePrefixes(buffer) as never) } catch { throw new BadRequestException({ message: 'File XLSX jaringan tidak dapat dibaca.' }) }
     const sheet = workbook.worksheets[0]
     if (!sheet || sheet.rowCount < 2) throw new BadRequestException({ message: 'Sheet pertama harus berisi header dan minimal satu aset.' })
     if (sheet.rowCount > 10_001) throw new BadRequestException({ message: 'Maksimal 10.000 aset per file XLSX.' })
@@ -373,7 +399,7 @@ export class NetworkImportService {
     const maxRows = options.maxRows ?? 500
     if (buffer.length > maxBytes) throw new BadRequestException({ message: `Ukuran file maksimal ${Math.round(maxBytes / 1024 / 1024)} MB.` })
     const workbook = new ExcelJS.Workbook()
-    try { await workbook.xlsx.load(buffer as never) } catch { throw new BadRequestException({ message: 'File XLSX tidak dapat dibaca.' }) }
+    try { await workbook.xlsx.load(await normalizeSpreadsheetNamespacePrefixes(buffer) as never) } catch { throw new BadRequestException({ message: 'File XLSX tidak dapat dibaca.' }) }
     const sheet = workbook.worksheets[0]
     if (!sheet || sheet.rowCount < 2) throw new BadRequestException({ message: 'Sheet pertama harus memiliki header dan minimal satu baris lokasi.' })
     const headers: string[] = []

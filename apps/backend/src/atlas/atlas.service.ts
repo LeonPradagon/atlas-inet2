@@ -59,8 +59,8 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       WHERE h.user_id=$1 AND ($2::text IS NULL OR h.analysis_type=$2)
         AND NOT (h.analysis_type='FTTH_DESIGN' AND EXISTS (
           SELECT 1 FROM analysis_history a
-          WHERE a.user_id=h.user_id AND a.analysis_type='ADDRESS'
-            AND (h.input->>'sourceAnalysisId'=a.id::text OR EXISTS (
+          WHERE a.user_id=h.user_id AND a.analysis_type IN ('ADDRESS','BULK')
+            AND (h.input->>'sourceAnalysisId'=a.id::text OR (a.analysis_type='ADDRESS' AND EXISTS (
               SELECT 1 FROM jsonb_array_elements(COALESCE(h.result->'features','[]'::jsonb)) f
               CROSS JOIN LATERAL (SELECT CASE WHEN f->>'kind'='OLT' THEN f->'geometry'->'coordinates'
                 ELSE f->'geometry'->'coordinates'->0 END AS point) p
@@ -68,7 +68,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
                 AND jsonb_typeof(p.point)='array' AND jsonb_array_length(p.point)>=2
                 AND ST_DistanceSphere(ST_MakePoint((p.point->>0)::float8,(p.point->>1)::float8),
                   ST_MakePoint((a.result->>'longitude')::float8,(a.result->>'latitude')::float8))<=5
-            ))
+            )))
         ))
       ORDER BY h.created_at DESC LIMIT 200`, [userId, type ?? null])
     return rows
@@ -193,7 +193,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     const designId = randomUUID()
     const features = input.map((value) => {
       if (!value || typeof value !== 'object') throw new BadRequestException({ message: 'Fitur desain tidak valid.' })
-      const feature = value as { kind?: unknown; name?: unknown; poleHeight?: unknown; routeType?: unknown; geometry?: unknown }
+      const feature = value as { kind?: unknown; name?: unknown; poleHeight?: unknown; routeType?: unknown; designAnchor?: unknown; geometry?: unknown }
       const kind = String(feature.kind ?? '')
       const name = String(feature.name ?? '').trim()
       const poleHeight = feature.poleHeight === '7 m' || feature.poleHeight === '9 m' ? feature.poleHeight : null
@@ -203,12 +203,13 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       const points = geometry.type === 'Point' ? [coordinates] : coordinates
       if ((geometry.type === 'Point' && coordinates.length < 2) || (geometry.type === 'LineString' && (coordinates.length < 2 || coordinates.length > 2000)) || points.some((point) => !Array.isArray(point) || point.length < 2 || typeof point[0] !== 'number' || typeof point[1] !== 'number' || !Number.isFinite(point[0]) || !Number.isFinite(point[1]) || Math.abs(point[0]) > 180 || Math.abs(point[1]) > 90)) throw new BadRequestException({ message: 'Koordinat desain tidak valid.' })
       if ((kind === 'ROUTE') !== (geometry.type === 'LineString')) throw new BadRequestException({ message: 'Fitur kabel harus berupa jalur garis; aset perangkat harus berupa titik.' })
+      if (feature.designAnchor === true && (kind === 'ROUTE' || geometry.type !== 'Point')) throw new BadRequestException({ message: 'Titik pusat radius desain harus berupa aset titik.' })
       if (kind === 'POLE' && !poleHeight) throw new BadRequestException({ message: 'Setiap tiang draft harus memiliki tinggi 7 m atau 9 m.' })
       const routeType = kind === 'ROUTE' && (feature.routeType === 'FEEDER' || feature.routeType === 'DISTRIBUTION') ? feature.routeType : null
       if (kind === 'ROUTE' && !routeType) throw new BadRequestException({ message: 'Jenis jalur FTTH harus feeder atau distribusi.' })
       const category = kind === 'JOINT_CLOSURE' ? 'JC' : kind === 'HANDHOLE' ? 'HANDHOLE' : kind
-      const attributes = { folderPath: `FTTH Draft / ${designId} / ${category}`, ftthDesignId: designId, assetKind: kind, source: 'ftth-design', poleHeight, routeType, coverageRadiusMeters: kind === 'OLT' ? 500 : undefined, lineColor: routeType === 'FEEDER' ? '#ff0000' : routeType === 'DISTRIBUTION' ? '#a000ff' : undefined }
-      return { id: randomUUID(),kind,name,poleHeight,routeType,geometry,geometryJson: JSON.stringify({ type: geometry.type, coordinates }),attributes: JSON.stringify(attributes) }
+      const attributes = { folderPath: `FTTH Draft / ${designId} / ${category}`, ftthDesignId: designId, assetKind: kind, source: 'ftth-design', designAnchor: feature.designAnchor === true || undefined, poleHeight, routeType, coverageRadiusMeters: feature.designAnchor === true || kind === 'OLT' ? 500 : undefined, lineColor: routeType === 'FEEDER' ? '#ff0000' : routeType === 'DISTRIBUTION' ? '#a000ff' : undefined }
+      return { id: randomUUID(),kind,name,poleHeight,routeType,designAnchor: feature.designAnchor === true,geometry,geometryJson: JSON.stringify({ type: geometry.type, coordinates }),attributes: JSON.stringify(attributes) }
     })
     const historyId = await this.db.transaction(async (client) => {
       if (sourceAnalysisId) {
@@ -242,7 +243,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         savedCount: features.length,
         assetCount: features.filter((feature) => feature.kind !== 'ROUTE').length,
         routeCount: features.filter((feature) => feature.kind === 'ROUTE').length,
-        features: features.map(({ kind, name, poleHeight, routeType, geometry }) => ({ kind, name, poleHeight, routeType, geometry })),
+        features: features.map(({ kind, name, poleHeight, routeType, designAnchor, geometry }) => ({ kind, name, poleHeight, routeType, designAnchor, geometry })),
       }
       const { rows: historyRows } = await client.query(`INSERT INTO analysis_history(user_id,analysis_type,title,input,result)
         VALUES($1,'FTTH_DESIGN',$2,$3::jsonb,$4::jsonb) RETURNING id`,

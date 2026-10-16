@@ -284,18 +284,21 @@ export function MapPage() {
     ?? networkSegments.find((item) => ftthDesignGroupId(item))
     ?? networkSegments[0];
   const selectedDraftId = selectedAsset ? ftthDesignGroupId(selectedAsset) : undefined;
+  const selectedDraftDesignAnchor = selectedDraftId ? networkSegments.find((asset) =>
+    ftthDesignGroupId(asset) === selectedDraftId && asset.attributes?.designAnchor === true,
+  ) : undefined;
   const selectedDraftOlt = selectedDraftId ? networkSegments.find((asset) =>
     ftthDesignGroupId(asset) === selectedDraftId
     && (String(asset.attributes?.assetKind ?? "").toUpperCase() === "OLT" || /^OLT(?:\b|\s|·)/i.test(asset.name)),
   ) : undefined;
-  const selectedDraftAnchor = selectedDraftOlt ?? (selectedDraftId ? selectedAsset : undefined);
+  const selectedDraftAnchor = selectedDraftDesignAnchor ?? selectedDraftOlt ?? (selectedDraftId ? selectedAsset : undefined);
   const selectedDraftOltGeometry = useQuery({
     queryKey: ["asset-geometry", selectedDraftAnchor?.id],
     queryFn: () => api<{ geometry: Geometry | null }>(`/assets/${selectedDraftAnchor!.id}/geometry`),
     enabled: Boolean(selectedDraftAnchor),
     staleTime: 60_000,
   });
-  const draftRadiusMeters = Number(selectedDraftOlt?.attributes?.coverageRadiusMeters) || 500;
+  const draftRadiusMeters = Number(selectedDraftDesignAnchor?.attributes?.coverageRadiusMeters ?? selectedDraftOlt?.attributes?.coverageRadiusMeters) || 500;
   const draftBoundary = useMemo<Feature<Polygon, Record<string, unknown>> | null>(() => {
     const geometry = selectedDraftAnchor?.geometry ?? selectedDraftOltGeometry.data?.geometry;
     if (!geometry) return null;

@@ -55,10 +55,16 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
   }
 
   async progress(userId: string, jobId: string) {
-    const { rows } = await this.db.query(`SELECT id AS "jobId",history_id AS "historyId",file_name AS "fileName",status,
-      total_rows AS total,"processed_rows" AS processed,succeeded_rows AS succeeded,failed_rows AS failed,
-      cancel_requested_at IS NOT NULL AS "cancelRequested",created_at AS "createdAt",updated_at AS "updatedAt"
-      FROM analysis_bulk_jobs WHERE id=$1 AND user_id=$2`, [jobId,userId])
+    const { rows } = await this.db.query(`SELECT j.id AS "jobId",j.history_id AS "historyId",j.file_name AS "fileName",j.status,
+      j.total_rows AS total,j.processed_rows AS processed,j.succeeded_rows AS succeeded,j.failed_rows AS failed,
+      j.cancel_requested_at IS NOT NULL AS "cancelRequested",j.created_at AS "createdAt",j.updated_at AS "updatedAt",
+      ARRAY(SELECT DISTINCT (d.input->>'sourceRow')::integer
+        FROM analysis_history d
+        WHERE d.user_id=j.user_id AND d.analysis_type='FTTH_DESIGN'
+          AND d.input->>'sourceAnalysisId'=j.history_id::text
+          AND COALESCE(d.input->>'sourceRow','') ~ '^[1-9][0-9]*$'
+        ORDER BY 1) AS "savedDraftRows"
+      FROM analysis_bulk_jobs j WHERE j.id=$1 AND j.user_id=$2`, [jobId,userId])
     if (!rows[0]) throw new NotFoundException({ message: 'Pekerjaan analisis tidak ditemukan.' })
     return rows[0]
   }

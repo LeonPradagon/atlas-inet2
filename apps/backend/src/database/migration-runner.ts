@@ -7,7 +7,15 @@ type RegionSubdistricts = Record<string, [string, string, string][]>
 
 async function seedIndonesiaRegions(client: PoolClient) {
   const dataDir = resolve(process.cwd(), 'src/database/regions')
-  const provinces = JSON.parse(await readFile(resolve(dataDir, 'provinces.json'), 'utf8')) as RegionProvince[]
+  const provinces = (JSON.parse(await readFile(resolve(dataDir, 'provinces.json'), 'utf8')) as RegionProvince[]).map((province) => ({
+    ...province,
+    name: province.name.trim(),
+    cities: province.cities.map((city) => ({
+      ...city,
+      name: city.name.trim(),
+      districts: city.districts.map((district) => ({ ...district, name: district.name.trim() })),
+    })),
+  }))
   const cities = provinces.flatMap((province) => province.cities.map((city) => ({ ...city, provinceCode: province.code })))
   const districts = cities.flatMap((city) => city.districts.map((district) => ({ ...district, cityCode: city.code })))
   const districtByCode = new Map(districts.map((district) => [district.code, district]))
@@ -17,7 +25,7 @@ async function seedIndonesiaRegions(client: PoolClient) {
     const entries = JSON.parse(await readFile(resolve(dataDir, 'subdistricts', `${city.code}.json`), 'utf8')) as RegionSubdistricts
     for (const [districtCode, rows] of Object.entries(entries)) {
       if (!districtByCode.has(districtCode)) throw new Error(`Unknown district in region data: ${districtCode}`)
-      for (const [code, name, postalCode] of rows) subdistricts.push({ code, districtCode, name, postalCode })
+      for (const [code, name, postalCode] of rows) subdistricts.push({ code, districtCode, name: name.trim(), postalCode })
     }
   }
   if (provinces.length !== 38 || cities.length !== 514 || districts.length !== 7285 || subdistricts.length !== 83762) {
