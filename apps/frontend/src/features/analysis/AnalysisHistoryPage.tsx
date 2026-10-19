@@ -6,11 +6,13 @@ import { LngLatBounds, Map as MapLibreMap, NavigationControl, setWorkerUrl } fro
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import type { FeatureCollection, LineString, Point, Polygon } from 'geojson'
 import { PageHeader } from '../../components/PageHeader'
+import { TablePagination } from '../../components/TablePagination'
 import { api, postCompressedJson } from '../../lib/api'
 import { generateFtthDraft, type DesignFeature } from './ftthDraft'
 import { bulkJobStatusLabel } from './bulkJobStatus'
 
 type HistoryItem = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; status: string | null; itemCount: number; createdAt: string; bulkJobId?: string | null; jobStatus?: string | null; processedRows?: number | null; succeededRows?: number | null; failedRows?: number | null }
+type HistoryPage = { items: HistoryItem[]; total: number; page: number; pageSize: number }
 type RelatedDraft = { id: string; title: string; input: Record<string, unknown>; result: Record<string, unknown>; createdAt: string }
 type HistoryDetail = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; input: Record<string, unknown>; result: Record<string, unknown>; createdAt: string; relatedDrafts?: RelatedDraft[]; bulkJobId?: string | null; jobStatus?: string | null; totalRows?: number | null; processedRows?: number | null; succeededRows?: number | null; failedRows?: number | null }
 type BulkRow = { row: number; address: string; latitude?: number | null; longitude?: number | null; network?: { name?: string } | null; distanceMeters?: number | null; status: string; message?: string }
@@ -188,8 +190,13 @@ function HoverActionButton({ label, className, disabled, onClick, children }: { 
 }
 
 function BulkHistoryDetail({ detail, rows, mapPoints, mapRoutes, mapRadii, onOpenDraft }: { detail: HistoryDetail; rows: BulkRow[]; mapPoints: SavedMapPoint[]; mapRoutes: SavedMapRoute[]; mapRadii: SavedMapRadius[]; onOpenDraft: (id: string) => void }) {
+  const [page, setPage] = useState(1)
+  const pageSize = 25
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize))
+  const visibleRows = rows.slice((page - 1) * pageSize, page * pageSize)
   const drafts = detail.relatedDrafts ?? []
   const rowCount = detail.totalRows ?? rows.length
+  useEffect(() => { if (page > pageCount) setPage(pageCount) }, [page, pageCount])
   return <>
     <div className="alert alert-light border">File: <b>{String(detail.input.fileName ?? detail.title)}</b> · {rowCount.toLocaleString('id-ID')} baris tersimpan.</div>
     {drafts.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">Draft FTTH dari analisis ini</h4><div className="d-flex flex-column gap-2">{drafts.map((draft) => {
@@ -199,13 +206,15 @@ function BulkHistoryDetail({ detail, rows, mapPoints, mapRoutes, mapRadii, onOpe
       return <div className="border rounded p-3 d-flex align-items-center gap-3 flex-wrap" key={draft.id}><div className="flex-grow-1"><b>{sourceAddress ? `Baris ${sourceRow} · ${sourceAddress}` : draft.title}</b><small className="d-block text-secondary">{features.filter((feature) => feature.geometry.type === 'Point').length} aset · {features.filter((feature) => feature.geometry.type === 'LineString').length} jalur kabel · {dateTime(draft.createdAt)}</small></div><button className="btn btn-sm btn-outline-primary" onClick={() => onOpenDraft(draft.id)}>Buka detail draft</button></div>
     })}</div></section>}
     {mapPoints.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">{drafts.length ? 'Peta analisis dan draft FTTH tersimpan' : 'Peta titik analisis tersimpan'}</h4><SavedAnalysisMap points={mapPoints} routes={mapRoutes} radii={mapRadii} />{mapRadii.length > 0 && <small className="text-secondary">Lingkaran biru menunjukkan radius desain 500 m dari titik awal setiap draft.</small>}</section>}
-    <div className="table-responsive"><table className="table table-sm align-middle"><thead><tr><th>BARIS</th><th>ALAMAT</th><th>KOORDINAT</th><th>JARINGAN</th><th>JARAK</th><th>STATUS</th></tr></thead><tbody>{rows.map((row) => <tr key={row.row}><td>{row.row}</td><td>{row.address}</td><td className="font-monospace small">{row.latitude != null && row.longitude != null ? `${row.latitude}, ${row.longitude}` : '—'}</td><td>{row.network?.name ?? '—'}</td><td>{row.distanceMeters == null ? '—' : `${row.distanceMeters} m`}</td><td>{row.status}<small className="d-block text-secondary">{row.message}</small></td></tr>)}</tbody></table></div>
+    <div className="table-responsive"><table className="table table-sm align-middle"><thead><tr><th>BARIS</th><th>ALAMAT</th><th>KOORDINAT</th><th>JARINGAN</th><th>JARAK</th><th>STATUS</th></tr></thead><tbody>{visibleRows.map((row) => <tr key={row.row}><td>{row.row}</td><td>{row.address}</td><td className="font-monospace small">{row.latitude != null && row.longitude != null ? `${row.latitude}, ${row.longitude}` : '—'}</td><td>{row.network?.name ?? '—'}</td><td>{row.distanceMeters == null ? '—' : `${row.distanceMeters} m`}</td><td>{row.status}<small className="d-block text-secondary">{row.message}</small></td></tr>)}</tbody></table></div>
+    <TablePagination page={page} pageSize={pageSize} total={rows.length} label="baris" onPageChange={setPage} />
     <details><summary>Lihat seluruh data file dan hasil</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.input, result: detail.result }, null, 2)}</pre></details>
   </>
 }
 
 export function AnalysisHistoryPage() {
   const [type, setType] = useState('')
+  const [page, setPage] = useState(1)
   const [selectedId, setSelectedId] = useState('')
   const [busyId, setBusyId] = useState('')
   const [draftFeatures, setDraftFeatures] = useState<DesignFeature[]>([])
@@ -215,9 +224,10 @@ export function AnalysisHistoryPage() {
   const detailPanelRef = useRef<HTMLElement>(null)
   const { data: user } = useQuery({ queryKey: ['me'], queryFn: () => api<{ role: string }>('/me') })
   const queryClient = useQueryClient()
-  const history = useQuery({ queryKey: ['analysis-history', type], queryFn: () => api<HistoryItem[]>(`/analysis/history${type ? `?type=${type}` : ''}`) })
+  const history = useQuery({ queryKey: ['analysis-history', type, page], queryFn: () => api<HistoryPage>(`/analysis/history?page=${page}&pageSize=25${type ? `&type=${type}` : ''}`), placeholderData: (previous) => previous })
   const detail = useQuery({ queryKey: ['analysis-history', selectedId], queryFn: () => api<HistoryDetail>(`/analysis/history/${selectedId}`), enabled: Boolean(selectedId) })
   useEffect(() => { setDraftFeatures([]); setDraftMessage(''); setDraftError('') }, [selectedId])
+  useEffect(() => { if (history.data && page > Math.max(1, Math.ceil(history.data.total / history.data.pageSize))) setPage(Math.max(1, Math.ceil(history.data.total / history.data.pageSize))) }, [history.data, page])
   useEffect(() => {
     if (selectedId && !detail.isPending) detailPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }, [selectedId, detail.isPending])
@@ -325,12 +335,22 @@ export function AnalysisHistoryPage() {
   return <>
     <PageHeader title="Riwayat Analisis" subtitle="Hasil analisis alamat, massal, dan draft FTTH tersimpan di database dan dapat dibuka kembali." />
     <section className="card panel-card">
-      <div className="card-header d-flex align-items-center gap-3 flex-wrap"><div><h3>Semua analisis</h3><p>Riwayat milik akun Anda, terbaru ditampilkan lebih dulu.</p></div><div className="d-flex align-items-center gap-2 ms-auto flex-nowrap"><select className="form-select form-select-sm" style={{ width: 165 }} aria-label="Filter jenis analisis" value={type} onChange={(event) => { setType(event.target.value); setSelectedId('') }}><option value="">Semua jenis</option><option value="ADDRESS">Analisis alamat</option><option value="BULK">Analisis massal</option><option value="FTTH_DESIGN">Draft FTTH</option></select><button type="button" className="btn btn-sm btn-outline-primary text-nowrap" style={{ padding: '6px 10px' }} onClick={() => void history.refetch()} disabled={history.isFetching}><i className={`bi bi-arrow-clockwise me-1${history.isFetching ? ' spin' : ''}`} />Muat ulang</button></div></div>
+      <div className="card-header d-flex align-items-center gap-3 flex-wrap"><div><h3>Semua analisis</h3><p>Riwayat milik akun Anda, terbaru ditampilkan lebih dulu.</p></div><div className="d-flex align-items-center gap-2 ms-auto flex-nowrap"><select className="form-select form-select-sm" style={{ width: 165 }} aria-label="Filter jenis analisis" value={type} onChange={(event) => { setType(event.target.value); setPage(1); setSelectedId('') }}><option value="">Semua jenis</option><option value="ADDRESS">Analisis alamat</option><option value="BULK">Analisis massal</option><option value="FTTH_DESIGN">Draft FTTH</option></select><button type="button" className="btn btn-sm btn-outline-primary text-nowrap" style={{ padding: '6px 10px' }} onClick={() => void history.refetch()} disabled={history.isFetching}><i className={`bi bi-arrow-clockwise me-1${history.isFetching ? ' spin' : ''}`} />Muat ulang</button></div></div>
       {history.isPending ? <div className="py-5 text-center"><span className="spinner-border spinner-border-sm me-2" />Memuat riwayat...</div>
         : history.isError ? <div className="alert alert-danger m-3">Riwayat analisis tidak dapat dimuat.</div>
-          : !history.data?.length ? <div className="empty-result py-5"><div className="empty-illustration"><i className="bi bi-clock-history" /></div><h3>Belum ada riwayat analisis</h3><p>Setelah analisis alamat, massal, atau draft FTTH disimpan, hasilnya akan muncul di sini.</p></div>
-            : <div className="table-responsive"><table className="table align-middle mb-0"><thead><tr><th>WAKTU</th><th>JENIS</th><th>ALAMAT / FILE</th><th>JUMLAH / PROGRES</th><th></th></tr></thead><tbody>{history.data.map((item) => <tr key={item.id} className={selectedId === item.id ? 'table-primary' : ''}><td className="text-nowrap">{dateTime(item.createdAt)}</td><td><span className="badge text-bg-light border">{item.analysisType === 'ADDRESS' ? 'Analisis alamat' : item.analysisType === 'BULK' ? 'Analisis massal' : 'Draft FTTH'}</span></td><td className="text-break">{item.title}</td><td>{item.bulkJobId ? <>{item.processedRows ?? 0}/{item.itemCount} · {bulkJobStatusLabel(item.jobStatus)}</> : <>{item.itemCount} {item.analysisType === 'ADDRESS' ? 'lokasi' : item.analysisType === 'BULK' ? 'baris' : 'aset'}</>}</td><td className="text-end text-nowrap">{item.bulkJobId && <HoverActionButton label="Buka hasil dan progres pekerjaan analisis massal" className="btn btn-sm btn-outline-success me-1" onClick={() => { window.location.href = `/analisis-massal?jobId=${item.bulkJobId}` }}><i className="bi bi-box-arrow-up-right" aria-hidden="true" /></HoverActionButton>}{item.analysisType === 'ADDRESS' && <HoverActionButton label="Buka hasil analisis alamat" className="btn btn-sm btn-outline-success me-1" onClick={() => setSelectedId(item.id)}><i className="bi bi-box-arrow-up-right" aria-hidden="true" /></HoverActionButton>}<HoverActionButton label="Unduh hasil sebagai file Excel" className="btn btn-sm btn-outline-success me-1" disabled={busyId === item.id} onClick={() => void exportHistory(item)}><i className="bi bi-file-earmark-excel" aria-hidden="true" /></HoverActionButton><HoverActionButton label="Hapus catatan riwayat ini" className="btn btn-sm btn-outline-danger me-1" disabled={busyId === item.id} onClick={() => void deleteHistory(item)}><i className="bi bi-trash" aria-hidden="true" /></HoverActionButton><HoverActionButton label={selectedId === item.id ? 'Tutup panel detail' : 'Lihat detail analisis'} className="btn btn-sm btn-outline-primary" onClick={() => setSelectedId(selectedId === item.id ? '' : item.id)}><i className={`bi ${selectedId === item.id ? 'bi-eye-slash' : 'bi-eye'}`} aria-hidden="true" /></HoverActionButton></td></tr>)}</tbody></table></div>}
-      <div className="card-footer small text-secondary">Maksimal 200 riwayat terbaru.</div>
+          : !history.data?.items.length && history.data.total === 0 ? <div className="empty-result py-5"><div className="empty-illustration"><i className="bi bi-clock-history" /></div><h3>Belum ada riwayat analisis</h3><p>Setelah analisis alamat, massal, atau draft FTTH disimpan, hasilnya akan muncul di sini.</p></div>
+            : !history.data?.items.length ? <div className="py-5 text-center text-secondary">Menyesuaikan halaman riwayat...</div>
+              : <div className="table-responsive"><table className="table align-middle mb-0"><thead><tr><th>WAKTU</th><th>JENIS</th><th>ALAMAT / FILE</th><th>JUMLAH / PROGRES</th><th></th></tr></thead><tbody>{history.data.items.map((item) => <tr key={item.id} className={selectedId === item.id ? 'table-primary' : ''}><td className="text-nowrap">{dateTime(item.createdAt)}</td><td><span className="badge text-bg-light border">{item.analysisType === 'ADDRESS' ? 'Analisis alamat' : item.analysisType === 'BULK' ? 'Analisis massal' : 'Draft FTTH'}</span></td><td className="text-break">{item.title}</td><td>{item.bulkJobId ? <>{item.processedRows ?? 0}/{item.itemCount} · {bulkJobStatusLabel(item.jobStatus)}</> : <>{item.itemCount} {item.analysisType === 'ADDRESS' ? 'lokasi' : item.analysisType === 'BULK' ? 'baris' : 'aset'}</>}</td><td className="text-end text-nowrap">{item.bulkJobId && <HoverActionButton label="Buka hasil dan progres pekerjaan analisis massal" className="btn btn-sm btn-outline-success me-1" onClick={() => { window.location.href = `/analisis-massal?jobId=${item.bulkJobId}` }}><i className="bi bi-box-arrow-up-right" aria-hidden="true" /></HoverActionButton>}{item.analysisType === 'ADDRESS' && <HoverActionButton label="Buka hasil analisis alamat" className="btn btn-sm btn-outline-success me-1" onClick={() => setSelectedId(item.id)}><i className="bi bi-box-arrow-up-right" aria-hidden="true" /></HoverActionButton>}<HoverActionButton label="Unduh hasil sebagai file Excel" className="btn btn-sm btn-outline-success me-1" disabled={busyId === item.id} onClick={() => void exportHistory(item)}><i className="bi bi-file-earmark-excel" aria-hidden="true" /></HoverActionButton><HoverActionButton label="Hapus catatan riwayat ini" className="btn btn-sm btn-outline-danger me-1" disabled={busyId === item.id} onClick={() => void deleteHistory(item)}><i className="bi bi-trash" aria-hidden="true" /></HoverActionButton><HoverActionButton label={selectedId === item.id ? 'Tutup panel detail' : 'Lihat detail analisis'} className="btn btn-sm btn-outline-primary" onClick={() => setSelectedId(selectedId === item.id ? '' : item.id)}><i className={`bi ${selectedId === item.id ? 'bi-eye-slash' : 'bi-eye'}`} aria-hidden="true" /></HoverActionButton></td></tr>)}</tbody></table></div>}
+      <div className="card-footer d-flex align-items-center justify-content-between gap-2 flex-wrap small text-secondary">
+        <span>{history.data ? `${history.data.total === 0 ? 0 : ((page - 1) * history.data.pageSize + 1).toLocaleString('id-ID')}–${Math.min(page * history.data.pageSize, history.data.total).toLocaleString('id-ID')} dari ${history.data.total.toLocaleString('id-ID')} riwayat` : 'Memuat jumlah riwayat…'}</span>
+        <div className="d-flex align-items-center gap-2">
+          <span>Halaman {page.toLocaleString('id-ID')} / {Math.max(1, Math.ceil((history.data?.total ?? 0) / (history.data?.pageSize ?? 25))).toLocaleString('id-ID')}</span>
+          <div className="btn-group btn-group-sm" role="group" aria-label="Pagination riwayat analisis">
+            <button className="btn btn-outline-secondary" aria-label="Sebelumnya" title="Sebelumnya" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1 || history.isFetching}><i className="bi bi-chevron-left" aria-hidden="true" /></button>
+            <button className="btn btn-outline-secondary" aria-label="Berikutnya" title="Berikutnya" onClick={() => setPage((current) => current + 1)} disabled={!history.data || page >= Math.ceil(history.data.total / history.data.pageSize) || history.isFetching}><i className="bi bi-chevron-right" aria-hidden="true" /></button>
+          </div>
+        </div>
+      </div>
     </section>
     {selectedId && <section ref={detailPanelRef} className="card panel-card mt-4">
       {detail.isPending ? <div className="card-body py-5 text-center"><span className="spinner-border spinner-border-sm me-2" />Memuat detail...</div>

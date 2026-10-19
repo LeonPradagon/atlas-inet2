@@ -49,8 +49,9 @@ export type NetworkAsset = {
   pole: string; poleHeight: '7 m' | '9 m' | null; odc: string; odp: string; totalCores: number; usedCores: number; bookedCores: number; idleCores: number; nameValid?: boolean;
   geometry: Geometry | null; geometryType?: string; createdAt?: string; attributes: Record<string, unknown>
 }
+export type NetworkAssetPage = { items: NetworkAsset[]; total: number; page: number; pageSize: number }
 export type Booking = { id: string; customer: string; picCustomer: string; picPresales: string; segmentId: string; cores: number; status: 'Pending Approval' | 'Booked' | 'Waiting List' | 'Rejected' | 'Released' | 'Expired'; requestedAt: string; approvedAt: string | null; rejectedAt: string | null; expiresAt: string | null; segmentName: string; area: string }
 export type AssetRelation = { assetId: string; kind: 'POLE' | 'ODC' | 'ODP'; name: string; area?: string; poleHeight: '7 m' | '9 m' | null }
 
-export const networkQueryKeys = ['segments', 'map-assets', 'cores', 'bookings', 'dashboard', 'relations', 'notifications', 'audit-trails', 'network-usage'] as const
+export const networkQueryKeys = ['segments', 'segment-catalog', 'bookable-segments', 'map-assets', 'cores', 'bookings', 'dashboard', 'relations', 'notifications', 'audit-trails', 'network-usage'] as const
 import type { Geometry } from 'geojson'

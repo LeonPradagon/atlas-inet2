@@ -94,6 +94,18 @@ export class AtlasController {
   @Get('assets')
   async assets(@Req() req: IncomingMessage, @Query('search') search?: string) { await this.auth.requireUser(req); return this.atlas.listAssets(search ?? '') }
 
+  @Get('assets/catalog')
+  async assetCatalog(@Req() req: IncomingMessage, @Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    await this.auth.requireUser(req)
+    const parsedPage = page === undefined ? 1 : Number(page)
+    const parsedPageSize = pageSize === undefined ? 50 : Number(pageSize)
+    if (!Number.isInteger(parsedPage) || parsedPage < 1 || !Number.isInteger(parsedPageSize) || parsedPageSize < 1 || parsedPageSize > 100) throw new BadRequestException({ message: 'Parameter pagination aset tidak valid.' })
+    return this.atlas.listAssetPage(search ?? '', parsedPage, parsedPageSize)
+  }
+
+  @Get('assets/bookable-segments')
+  async bookableSegments(@Req() req: IncomingMessage) { await this.auth.requireUser(req); return this.atlas.listBookableSegments() }
+
   @Get('assets/map')
   async mapAssets(@Req() req: IncomingMessage, @Query('bbox') bbox?: string) {
     await this.auth.requireUser(req)
@@ -319,10 +331,13 @@ export class AtlasController {
   }
 
   @Get('analysis/history')
-  async analysisHistory(@Req() req: IncomingMessage, @Query('type') type?: string) {
+  async analysisHistory(@Req() req: IncomingMessage, @Query('type') type?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
     const user = await this.auth.requireUser(req)
     if (type && type !== 'ADDRESS' && type !== 'BULK' && type !== 'FTTH_DESIGN') throw new BadRequestException({ message: 'Jenis riwayat tidak valid.' })
-    return this.atlas.listAnalysisHistory(user.id, type as 'ADDRESS' | 'BULK' | 'FTTH_DESIGN' | undefined)
+    const parsedPage = page === undefined ? 1 : Number(page)
+    const parsedPageSize = pageSize === undefined ? 25 : Number(pageSize)
+    if (!Number.isInteger(parsedPage) || parsedPage < 1 || !Number.isInteger(parsedPageSize) || parsedPageSize < 1 || parsedPageSize > 100) throw new BadRequestException({ message: 'Parameter pagination riwayat tidak valid.' })
+    return this.atlas.listAnalysisHistory(user.id, type as 'ADDRESS' | 'BULK' | 'FTTH_DESIGN' | undefined, parsedPage, parsedPageSize)
   }
 
   @Get('analysis/history/:id')

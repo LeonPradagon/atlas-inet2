@@ -47,31 +47,37 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     })
   }
 
-  async listAnalysisHistory(userId: string, type?: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN') {
-    const { rows } = await this.db.query(`SELECT h.id,h.analysis_type AS "analysisType",h.title,
-      h.result->>'status' AS status,
-      CASE WHEN h.analysis_type='BULK' THEN COALESCE(j.total_rows,jsonb_array_length(COALESCE(h.result->'rows','[]'::jsonb)))
-           WHEN h.analysis_type='FTTH_DESIGN' THEN COALESCE((h.result->>'savedCount')::int,0)
-           ELSE 1 END AS "itemCount",
-      h.created_at AS "createdAt",j.id AS "bulkJobId",j.status AS "jobStatus",j.processed_rows AS "processedRows",
-      j.succeeded_rows AS "succeededRows",j.failed_rows AS "failedRows"
-      FROM analysis_history h LEFT JOIN analysis_bulk_jobs j ON j.history_id=h.id
-      WHERE h.user_id=$1 AND ($2::text IS NULL OR h.analysis_type=$2)
-        AND NOT (h.analysis_type='FTTH_DESIGN' AND EXISTS (
-          SELECT 1 FROM analysis_history a
-          WHERE a.user_id=h.user_id AND a.analysis_type IN ('ADDRESS','BULK')
-            AND (h.input->>'sourceAnalysisId'=a.id::text OR (a.analysis_type='ADDRESS' AND EXISTS (
-              SELECT 1 FROM jsonb_array_elements(COALESCE(h.result->'features','[]'::jsonb)) f
-              CROSS JOIN LATERAL (SELECT CASE WHEN f->>'kind'='OLT' THEN f->'geometry'->'coordinates'
-                ELSE f->'geometry'->'coordinates'->0 END AS point) p
-              WHERE (f->>'kind'='OLT' OR (f->>'kind'='ROUTE' AND f->>'routeType'='FEEDER'))
-                AND jsonb_typeof(p.point)='array' AND jsonb_array_length(p.point)>=2
-                AND ST_DistanceSphere(ST_MakePoint((p.point->>0)::float8,(p.point->>1)::float8),
-                  ST_MakePoint((a.result->>'longitude')::float8,(a.result->>'latitude')::float8))<=5
-            )))
-        ))
-      ORDER BY h.created_at DESC LIMIT 200`, [userId, type ?? null])
-    return rows
+  async listAnalysisHistory(userId: string, type?: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN', page = 1, pageSize = 25) {
+    const { rows } = await this.db.query(`WITH filtered AS (
+        SELECT h.id,h.analysis_type AS "analysisType",h.title,h.result->>'status' AS status,
+          CASE WHEN h.analysis_type='BULK' THEN COALESCE(j.total_rows,jsonb_array_length(COALESCE(h.result->'rows','[]'::jsonb)))
+               WHEN h.analysis_type='FTTH_DESIGN' THEN COALESCE((h.result->>'savedCount')::int,0)
+               ELSE 1 END AS "itemCount",
+          h.created_at AS "createdAt",j.id AS "bulkJobId",j.status AS "jobStatus",j.processed_rows AS "processedRows",
+          j.succeeded_rows AS "succeededRows",j.failed_rows AS "failedRows"
+        FROM analysis_history h LEFT JOIN analysis_bulk_jobs j ON j.history_id=h.id
+        WHERE h.user_id=$1 AND ($2::text IS NULL OR h.analysis_type=$2)
+          AND NOT (h.analysis_type='FTTH_DESIGN' AND EXISTS (
+            SELECT 1 FROM analysis_history a
+            WHERE a.user_id=h.user_id AND a.analysis_type IN ('ADDRESS','BULK')
+              AND (h.input->>'sourceAnalysisId'=a.id::text OR (a.analysis_type='ADDRESS' AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements(COALESCE(h.result->'features','[]'::jsonb)) f
+                CROSS JOIN LATERAL (SELECT CASE WHEN f->>'kind'='OLT' THEN f->'geometry'->'coordinates'
+                  ELSE f->'geometry'->'coordinates'->0 END AS point) p
+                WHERE (f->>'kind'='OLT' OR (f->>'kind'='ROUTE' AND f->>'routeType'='FEEDER'))
+                  AND jsonb_typeof(p.point)='array' AND jsonb_array_length(p.point)>=2
+                  AND ST_DistanceSphere(ST_MakePoint((p.point->>0)::float8,(p.point->>1)::float8),
+                    ST_MakePoint((a.result->>'longitude')::float8,(a.result->>'latitude')::float8))<=5
+              )))
+          ))
+      ), page_rows AS (
+        SELECT * FROM filtered ORDER BY "createdAt" DESC,id DESC LIMIT $3 OFFSET $4
+      ), total_rows AS (
+        SELECT count(*)::int AS total FROM filtered
+      )
+      SELECT page_rows.*,total_rows.total FROM total_rows LEFT JOIN page_rows ON TRUE
+      ORDER BY page_rows."createdAt" DESC NULLS LAST,page_rows.id DESC NULLS LAST`, [userId, type ?? null, pageSize, (page - 1) * pageSize])
+    return { items: rows.filter((row) => row.id), total: rows[0]?.total ?? 0, page, pageSize }
   }
 
   async getAnalysisHistory(userId: string, id: string) {
@@ -140,6 +146,52 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       GROUP BY a.id ORDER BY a.name`, [search])
     const pattern = new RegExp((await this.getCableNamePattern()).pattern)
     return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
+  }
+
+  async listAssetPage(search = '', page = 1, pageSize = 50) {
+    const filter = search.trim()
+    const match = `%${filter}%`
+    const [{ rows: countRows }, { rows }] = await Promise.all([
+      this.db.query<{ total: number }>(`SELECT count(*)::int AS total FROM network_assets a
+        WHERE $1='' OR a.name ILIKE $2 OR a.area ILIKE $2 OR a.cable_type ILIKE $2 OR a.asset_type ILIKE $2 OR a.attributes::text ILIKE $2`, [filter, match]),
+      this.db.query<AssetRecord>(`WITH page AS (
+          SELECT a.id,a.name FROM network_assets a
+          WHERE $1='' OR a.name ILIKE $2 OR a.area ILIKE $2 OR a.cable_type ILIKE $2 OR a.asset_type ILIKE $2 OR a.attributes::text ILIKE $2
+          ORDER BY a.name,a.id LIMIT $3 OFFSET $4
+        )
+        SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
+          a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
+          count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
+          count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
+          count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
+          GeometryType(a.geometry) AS "geometryType",NULL::jsonb AS geometry,a.attributes,a.created_at AS "createdAt"
+        FROM page p JOIN network_assets a ON a.id=p.id LEFT JOIN network_cores c ON c.asset_id=a.id
+        GROUP BY a.id ORDER BY a.name,a.id`, [filter, match, pageSize, (page - 1) * pageSize]),
+    ])
+    const pattern = new RegExp((await this.getCableNamePattern()).pattern)
+    return { items: rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) })), total: countRows[0].total, page, pageSize }
+  }
+
+  async listDashboardSegments() {
+    const { rows } = await this.db.query<AssetRecord>(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
+      a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
+      count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
+      count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
+      count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
+      NULL::text AS "geometryType",NULL::jsonb AS geometry,a.attributes,a.created_at AS "createdAt"
+      FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+      WHERE a.asset_type='segment' GROUP BY a.id ORDER BY a.name,a.id LIMIT 8`)
+    const pattern = new RegExp((await this.getCableNamePattern()).pattern)
+    return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
+  }
+
+  async listBookableSegments() {
+    const { rows } = await this.db.query(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.total_cores AS "totalCores",
+      count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores"
+      FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+      WHERE a.asset_type='segment' AND a.total_cores>0
+      GROUP BY a.id ORDER BY a.name,a.id`)
+    return rows
   }
 
   async listMapAssets(bounds: [number, number, number, number]) {
@@ -358,14 +410,15 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
   }
 
   async dashboard() {
-    const [assets, bookings] = await Promise.all([
+    const [assets, bookings, topSegments] = await Promise.all([
       this.db.query(`SELECT (SELECT count(*)::int FROM network_assets WHERE asset_type='segment') AS segments,
        COALESCE((SELECT sum(total_cores)::int FROM network_assets WHERE asset_type='segment'),0) AS "totalCores",
        (SELECT count(*)::int FROM network_cores c JOIN network_assets a ON a.id=c.asset_id WHERE a.asset_type='segment' AND c.status='Used') AS "usedCores",
        (SELECT count(*)::int FROM network_cores c JOIN network_assets a ON a.id=c.asset_id WHERE a.asset_type='segment' AND c.status='Booked') AS "bookedCores"`),
       this.listBookings(),
+      this.listDashboardSegments(),
     ])
-    return { ...assets.rows[0], waitingCount: bookings.filter((item) => item.status === 'Waiting List').length, recentBookings: bookings.slice(0, 4) }
+    return { ...assets.rows[0], waitingCount: bookings.filter((item) => item.status === 'Waiting List').length, recentBookings: bookings.slice(0, 4), topSegments }
   }
 
   async networkUsageReport() {

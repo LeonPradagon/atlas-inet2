@@ -84,9 +84,14 @@
   .map-canvas-wrap { flex: none; height: min(64vh, 700px); min-height: 420px; }
   .map-sidebar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-content: start; border: 0; border-top: 1px solid #e8ebf1; }
   .map-sidebar > .map-tools { grid-column: 1 / -1; }
-  .map-sidebar > .segment-list { max-height: 420px; border-right: 1px solid #edf0f4; border-bottom: 0; }
-  .map-sidebar > .segment-detail { min-height: 180px; max-height: 520px; overflow: auto; }
+  .map-sidebar > .segment-list { grid-column: 1; grid-row: 2; max-height: 420px; border-right: 1px solid #edf0f4; border-bottom: 0; }
+  .map-sidebar > .asset-pagination { grid-column: 1; grid-row: 3; align-content: start; }
+  .map-sidebar > .segment-detail { grid-column: 2; grid-row: 2 / span 2; min-height: 180px; max-height: 520px; overflow: auto; }
 }
+.asset-pagination { display: grid; grid-template-columns: 1fr; justify-items: stretch; align-content: start; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #edf0f4; }
+.asset-pagination > small { text-align: center; white-space: nowrap; }
+.asset-pagination .btn-group { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+.asset-pagination .btn-group .btn { padding: 6px 5px; font-size: 11px; white-space: nowrap; }
 @media (max-width: 767px) {
   .map-layout { display: flex; flex-direction: column; height: auto; min-height: 0; overflow: visible; }
   .map-canvas-wrap { flex: none; height: 380px; }

@@ -7,7 +7,7 @@ import { Link } from "@tanstack/react-router";
 import type { Feature, FeatureCollection, Geometry, LineString, Point, Polygon } from "geojson";
 import { SegmentRelations } from "./SegmentRelations";
 import { PageHeader } from "../../components/PageHeader";
-import { api, networkQueryKeys, type Booking, type NetworkAsset } from "../../lib/api";
+import { api, networkQueryKeys, type Booking, type NetworkAsset, type NetworkAssetPage } from "../../lib/api";
 
 type Coordinate = [number, number];
 type RouteLine = Feature<LineString, { id: string; name: string; status: "preview" | "saved" }>;
@@ -215,14 +215,23 @@ function firstCoordinate(geometry: NetworkAsset["geometry"]): Coordinate {
 function matchesAssetSearch(asset: NetworkAsset, query: string) {
   if (!query) return true;
   const searchable = [asset.name, asset.area, asset.cableType, asset.assetType, asset.pole, asset.odc, asset.odp,
-    ...Object.values(asset.attributes ?? {}).filter((value) => typeof value === "string" || typeof value === "number")]
+    ...Object.entries(asset.attributes ?? {}).flatMap(([key, value]) => [key, value]).filter((value) => typeof value === "string" || typeof value === "number")]
     .map((value) => String(value ?? "").toLocaleLowerCase("id-ID"))
     .join(" ");
   return searchable.includes(query);
 }
 
 export function MapPage() {
-  const { data: networkSegments = [] } = useQuery({ queryKey: ["segments"], queryFn: () => api<NetworkAsset[]>("/assets"), refetchInterval: 30_000 });
+  const [assetPage, setAssetPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const catalogQuery = useQuery({
+    queryKey: ["segment-catalog", assetPage, catalogSearch],
+    queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}`),
+    refetchInterval: 30_000,
+    placeholderData: (previous) => previous,
+  });
+  const networkSegments = catalogQuery.data?.items ?? [];
   const [mapBounds, setMapBounds] = useState<[number, number, number, number] | null>(null);
   const mapAssetsQuery = useQuery({
     queryKey: ["map-assets", mapBounds],
@@ -265,22 +274,27 @@ export function MapPage() {
   const [importing, setImporting] = useState(false);
   const [routeError, setRouteError] = useState("");
   const [fileName, setFileName] = useState("");
-  const [search, setSearch] = useState("");
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeDistance, setRouteDistance] = useState<number | null>(null);
   const [fileModal, setFileModal] = useState<"import" | "download" | null>(null);
   const { data: user } = useQuery({ queryKey: ["me"], queryFn: () => api<{ role: string }>("/me") });
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setAssetPage(1); setCatalogSearch(search.trim()); }, 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+  const knownAssets = useMemo(() => [...new Map([...networkSegments, ...(mapAssetsQuery.data ?? [])].map((asset) => [asset.id, asset])).values()], [networkSegments, mapAssetsQuery.data]);
+
   const allNetworkFeatures = useMemo(() => assetFeatures(mapAssetsQuery.data ?? []), [mapAssetsQuery.data]);
   const iconCategoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const asset of networkSegments)
+    for (const asset of mapAssetsQuery.data ?? [])
       if (asset.geometryType?.toUpperCase() === "POINT") {
         const category = assetIconCategory(asset);
         counts.set(category, (counts.get(category) ?? 0) + 1);
       }
     return [...counts].sort(([a], [b]) => a.localeCompare(b, "id"));
-  }, [networkSegments]);
+  }, [mapAssetsQuery.data]);
   const activeIconCategories = useMemo(() => selectedIconCategories ?? iconCategoryCounts.map(([category]) => category), [selectedIconCategories, iconCategoryCounts]);
   useEffect(() => {
     if (selectedIconCategories === null) localStorage.removeItem("atlas-map-icon-categories-v2");
@@ -290,14 +304,14 @@ export function MapPage() {
   const pointFeatures = useMemo(() => lineCollection(allNetworkFeatures.filter((feature) => feature.geometry.type === "Point" && activeIconCategories.includes(String(feature.properties.iconCategory)))), [allNetworkFeatures, activeIconCategories]);
   const routeFeatures = useMemo(() => routeCollection([...confirmedRoutes, ...(routePreview ? [routePreview] : [])]), [confirmedRoutes, routePreview]);
   const routePointFeatures = useMemo(() => pointCollection(routePoints), [routePoints]);
-  const selectedAsset = networkSegments.find((item) => item.id === selectedId)
-    ?? networkSegments.find((item) => ftthDesignGroupId(item))
+  const selectedAsset = knownAssets.find((item) => item.id === selectedId)
+    ?? knownAssets.find((item) => ftthDesignGroupId(item))
     ?? networkSegments[0];
   const selectedDraftId = selectedAsset ? ftthDesignGroupId(selectedAsset) : undefined;
-  const selectedDraftDesignAnchor = selectedDraftId ? networkSegments.find((asset) =>
+  const selectedDraftDesignAnchor = selectedDraftId ? knownAssets.find((asset) =>
     ftthDesignGroupId(asset) === selectedDraftId && asset.attributes?.designAnchor === true,
   ) : undefined;
-  const selectedDraftOlt = selectedDraftId ? networkSegments.find((asset) =>
+  const selectedDraftOlt = selectedDraftId ? knownAssets.find((asset) =>
     ftthDesignGroupId(asset) === selectedDraftId
     && (String(asset.attributes?.assetKind ?? "").toUpperCase() === "OLT" || /^OLT(?:\b|\s|·)/i.test(asset.name)),
   ) : undefined;
@@ -360,9 +374,10 @@ export function MapPage() {
     ftthDraftGroups.set(groupId, group);
     return false;
   });
-  const getDraftFeatureCount = (groupId: string) => networkSegments.filter((asset) => ftthDesignGroupId(asset) === groupId).length;
+  const getDraftFeatureCount = (groupId: string) => knownAssets.filter((asset) => ftthDesignGroupId(asset) === groupId).length;
   const matchedImported = imported.filter((item) => (item.source === "kml" || item.assetType !== "segment") && matchesAssetSearch(item, normalizedSearch));
   const filteredImported = matchedImported.slice(0, 100);
+  const catalogPageCount = Math.max(1, Math.ceil((catalogQuery.data?.total ?? 0) / (catalogQuery.data?.pageSize ?? 50)));
 
   useEffect(() => {
     const closeOnOutsideClick = (event: PointerEvent) => {
@@ -562,7 +577,7 @@ export function MapPage() {
       setSelectedId(target.id);
       localStorage.removeItem("atlas-map-focus-design");
     }
-  }, [networkSegments]);
+  }, [knownAssets]);
   useEffect(() => {
     if (!draftBoundary || !mapReady || !map.current) return;
     const bounds = draftBoundary.geometry.coordinates[0].reduce((value, coordinate) => value.extend(coordinate as Coordinate), new LngLatBounds());
@@ -591,7 +606,7 @@ export function MapPage() {
     const instance = map.current;
     if (!instance || !mapReady) return;
     const icons = new Map<string, { url: string; color: string }>();
-    const assetsById = new Map(networkSegments.map((asset) => [asset.id, asset]));
+    const assetsById = new Map(knownAssets.map((asset) => [asset.id, asset]));
     for (const feature of allNetworkFeatures) {
       const url = String(feature.properties?.iconImageId ?? "");
       if (url) {
@@ -616,7 +631,7 @@ export function MapPage() {
         })
         .catch(() => undefined);
     }
-  }, [allNetworkFeatures, mapReady, mapAssetsQuery.data]);
+  }, [allNetworkFeatures, mapReady, knownAssets]);
 
   async function importFile(file?: File) {
     if (!file) return;
@@ -799,7 +814,7 @@ export function MapPage() {
           <div className="map-tools">
             <div className="map-search">
               <label className="form-label fw-semibold">
-                Daftar aset jaringan <span className="text-muted fw-normal">({standaloneSegments.length + ftthDraftGroups.size + filteredImported.length})</span>
+                Daftar aset jaringan <span className="text-muted fw-normal">({(catalogQuery.data?.total ?? 0).toLocaleString("id-ID")})</span>
               </label>
               <div className="input-group">
                 <span className="input-group-text bg-white">
@@ -883,6 +898,8 @@ export function MapPage() {
             )}
           </div>
           <div className="segment-list">
+            {catalogQuery.isPending && <div className="map-empty-list">Memuat daftar aset…</div>}
+            {catalogQuery.isError && <div className="map-empty-list">Daftar aset tidak dapat dimuat.</div>}
             {standaloneSegments.map((segment) => (
               <button key={segment.id} className={`segment-item ${selectedId === segment.id ? "selected" : ""}`} onClick={() => focusAsset(segment)}>
                 <span className="segment-dot" />
@@ -918,8 +935,15 @@ export function MapPage() {
               </button>
             ))}
             {matchedImported.length > filteredImported.length && <div className="map-empty-list">Menampilkan 100 dari {matchedImported.length} aset impor. Gunakan pencarian untuk mempersempit daftar.</div>}
-            {filteredSegments.length + matchedImported.length === 0 && <div className="map-empty-list">Tidak ada aset jaringan yang cocok.</div>}
+            {!catalogQuery.isPending && filteredSegments.length + matchedImported.length === 0 && <div className="map-empty-list">Tidak ada aset jaringan yang cocok.</div>}
           </div>
+          {catalogQuery.data && catalogQuery.data.total > catalogQuery.data.pageSize && <div className="asset-pagination">
+            <small className="text-muted">Halaman {assetPage.toLocaleString("id-ID")} dari {catalogPageCount.toLocaleString("id-ID")}{catalogQuery.isFetching ? " · Memuat…" : ""}</small>
+            <div className="btn-group btn-group-sm" role="group" aria-label="Pagination daftar aset">
+              <button className="btn btn-outline-secondary" aria-label="Sebelumnya" title="Sebelumnya" onClick={() => setAssetPage((page) => Math.max(1, page - 1))} disabled={assetPage <= 1 || catalogQuery.isPlaceholderData}><i className="bi bi-chevron-left" aria-hidden="true" /></button>
+              <button className="btn btn-outline-secondary" aria-label="Berikutnya" title="Berikutnya" onClick={() => setAssetPage((page) => Math.min(catalogPageCount, page + 1))} disabled={assetPage >= catalogPageCount || catalogQuery.isPlaceholderData}><i className="bi bi-chevron-right" aria-hidden="true" /></button>
+            </div>
+          </div>}
           <div className="segment-detail">
             <div className="detail-label">{selectedSegment ? "DETAIL SEGMEN" : "DETAIL DATA IMPOR"}</div>
             <h3>{selectedName}</h3>
