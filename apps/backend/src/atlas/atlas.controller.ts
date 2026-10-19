@@ -95,16 +95,20 @@ export class AtlasController {
   async assets(@Req() req: IncomingMessage, @Query('search') search?: string) { await this.auth.requireUser(req); return this.atlas.listAssets(search ?? '') }
 
   @Get('assets/catalog')
-  async assetCatalog(@Req() req: IncomingMessage, @Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+  async assetCatalog(@Req() req: IncomingMessage, @Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('coreFilter') coreFilter = 'all') {
     await this.auth.requireUser(req)
     const parsedPage = page === undefined ? 1 : Number(page)
     const parsedPageSize = pageSize === undefined ? 50 : Number(pageSize)
     if (!Number.isInteger(parsedPage) || parsedPage < 1 || !Number.isInteger(parsedPageSize) || parsedPageSize < 1 || parsedPageSize > 100) throw new BadRequestException({ message: 'Parameter pagination aset tidak valid.' })
-    return this.atlas.listAssetPage(search ?? '', parsedPage, parsedPageSize)
+    if (!['all','segments','filled','empty'].includes(coreFilter)) throw new BadRequestException({ message: 'Filter core tidak valid.' })
+    return this.atlas.listAssetPage(search ?? '', parsedPage, parsedPageSize, coreFilter)
   }
 
   @Get('assets/bookable-segments')
   async bookableSegments(@Req() req: IncomingMessage) { await this.auth.requireUser(req); return this.atlas.listBookableSegments() }
+
+  @Get('assets/bounds')
+  async mapBounds(@Req() req: IncomingMessage) { await this.auth.requireUser(req); return this.atlas.mapBounds() }
 
   @Get('assets/map')
   async mapAssets(@Req() req: IncomingMessage, @Query('bbox') bbox?: string) {

@@ -148,16 +148,20 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
   }
 
-  async listAssetPage(search = '', page = 1, pageSize = 50) {
+  async listAssetPage(search = '', page = 1, pageSize = 50, coreFilter = 'all') {
     const filter = search.trim()
     const match = `%${filter}%`
+    const conditions = `($1='' OR a.name ILIKE $2 OR a.area ILIKE $2 OR a.cable_type ILIKE $2 OR a.asset_type ILIKE $2 OR a.attributes::text ILIKE $2)
+      AND ($3='all' OR a.asset_type='segment')
+      AND ($3<>'filled' OR a.total_cores>0)
+      AND ($3<>'empty' OR a.total_cores=0)`
     const [{ rows: countRows }, { rows }] = await Promise.all([
       this.db.query<{ total: number }>(`SELECT count(*)::int AS total FROM network_assets a
-        WHERE $1='' OR a.name ILIKE $2 OR a.area ILIKE $2 OR a.cable_type ILIKE $2 OR a.asset_type ILIKE $2 OR a.attributes::text ILIKE $2`, [filter, match]),
+        WHERE ${conditions}`, [filter, match, coreFilter]),
       this.db.query<AssetRecord>(`WITH page AS (
           SELECT a.id,a.name FROM network_assets a
-          WHERE $1='' OR a.name ILIKE $2 OR a.area ILIKE $2 OR a.cable_type ILIKE $2 OR a.asset_type ILIKE $2 OR a.attributes::text ILIKE $2
-          ORDER BY a.name,a.id LIMIT $3 OFFSET $4
+          WHERE ${conditions}
+          ORDER BY a.name,a.id LIMIT $4 OFFSET $5
         )
         SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
           a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
@@ -166,7 +170,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
           count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
           GeometryType(a.geometry) AS "geometryType",NULL::jsonb AS geometry,a.attributes,a.created_at AS "createdAt"
         FROM page p JOIN network_assets a ON a.id=p.id LEFT JOIN network_cores c ON c.asset_id=a.id
-        GROUP BY a.id ORDER BY a.name,a.id`, [filter, match, pageSize, (page - 1) * pageSize]),
+        GROUP BY a.id ORDER BY a.name,a.id`, [filter, match, coreFilter, pageSize, (page - 1) * pageSize]),
     ])
     const pattern = new RegExp((await this.getCableNamePattern()).pattern)
     return { items: rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) })), total: countRows[0].total, page, pageSize }
@@ -192,6 +196,13 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       WHERE a.asset_type='segment' AND a.total_cores>0
       GROUP BY a.id ORDER BY a.name,a.id`)
     return rows
+  }
+
+  async mapBounds() {
+    const { rows } = await this.db.query(`SELECT ST_XMin(extent) AS west,ST_YMin(extent) AS south,ST_XMax(extent) AS east,ST_YMax(extent) AS north
+      FROM (SELECT ST_Extent(geometry) AS extent FROM network_assets) bounds`)
+    const { west, south, east, north } = rows[0]
+    return { bounds: west === null ? null : [west, south, east, north] }
   }
 
   async listMapAssets(bounds: [number, number, number, number]) {

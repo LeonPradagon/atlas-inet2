@@ -87,6 +87,11 @@ const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, 
           name: item.name,
           area: item.area,
           source: item.source,
+          assetType: item.assetType,
+          totalCores: item.totalCores,
+          usedCores: item.usedCores,
+          bookedCores: item.bookedCores,
+          idleCores: item.idleCores,
           imported: item.source !== "managed",
           geometryType: item.geometry.type,
           iconCategory,
@@ -221,13 +226,31 @@ function matchesAssetSearch(asset: NetworkAsset, query: string) {
   return searchable.includes(query);
 }
 
+function SegmentCoreSummary({ asset }: { asset: NetworkAsset }) {
+  if (asset.assetType !== "segment") return null;
+  if (!asset.totalCores) return <small className="segment-core-empty">Core belum diisi</small>;
+  return <span className="segment-core-summary">
+    <span>{asset.totalCores.toLocaleString("id-ID")} total</span>
+    <span className="core-used">{asset.usedCores.toLocaleString("id-ID")} terpakai</span>
+    <span className="core-booked">{asset.bookedCores.toLocaleString("id-ID")} dibooking</span>
+    <span className="core-available">{asset.idleCores.toLocaleString("id-ID")} tersedia</span>
+  </span>;
+}
+
 export function MapPage() {
+  const initialBounds = useQuery({
+    queryKey: ["network-map-bounds"],
+    queryFn: () => api<{ bounds: [number, number, number, number] | null }>("/assets/bounds"),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
   const [assetPage, setAssetPage] = useState(1);
   const [search, setSearch] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
+  const [coreFilter, setCoreFilter] = useState("all");
   const catalogQuery = useQuery({
-    queryKey: ["segment-catalog", assetPage, catalogSearch],
-    queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}`),
+    queryKey: ["segment-catalog", assetPage, catalogSearch, coreFilter],
+    queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${coreFilter}`),
     refetchInterval: 30_000,
     placeholderData: (previous) => previous,
   });
@@ -398,21 +421,26 @@ export function MapPage() {
   }
 
   useEffect(() => {
-    if (!mapElement.current || map.current) return;
+    if (!mapElement.current || map.current || initialBounds.isPending) return;
     setWorkerUrl(workerUrl);
-    let focus: Coordinate | null = null;
-    try {
-      const savedFocus = JSON.parse(localStorage.getItem("atlas-map-focus") ?? "null");
-      if (Array.isArray(savedFocus) && savedFocus.length === 2 && savedFocus.every((value) => typeof value === "number" && Number.isFinite(value))) focus = savedFocus as Coordinate;
-    } catch { /* Ignore an invalid saved map position. */ }
-    const instance = new MapLibreMap({ container: mapElement.current, style: "https://tiles.openfreemap.org/styles/liberty", center: focus ?? [106.79, -6.26], zoom: focus ? 15 : 11.2 });
+    localStorage.removeItem("atlas-map-focus");
+    localStorage.removeItem("atlas-map-focus-design");
+    const instance = new MapLibreMap({
+      container: mapElement.current,
+      style: "https://tiles.openfreemap.org/styles/liberty",
+      center: [118, -2.5],
+      zoom: 4,
+      ...(initialBounds.data?.bounds ? {
+        bounds: initialBounds.data.bounds,
+        fitBoundsOptions: { padding: 48, maxZoom: 10, duration: 0 },
+      } : {}),
+    });
     map.current = instance;
     const resizeObserver = new ResizeObserver(() => instance.resize());
     resizeObserver.observe(mapElement.current);
     instance.addControl(new NavigationControl(), "top-right");
     instance.on("error", () => setMapError(true));
     instance.on("load", () => {
-      if (focus) localStorage.removeItem("atlas-map-focus");
       addAtlasMapIcons(instance);
       const updateBounds = () => {
         const bounds = instance.getBounds();
@@ -510,7 +538,7 @@ export function MapPage() {
         const id = String(feature?.properties?.id ?? "");
         if (id) setSelectedId(id);
       });
-      hoverPopup.current = new Popup({ closeButton: false, closeOnClick: false, anchor: "bottom", offset: 12, maxWidth: "180px", className: "network-hover-popup" });
+      hoverPopup.current = new Popup({ closeButton: false, closeOnClick: false, anchor: "bottom", offset: 12, maxWidth: "260px", className: "network-hover-popup" });
       instance.on("mousemove", (event) => {
         const clusterFeature = instance.queryRenderedFeatures(event.point, { layers: ["network-clusters"] })[0];
         const pointFeature = pointFeatureAtCursor(instance, event.point);
@@ -532,6 +560,14 @@ export function MapPage() {
         const sourceLabel = feature.properties?.source === "kml" ? "KML/KMZ" : feature.properties?.source === "xlsx" ? "Excel" : String(feature.properties?.area ?? "Jaringan");
         detail.textContent = isCluster ? "Klik untuk melihat lebih dekat" : `${sourceLabel} · ${String(feature.properties?.geometryType ?? "Segmen")} · Klik untuk detail`;
         content.append(title, document.createElement("br"), detail);
+        if (!isCluster && feature.properties?.assetType === "segment") {
+          const cores = document.createElement("small");
+          const total = Number(feature.properties.totalCores ?? 0);
+          cores.textContent = total > 0
+            ? `${total} core total · ${Number(feature.properties.usedCores ?? 0)} terpakai · ${Number(feature.properties.bookedCores ?? 0)} dibooking · ${Number(feature.properties.idleCores ?? 0)} tersedia`
+            : "Core belum diisi";
+          content.append(document.createElement("br"), cores);
+        }
         const coordinates: Coordinate = isCluster || pointFeature ? (feature.geometry as Point).coordinates as Coordinate : [event.lngLat.lng, event.lngLat.lat];
         hoverPopup.current?.setLngLat(coordinates).setDOMContent(content).addTo(instance);
       });
@@ -559,7 +595,7 @@ export function MapPage() {
       map.current?.remove();
       map.current = null;
     };
-  }, []);
+  }, [initialBounds.data, initialBounds.isPending]);
 
   useEffect(() => {
     (map.current?.getSource("network-shapes") as GeoJSONSource | undefined)?.setData(shapeFeatures);
@@ -568,21 +604,7 @@ export function MapPage() {
   useEffect(() => {
     (map.current?.getSource("selected-ftth-boundary") as GeoJSONSource | undefined)?.setData({ type: "FeatureCollection", features: draftBoundary ? [draftBoundary] : [] });
   }, [draftBoundary, mapReady]);
-  useEffect(() => {
-    const designId = localStorage.getItem("atlas-map-focus-design");
-    if (!designId) return;
-    const target = networkSegments.find((asset) => asset.attributes?.ftthDesignId === designId && asset.attributes?.assetKind === "ROUTE")
-      ?? networkSegments.find((asset) => asset.attributes?.ftthDesignId === designId);
-    if (target) {
-      setSelectedId(target.id);
-      localStorage.removeItem("atlas-map-focus-design");
-    }
-  }, [knownAssets]);
-  useEffect(() => {
-    if (!draftBoundary || !mapReady || !map.current) return;
-    const bounds = draftBoundary.geometry.coordinates[0].reduce((value, coordinate) => value.extend(coordinate as Coordinate), new LngLatBounds());
-    map.current.fitBounds(bounds, { padding: 72, maxZoom: 16, duration: 450 });
-  }, [draftBoundary, mapReady]);
+
   useEffect(() => {
     const instance = map.current;
     if (!instance || !mapReady) return;
@@ -822,6 +844,13 @@ export function MapPage() {
                 </span>
                 <input className="form-control" placeholder="Cari kabel, area, tiang, ODC/ODP, atau lokasi" value={search} onChange={(event) => setSearch(event.target.value)} />
               </div>
+              <label className="form-label small mt-2 mb-1" htmlFor="map-core-filter">Filter segmen / core</label>
+              <select id="map-core-filter" className="form-select form-select-sm" value={coreFilter} onChange={(event) => { setCoreFilter(event.target.value); setAssetPage(1); }}>
+                <option value="all">Semua aset</option>
+                <option value="segments">Semua segmen</option>
+                <option value="filled">Core sudah diisi</option>
+                <option value="empty">Core belum diisi</option>
+              </select>
             </div>
             <div className="map-tool-actions">
               {user?.role === "ADMIN" && <>
@@ -906,8 +935,9 @@ export function MapPage() {
                 <span className="segment-meta">
                   <b>{segment.name}</b>
                   <small>
-                    {segment.area} · {segment.totalCores} core
+                    {segment.area || "Segmen jaringan"}
                   </small>
+                  <SegmentCoreSummary asset={segment} />
                 </span>
                 <i className="bi bi-chevron-right" />
               </button>
@@ -918,7 +948,7 @@ export function MapPage() {
                 <div>{segments.map((segment) => (
                   <button key={segment.id} className={`segment-item ${selectedId === segment.id ? "selected" : ""}`} onClick={() => focusAsset(segment)}>
                     <span className="segment-dot" style={{ background: segment.attributes?.routeType === "FEEDER" ? "#ff0000" : "#a000ff" }} />
-                    <span className="segment-meta"><b>{segment.name}</b><small>{segment.attributes?.routeType === "FEEDER" ? "Kabel feeder" : "Kabel distribusi"} · {segment.area}</small></span>
+                    <span className="segment-meta"><b>{segment.name}</b><small>{segment.attributes?.routeType === "FEEDER" ? "Kabel feeder" : "Kabel distribusi"} · {segment.area}</small><SegmentCoreSummary asset={segment} /></span>
                     <i className="bi bi-chevron-right" />
                   </button>
                 ))}</div>
@@ -929,7 +959,8 @@ export function MapPage() {
                 <span className="segment-dot" />
                 <span className="segment-meta">
                   <b>{line.name}</b>
-                  <small>{line.source === "kml" ? "KML/KMZ" : "Excel"} · {line.geometry?.type ?? "aset"}</small>
+                  <small>{line.source === "kml" ? "KML/KMZ" : "Excel"} · {line.assetType === "segment" ? "Segmen kabel" : "Aset jaringan"}</small>
+                  <SegmentCoreSummary asset={line} />
                 </span>
                 <i className="bi bi-chevron-right" />
               </button>

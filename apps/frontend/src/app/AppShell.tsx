@@ -81,9 +81,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             <i className="bi bi-list" aria-hidden="true" />
           </button>
           <Link to="/" className="navbar-brand header-brand d-flex align-items-center gap-2 mb-0">
-            <span className="brand-mark">
-              <i className="bi bi-broadcast-pin" />
-            </span>
+            <img className="corporate-logo" src="/sinergy-networks-brd.png" alt="Sinergy Networks" width="160" height="42" />
             <span>
               ATLAS <small>NETWORK INTELLIGENCE</small>
             </span>
@@ -114,8 +112,11 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
       </nav>
       <aside id="atlas-sidebar" className="app-sidebar">
         <Link to="/" className="atlas-sidebar-brand">
-          <span className="brand-mark"><i className="bi bi-broadcast-pin" /></span>
-          <span>ATLAS<small>NETWORK INTELLIGENCE</small></span>
+          <span className="sidebar-corporate-logo">
+            <img className="corporate-logo" src="/sinergy-networks-brd.png" alt="Sinergy Networks — Borderless Connectivity" width="190" height="50" />
+            <img className="sidebar-logo-wordmark" src="/sinergy-networks-brd.png" alt="" aria-hidden="true" width="190" height="50" />
+          </span>
+          <span className="corporate-product-name">ATLAS · NETWORK INTELLIGENCE</span>
         </Link>
         <nav className="sidebar-menu-groups" aria-label="Navigasi utama">
           <div className="sidebar-menu-group-label">MAIN MENU</div>
