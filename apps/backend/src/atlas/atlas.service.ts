@@ -425,7 +425,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       const id = `BKG-${randomUUID().toUpperCase()}`
       await client.query(`INSERT INTO bookings(id,customer,pic_customer,pic_presales,segment_id,cores,status,requested_by,requested_at)
         VALUES($1,$2,$3,$4,$5,$6,'Pending Approval',$7,clock_timestamp())`, [id,customer,picCustomer,picPresales,segmentId,cores,userId])
-      await this.notifyAdmins(client,'Persetujuan booking core diperlukan',`${customer} meminta ${cores} core pada segmen ${segmentId}.`)
+      await this.notifyAdmins(client,'Persetujuan booking core diperlukan',`${customer} meminta ${cores} core pada segmen ${segmentId}.`,id)
       await this.audit(client,userId,'BOOKING_CREATED','BOOKING',id,{ segmentId,cores,status:'Pending Approval' })
       return { id, customer, picCustomer, picPresales, segmentId, cores, status: 'Pending Approval' }
     })
@@ -447,7 +447,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       const message = status === 'Booked'
         ? `Booking ${id} disetujui dan ${booking.cores} core telah dialokasikan.`
         : `Booking ${id} disetujui dan masuk waiting list karena kapasitas belum mencukupi.`
-      await this.notifyPresales(client,'Booking core disetujui',message,booking.requested_by)
+      await this.notifyPresales(client,'Booking core disetujui',message,booking.requested_by,id)
       return { id,status,allocatedBookingIds }
     })
   }
@@ -462,7 +462,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       if (booking.status !== 'Pending Approval') throw new ConflictException({ message: 'Hanya booking yang menunggu persetujuan yang dapat ditolak.' })
       await client.query("UPDATE bookings SET status='Rejected',rejected_by=$2,rejected_at=clock_timestamp() WHERE id=$1", [id,userId])
       await this.audit(client,userId,'BOOKING_REJECTED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores })
-      await this.notifyPresales(client,'Booking core ditolak',`Permintaan booking ${id} untuk ${booking.customer} ditolak oleh ADMIN.`,booking.requested_by)
+      await this.notifyPresales(client,'Booking core ditolak',`Permintaan booking ${id} untuk ${booking.customer} ditolak oleh ADMIN.`,booking.requested_by,id)
       return { id,status:'Rejected' }
     })
   }
@@ -487,7 +487,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       await client.query("UPDATE bookings SET status='Released',released_at=now() WHERE id=$1", [id])
       const allocatedBookingIds = await this.allocateWaiting(client,booking.segment_id,userId)
       await this.audit(client,userId,'BOOKING_RELEASED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores,allocatedBookingIds })
-      await this.notifyPresales(client,'Booking core dilepas',`${booking.customer}: ${booking.cores} core dilepas. ${allocatedBookingIds.length} permintaan waiting list dialokasikan.`,booking.requested_by ?? userId)
+      await this.notifyPresales(client,'Booking core dilepas',`${booking.customer}: ${booking.cores} core dilepas. ${allocatedBookingIds.length} permintaan waiting list dialokasikan.`,booking.requested_by ?? userId,id)
       return { released: id, allocated: allocatedBookingIds[0] ?? null, allocatedBookingIds }
     })
   }
@@ -504,20 +504,20 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       await this.assignCores(client,booking.id,available.map((row) => row.id))
       await client.query("UPDATE bookings SET status='Booked',expires_at=now()+($2||' days')::interval WHERE id=$1", [booking.id,days])
       await this.audit(client,actorId,'WAITING_LIST_ALLOCATED','BOOKING',booking.id,{ segmentId,cores: booking.cores })
-      await this.notifyPresales(client,'Waiting list dialokasikan',`${booking.customer}: ${booking.cores} core tersedia dan booking ${booking.id} aktif.`,booking.requested_by)
+      await this.notifyPresales(client,'Waiting list dialokasikan',`${booking.customer}: ${booking.cores} core tersedia dan booking ${booking.id} aktif.`,booking.requested_by,booking.id)
       allocated.push(booking.id)
     }
     return allocated
   }
 
-  private async notifyPresales(client: PoolClient, title: string, message: string, requestorId?: string) {
-    await client.query(`INSERT INTO notifications(user_id,title,message)
-      SELECT id,$1,$2 FROM "user" WHERE role='PRESALES' OR id=$3`, [title,message,requestorId ?? ''])
+  private async notifyPresales(client: PoolClient, title: string, message: string, requestorId?: string, bookingId?: string) {
+    await client.query(`INSERT INTO notifications(user_id,title,message,booking_id)
+      SELECT id,$1,$2,$4 FROM "user" WHERE role='PRESALES' OR id=$3`, [title,message,requestorId ?? '',bookingId ?? null])
   }
 
-  private async notifyAdmins(client: PoolClient, title: string, message: string) {
-    await client.query(`INSERT INTO notifications(user_id,title,message)
-      SELECT id,$1,$2 FROM "user" WHERE role='ADMIN'`, [title,message])
+  private async notifyAdmins(client: PoolClient, title: string, message: string, bookingId?: string) {
+    await client.query(`INSERT INTO notifications(user_id,title,message,booking_id)
+      SELECT id,$1,$2,$3 FROM "user" WHERE role='ADMIN'`, [title,message,bookingId ?? null])
   }
 
   async expireBookings() {
@@ -530,7 +530,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       await client.query("UPDATE network_cores SET status='Available' WHERE id IN (SELECT core_id FROM booking_cores WHERE booking_id=$1)", [id])
       await client.query('DELETE FROM booking_cores WHERE booking_id=$1', [id])
       await client.query("UPDATE bookings SET status='Expired',released_at=now() WHERE id=$1", [id])
-      await this.notifyPresales(client,'Booking core kedaluwarsa',`${booking.customer}: masa booking ${booking.id} berakhir dan ${booking.cores} core dilepas.`,booking.requested_by)
+      await this.notifyPresales(client,'Booking core kedaluwarsa',`${booking.customer}: masa booking ${booking.id} berakhir dan ${booking.cores} core dilepas.`,booking.requested_by,id)
       const allocatedBookingIds = await this.allocateWaiting(client,booking.segment_id)
       await this.audit(client,null,'BOOKING_EXPIRED','BOOKING',id,{ segmentId: booking.segment_id,cores: booking.cores,allocatedBookingIds })
     })
@@ -547,7 +547,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
   }
 
   async notifications(userId: string) {
-    const { rows } = await this.db.query('SELECT id,title,message,read_at AS "readAt",created_at AS "createdAt" FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100', [userId])
+    const { rows } = await this.db.query('SELECT id,title,message,booking_id AS "bookingId",read_at AS "readAt",created_at AS "createdAt" FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100', [userId])
     return rows
   }
   async markNotificationRead(id: string, userId: string) {

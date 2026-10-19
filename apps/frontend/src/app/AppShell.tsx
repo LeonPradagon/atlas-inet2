@@ -1,4 +1,4 @@
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import type { MouseEventHandler, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -7,7 +7,7 @@ import { AccountMenu } from "../components/AccountMenu";
 import { api } from "../lib/api";
 
 type User = { id: string; name: string; email: string; role: string };
-type Notification = { id: number; title: string; message: string; readAt: string | null };
+type Notification = { id: number; title: string; message: string; readAt: string | null; bookingId: string | null };
 
 const navSections = [
   { label: "UTAMA", items: [{ to: "/", label: "Dashboard", icon: "bi-grid-1x2-fill" }] },
@@ -43,6 +43,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
   const mobileAnalysisMenu = useRef<HTMLDetailsElement>(null);
   const notificationMenu = useRef<HTMLDetailsElement>(null);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const previousPathname = useRef(pathname);
   const analysisPath = pathname.startsWith("/analisis") || pathname === "/riwayat-analisis";
@@ -66,6 +67,11 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
   const isAdmin = user?.role === "ADMIN";
   const { data: notifications = [] } = useQuery({ queryKey: ["notifications"], queryFn: () => api<Notification[]>("/notifications"), refetchInterval: 60_000 });
   const markRead = useMutation({ mutationFn: (id: number) => api(`/notifications/${id}/read`, { method: "PATCH" }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }) });
+  const openNotification = (item: Notification) => {
+    if (!item.readAt) markRead.mutate(item.id);
+    notificationMenu.current?.removeAttribute("open");
+    void navigate({ to: "/booking-core", search: { bookingId: item.bookingId ?? undefined } });
+  };
   const unread = notifications.filter((item) => !item.readAt);
   return (
     <div className={`app-wrapper ${sidebarHidden ? "atlas-sidebar-hidden" : ""}`}>
@@ -92,7 +98,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
                 <b>Notifikasi</b>
                 {notifications.length ? (
                   notifications.slice(0, 8).map((item) => (
-                    <button key={item.id} className={`notification-item ${item.readAt ? "" : "unread"}`} onClick={() => !item.readAt && markRead.mutate(item.id)}>
+                    <button key={item.id} className={`notification-item ${item.readAt ? "" : "unread"}`} onClick={() => openNotification(item)}>
                       <strong>{item.title}</strong>
                       <span>{item.message}</span>
                     </button>
