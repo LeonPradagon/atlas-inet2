@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f4f6f9" />
+    <script>
+      let theme;
+      try { theme = localStorage.getItem('atlas-theme'); } catch {}
+      if (theme !== 'light' && theme !== 'dark') theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.bsTheme = theme;
+      document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#101827' : '#f4f6f9';
+    </script>
     <meta name="description" content="ATLAS - Asset Tracking, Location Analytics & Sales Intelligence Tools" />
     <title>ATLAS | Network Intelligence</title>
   </head>

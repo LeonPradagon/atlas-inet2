@@ -1,0 +1,68 @@
+.theme-toggle { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; flex-shrink: 0; font-size: 16px; }
+.auth-card { position: relative; }
+.auth-theme-toggle { position: absolute; top: 12px; right: 12px; }
+
+[data-bs-theme="dark"] {
+  color-scheme: dark;
+  --bs-body-bg: #101827;
+  --bs-body-color: #dce5f2;
+  --bs-secondary-color: #a5b3c8;
+  --bs-secondary-bg: #243247;
+  --bs-tertiary-bg: #1d2a3d;
+  --bs-border-color: #334155;
+  --bs-heading-color: #edf2fa;
+  --bs-link-color: #9aafff;
+  --bs-link-hover-color: #c2ceff;
+  --bs-primary-text-emphasis: #b2c1ff;
+  --atlas-surface: #182336;
+  --atlas-raised: #213047;
+  --atlas-muted: #a5b3c8;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
+}
+[data-bs-theme="dark"] body,
+[data-bs-theme="dark"] .auth-screen,
+[data-bs-theme="dark"] .app-main,
+[data-bs-theme="dark"] .content-wrapper { background: var(--bs-body-bg); color: var(--bs-body-color); }
+[data-bs-theme="dark"] :is(.app-header, .main-footer, .metric-card, .card, .panel-card .card-header, .auth-card, .booking-modal, .file-modal, .notification-popover, .notification-item, .account-popover, .account-menu-item, .quick-action, .map-layout, .map-sidebar, .map-overlay-label, .map-error, .map-icon-filter>summary, .map-icon-filter-menu, .segment-item, .ftth-design-group, .file-modal-option, .mobile-analysis-popover, .distance-icon) {
+  background: var(--atlas-surface); color: var(--bs-body-color); border-color: var(--bs-border-color);
+}
+[data-bs-theme="dark"] .bg-white { background-color: var(--atlas-surface) !important; }
+[data-bs-theme="dark"] :is(.bg-light, .bg-body-tertiary) { background-color: var(--bs-tertiary-bg) !important; }
+[data-bs-theme="dark"] :is(.text-dark, .text-black) { color: var(--bs-heading-color) !important; }
+[data-bs-theme="dark"] .text-primary { color: #a2b5ff !important; }
+[data-bs-theme="dark"] .text-muted { color: var(--atlas-muted) !important; }
+[data-bs-theme="dark"] :is(.content-heading h1, .welcome-banner h2, .metric-card strong, .card-header h3, .activity-row b, .segment-meta b, .asset-info b, .coordinates-grid b, .distance-card strong, .result-address span, .core-breakdown>div>b, .booking-id, .file-modal h2, .upload-zone b, .upload-requirements b, .account-popover-identity b, .account-menu-item, .admin-settings summary, .asset-info-group>b) { color: var(--bs-heading-color); }
+[data-bs-theme="dark"] :is(.card-header p, .metric-label, .metric-card small, .activity-row small, .quick-actions>div p, .quick-action small, .segment-meta small, .asset-info span, .form-text, .empty-result p, .nearest-network small, .distance-card small, .coordinates-grid small, .upload-zone>span:not(.upload-icon), .upload-zone small, .upload-requirements p, .selected-file small, .bulk-empty span, .modal-heading p, .notification-item span, .user-chip small, .account-popover-identity small, .account-menu-item small, .profile-information small, .relation-group>b, .segment-waiting-item small, .audit-details, .map-legend, .map-icon-filter-list label, .map-icon-filter-list small, .main-footer span) { color: var(--atlas-muted); }
+[data-bs-theme="dark"] :is(.coordinates-grid, .distance-card, .upload-requirements, .empty-result, .upload-zone, .filter-tabs, .ftth-design-group .segment-item, .environment-pill) { background: var(--bs-tertiary-bg); color: var(--bs-body-color); border-color: var(--bs-border-color); }
+[data-bs-theme="dark"] :is(.segment-item:hover, .segment-item.selected, .notification-item.unread, .account-menu-item:hover, .file-modal-option:hover, .ftth-design-group>summary:hover, .mobile-analysis-popover .nav-link:hover, .mobile-analysis-popover .nav-link.active, .upload-zone:hover, .filter-tabs button.active, .account-menu>summary:hover, .account-menu[open]>summary) { background: #283956; color: #b6c5ff; }
+[data-bs-theme="dark"] :is(.text-link, .cable-name, .nearest-network b, .core-list-details summary, .map-icon-filter-actions button, .map-overlay-label i, .upload-zone u) { color: #a2b5ff; }
+[data-bs-theme="dark"] :is(.step-tag, .network-icon, .empty-illustration, .upload-icon, .avatar, .file-modal-option>span, .metric-icon.blue, .quick-icon.blue, .upload-requirements code, .is-pending) { background: #273858; color: #a9bbff; }
+[data-bs-theme="dark"] :is(.metric-icon.purple, .quick-icon.purple) { background: #382b50; color: #c4a4ff; }
+[data-bs-theme="dark"] :is(.metric-icon.green, .quick-icon.green, .activity-icon.booked, .text-bg-success-subtle, .is-booked, .segment-core-summary .core-available) { background: #173e35; color: #8ee0b3; }
+[data-bs-theme="dark"] :is(.metric-icon.orange, .quick-icon.orange, .activity-icon.waiting, .text-bg-warning-subtle, .is-waiting, .segment-core-summary .core-booked, .filter-tabs span) { background: #45371f; color: #f0cb85; }
+[data-bs-theme="dark"] :is(.is-rejected, .segment-core-summary .core-used) { background: #472c36; color: #ffacb9; }
+[data-bs-theme="dark"] .segment-core-summary>span { background: #2b394f; color: #c2cee0; }
+[data-bs-theme="dark"] .welcome-banner { background: linear-gradient(110deg, #202f50, #1c2940); border-color: #354665; }
+[data-bs-theme="dark"] :is(.welcome-banner p, .info-note p) { color: #b0bed6; }
+[data-bs-theme="dark"] :is(.eyebrow, .info-note, .info-note b) { color: #acbfff; }
+[data-bs-theme="dark"] .info-note { background: #202f4c; border-color: #354665; }
+[data-bs-theme="dark"] :is(.result-success, .toast-banner) { background: #173a32; color: #9eddbd; border-color: #2c5546; }
+[data-bs-theme="dark"] .result-success b { color: #a4e3c0; }
+[data-bs-theme="dark"] .result-success small { color: #abd0bc; }
+[data-bs-theme="dark"] .result-success>span { background: #245341; color: #a4e3c0; }
+[data-bs-theme="dark"] :is(.atlas-table, .audit-table) { --bs-table-bg: var(--atlas-surface); --bs-table-color: var(--bs-body-color); --bs-table-border-color: var(--bs-border-color); --bs-table-striped-bg: #1d2b40; --bs-table-hover-bg: #25364f; --bs-table-hover-color: #edf2fa; }
+[data-bs-theme="dark"] :is(.atlas-table thead th, .audit-table thead th) { background: var(--bs-tertiary-bg); color: #b1bed3; border-color: var(--bs-border-color); }
+[data-bs-theme="dark"] .table-primary { --bs-table-bg: #283b61; --bs-table-color: #e0e9ff; --bs-table-border-color: #3b5179; }
+[data-bs-theme="dark"] :is(.form-control, .form-select, .input-group-text, .map-icon-filter-menu>input) { color: var(--bs-body-color); background-color: #101b2b; border-color: #42516a; }
+[data-bs-theme="dark"] :is(.form-control, .form-select):disabled { background-color: #243045; color: #a3b0c5; }
+[data-bs-theme="dark"] .form-control::placeholder { color: #8f9fb6; }
+[data-bs-theme="dark"] .btn-light { --bs-btn-bg: #243247; --bs-btn-color: #dce5f2; --bs-btn-border-color: #38475d; --bs-btn-hover-bg: #34445f; --bs-btn-hover-color: #fff; --bs-btn-hover-border-color: #526381; --bs-btn-active-bg: #34445f; --bs-btn-active-color: #fff; }
+[data-bs-theme="dark"] .btn-outline-primary { --bs-btn-color: #a2b5ff; --bs-btn-border-color: #7f99ff; }
+[data-bs-theme="dark"] :is(.progress, .util-cell .progress, .segment-detail .progress) { background: #334155; }
+[data-bs-theme="dark"] :is(.panel-card, .activity-row, .atlas-table tbody td, .audit-table tbody td, .map-sidebar, .map-search, .map-tools, .segment-list, .segment-detail, .asset-pagination, .segment-item, .core-status-list, .core-status-list>div, .admin-settings, .segment-relations, .relation-row, .segment-waiting-item, .selected-file, .file-modal>header, .account-popover-identity, .map-icon-filter-list label+label) { border-color: var(--bs-border-color); }
+[data-bs-theme="dark"] .network-hover-popup .maplibregl-popup-content,
+[data-bs-theme="dark"] .maplibregl-popup-content { background: var(--atlas-surface); color: var(--bs-body-color); }
+[data-bs-theme="dark"] .network-hover-popup small { color: var(--atlas-muted); }
+[data-bs-theme="dark"] .maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--atlas-surface); }
+[data-bs-theme="dark"] .maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--atlas-surface); }

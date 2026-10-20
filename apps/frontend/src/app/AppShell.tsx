@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AuthGate } from "../components/AuthGate";
 import { AccountMenu } from "../components/AccountMenu";
+import { ThemeToggle } from "../components/ThemeToggle";
 import { api } from "../lib/api";
 
 type User = { id: string; name: string; email: string; role: string };
@@ -87,6 +88,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             </span>
           </Link>
           <div className="d-flex align-items-center gap-3">
+            <ThemeToggle />
             <details ref={notificationMenu} className="notification-menu">
               <summary className="btn btn-light position-relative" aria-label="Notifikasi">
                 <i className="bi bi-bell" />

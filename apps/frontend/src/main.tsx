@@ -9,6 +9,7 @@ import 'bootstrap-icons/font/bootstrap-icons.css'
 import 'admin-lte/dist/css/adminlte.min.css'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import './styles.css'
+import './dark-theme.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
