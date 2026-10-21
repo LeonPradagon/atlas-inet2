@@ -1,6 +1,9 @@
 .theme-toggle { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; flex-shrink: 0; font-size: 16px; }
 .auth-card { position: relative; }
-.auth-theme-toggle { position: absolute; top: 12px; right: 12px; }
+.auth-corporate-logo { position: relative; display: block; }
+.auth-corporate-logo .corporate-logo { width: 100%; padding: 0; background: transparent; border-radius: 0; }
+.auth-logo-wordmark { display: none; position: absolute; inset: 0; width: 100%; height: auto; filter: brightness(0) invert(1); clip-path: inset(0 0 18% 29%); pointer-events: none; }
+[data-bs-theme="dark"] .auth-logo-wordmark { display: block; }
 
 [data-bs-theme="dark"] {
   color-scheme: dark;

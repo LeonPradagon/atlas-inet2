@@ -256,9 +256,10 @@ export function MapPage() {
   });
   const networkSegments = catalogQuery.data?.items ?? [];
   const [mapBounds, setMapBounds] = useState<[number, number, number, number] | null>(null);
+  const [mapZoom, setMapZoom] = useState(4);
   const mapAssetsQuery = useQuery({
-    queryKey: ["map-assets", mapBounds],
-    queryFn: () => api<NetworkAsset[]>(`/assets/map?bbox=${mapBounds!.join(",")}`),
+    queryKey: ["map-assets", mapBounds, mapZoom],
+    queryFn: ({ signal }) => api<NetworkAsset[]>(`/assets/map?bbox=${mapBounds!.join(",")}&zoom=${mapZoom}`, { signal }),
     enabled: Boolean(mapBounds),
     staleTime: 20_000,
     placeholderData: (previous) => previous,
@@ -436,6 +437,7 @@ export function MapPage() {
       } : {}),
     });
     map.current = instance;
+    let boundsTimer: ReturnType<typeof setTimeout> | undefined;
     const resizeObserver = new ResizeObserver(() => instance.resize());
     resizeObserver.observe(mapElement.current);
     instance.addControl(new NavigationControl(), "top-right");
@@ -445,8 +447,12 @@ export function MapPage() {
       const updateBounds = () => {
         const bounds = instance.getBounds();
         setMapBounds([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].map((value) => Number(value.toFixed(4))) as [number, number, number, number]);
+        setMapZoom(Math.floor(instance.getZoom()));
       };
-      instance.on("moveend", updateBounds);
+      instance.on("moveend", () => {
+        clearTimeout(boundsTimer);
+        boundsTimer = setTimeout(updateBounds, 250);
+      });
       updateBounds();
       instance.addSource("network-shapes", { type: "geojson", data: shapeFeatures });
       instance.addSource("network-points-data", { type: "geojson", data: pointFeatures, cluster: true, clusterMaxZoom: 14, clusterRadius: 28 });
@@ -589,6 +595,7 @@ export function MapPage() {
       }
     });
     return () => {
+      clearTimeout(boundsTimer);
       resizeObserver.disconnect();
       hoverPopup.current?.remove();
       hoverPopup.current = null;
@@ -793,9 +800,9 @@ export function MapPage() {
         }
       />
       <div className="map-layout">
-        <section className="map-canvas-wrap" aria-busy={initialBounds.isPending || (!mapReady && !mapError) || mapAssetsQuery.isFetching}>
+        <section className="map-canvas-wrap" aria-busy={initialBounds.isPending || (!mapReady && !mapError) || mapAssetsQuery.isLoading}>
           <div ref={mapElement} className={`map-canvas ${mode !== "idle" ? "map-picking" : ""}`} aria-label="Peta jaringan ATLAS" />
-          {(initialBounds.isPending || (!mapReady && !mapError) || mapAssetsQuery.isFetching) && (
+          {(initialBounds.isPending || (!mapReady && !mapError) || mapAssetsQuery.isLoading) && (
             <div className="position-absolute top-50 start-50 translate-middle d-flex align-items-center gap-3 bg-body border rounded-3 shadow px-4 py-3" style={{ zIndex: 5, pointerEvents: "none" }} role="status" aria-live="polite">
               <span className="spinner-border spinner-border-sm text-primary" aria-hidden="true" />
               <span className="text-nowrap">Memuat data peta…</span>

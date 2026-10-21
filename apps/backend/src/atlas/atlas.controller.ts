@@ -111,13 +111,15 @@ export class AtlasController {
   async mapBounds(@Req() req: IncomingMessage) { await this.auth.requireUser(req); return this.atlas.mapBounds() }
 
   @Get('assets/map')
-  async mapAssets(@Req() req: IncomingMessage, @Query('bbox') bbox?: string) {
+  async mapAssets(@Req() req: IncomingMessage, @Query('bbox') bbox?: string, @Query('zoom') zoom?: string) {
     await this.auth.requireUser(req)
     const values = bbox?.split(',').map(Number) ?? []
     if (values.length !== 4 || values.some((value) => !Number.isFinite(value)) || values[0] < -180 || values[2] > 180 || values[1] < -90 || values[3] > 90 || values[0] >= values[2] || values[1] >= values[3]) {
       throw new BadRequestException({ message: 'Batas peta tidak valid.' })
     }
-    return this.atlas.listMapAssets(values as [number, number, number, number])
+    const level = zoom === undefined ? 16 : Number(zoom)
+    if (!Number.isFinite(level) || level < 0 || level > 24) throw new BadRequestException({ message: 'Zoom peta tidak valid.' })
+    return this.atlas.listMapAssets(values as [number, number, number, number], level)
   }
 
   @Post('assets/point')

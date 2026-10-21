@@ -205,17 +205,20 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return { bounds: west === null ? null : [west, south, east, north] }
   }
 
-  async listMapAssets(bounds: [number, number, number, number]) {
+  async listMapAssets(bounds: [number, number, number, number], zoom = 16) {
+    // Display geometry only; original geometry stays available for editing and exports.
+    const tolerance = zoom >= 16 ? 0 : 360 / (512 * 2 ** zoom)
     const { rows } = await this.db.query<AssetRecord>(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
       a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
       count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
       count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
       count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
-      COALESCE(a.source_geometry,ST_AsGeoJSON(a.geometry)::jsonb) AS geometry,GeometryType(a.geometry) AS "geometryType",a.attributes,a.created_at AS "createdAt"
+      ST_AsGeoJSON(CASE WHEN $5::float8 > 0 THEN ST_SimplifyPreserveTopology(a.geometry,$5::float8) ELSE a.geometry END,6)::json AS geometry,
+      GeometryType(a.geometry) AS "geometryType",a.attributes,a.created_at AS "createdAt"
       FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
       WHERE a.geometry && ST_MakeEnvelope($1,$2,$3,$4,4326)
         AND ST_Intersects(a.geometry,ST_MakeEnvelope($1,$2,$3,$4,4326))
-      GROUP BY a.id ORDER BY a.name`, bounds)
+      GROUP BY a.id ORDER BY a.name`, [...bounds, tolerance])
     const pattern = new RegExp((await this.getCableNamePattern()).pattern)
     return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
   }

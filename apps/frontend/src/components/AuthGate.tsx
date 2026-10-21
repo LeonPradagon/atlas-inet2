@@ -1,7 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
 import { api, apiClient } from '../lib/api'
-import { ThemeToggle } from './ThemeToggle'
 
 type User = { id: string; name: string; email: string; role: 'ADMIN' | 'PRESALES' }
 
@@ -18,7 +17,7 @@ function Login() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Tidak dapat masuk.') }
     finally { setLoading(false) }
   }
-  return <main className="auth-screen"><section className="auth-card"><div className="auth-theme-toggle"><ThemeToggle /></div><img className="corporate-logo auth-corporate-logo" src="/sinergy-networks-brd.png" alt="Sinergy Networks" width="230" height="60" /><h1>Masuk ke ATLAS</h1><p>Gunakan akun organisasi yang telah disiapkan administrator.</p><form onSubmit={signIn}><label className="form-label" htmlFor="email">Email</label><input id="email" name="email" type="email" className="form-control mb-3" required autoComplete="username" /><label className="form-label" htmlFor="password">Kata sandi</label><input id="password" name="password" type="password" className="form-control mb-3" required autoComplete="current-password" />{error && <div className="alert alert-danger">{error}</div>}<button className="btn btn-primary w-100" disabled={loading}>{loading ? 'Memeriksa...' : 'Masuk'}</button></form></section></main>
+  return <main className="auth-screen"><section className="auth-card"><span className="auth-corporate-logo"><img className="corporate-logo" src="/sinergy-networks-brd.png" alt="Sinergy Networks" width="230" height="60" /><img className="auth-logo-wordmark" src="/sinergy-networks-brd.png" alt="" aria-hidden="true" width="230" height="60" /></span><h1>Masuk ke ATLAS</h1><p>Gunakan akun organisasi yang telah disiapkan administrator.</p><form onSubmit={signIn}><label className="form-label" htmlFor="email">Email</label><input id="email" name="email" type="email" className="form-control mb-3" required autoComplete="username" /><label className="form-label" htmlFor="password">Kata sandi</label><input id="password" name="password" type="password" className="form-control mb-3" required autoComplete="current-password" />{error && <div className="alert alert-danger">{error}</div>}<button className="btn btn-primary w-100" disabled={loading}>{loading ? 'Memeriksa...' : 'Masuk'}</button></form></section></main>
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {
