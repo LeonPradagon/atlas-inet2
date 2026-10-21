@@ -793,8 +793,14 @@ export function MapPage() {
         }
       />
       <div className="map-layout">
-        <section className="map-canvas-wrap">
+        <section className="map-canvas-wrap" aria-busy={initialBounds.isPending || (!mapReady && !mapError) || mapAssetsQuery.isFetching}>
           <div ref={mapElement} className={`map-canvas ${mode !== "idle" ? "map-picking" : ""}`} aria-label="Peta jaringan ATLAS" />
+          {(initialBounds.isPending || (!mapReady && !mapError) || mapAssetsQuery.isFetching) && (
+            <div className="position-absolute top-50 start-50 translate-middle d-flex align-items-center gap-3 bg-body border rounded-3 shadow px-4 py-3" style={{ zIndex: 5, pointerEvents: "none" }} role="status" aria-live="polite">
+              <span className="spinner-border spinner-border-sm text-primary" aria-hidden="true" />
+              <span className="text-nowrap">Memuat data peta…</span>
+            </div>
+          )}
           <div className="map-overlay-label">
             <i className="bi bi-broadcast-pin" /> Cakupan routing Pulau Jawa
           </div>
