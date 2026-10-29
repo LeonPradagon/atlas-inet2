@@ -33,15 +33,20 @@ function normalizeSpreadsheetXml(xml: string) {
   return normalized.replace(new RegExp(`\\sxmlns:${prefix}=(['"])${spreadsheetNamespace}\\1`), ` xmlns="${spreadsheetNamespace}"`)
 }
 
-async function normalizeSpreadsheetNamespacePrefixes(buffer: Buffer) {
+async function prepareSpreadsheetForExcelJs(buffer: Buffer) {
   const archive = await JSZip.loadAsync(buffer)
   let changed = false
   for (const [path, entry] of Object.entries(archive.files)) {
-    if (entry.dir || !path.startsWith('xl/') || !path.endsWith('.xml')) continue
+    const worksheetRels = path.startsWith('xl/worksheets/_rels/') && path.endsWith('.xml.rels')
+    if (entry.dir || !path.startsWith('xl/') || (!path.endsWith('.xml') && !worksheetRels)) continue
     const xml = await entry.async('string')
-    const normalized = normalizeSpreadsheetXml(xml)
-    if (normalized !== xml) {
-      archive.file(path, normalized)
+    const normalized = path.endsWith('.xml') ? normalizeSpreadsheetXml(xml) : xml
+    // ponytail: ignore cell notes because import and analysis consume values only.
+    const prepared = worksheetRels
+      ? normalized.replace(/<(?:[\w.-]+:)?Relationship\b[^>]*\/>/g, (relationship) => /\bType\s*=\s*(["'])[^"']*\/comments\1/.test(relationship) ? '' : relationship)
+      : normalized
+    if (prepared !== xml) {
+      archive.file(path, prepared)
       changed = true
     }
   }
@@ -143,12 +148,13 @@ function featureFields(properties: Record<string, unknown>) {
   }
 }
 
-function validateGeoJsonGeometry(value: unknown): value is { type: string; coordinates: unknown } {
+function validateGeoJsonGeometry(value: unknown): value is { type: string; coordinates?: unknown; geometries?: unknown } {
   if (!value || typeof value !== 'object') return false
-  const geometry = value as { type?: unknown; coordinates?: unknown }
+  const geometry = value as { type?: unknown; coordinates?: unknown; geometries?: unknown }
   const position = (entry: unknown): entry is number[] => Array.isArray(entry) && entry.length >= 2 && entry.every((part) => typeof part === 'number' && Number.isFinite(part)) && Math.abs(entry[0]) <= 180 && Math.abs(entry[1]) <= 90
   const line = (entry: unknown): entry is number[][] => Array.isArray(entry) && entry.length >= 2 && entry.every(position)
   const ring = (entry: unknown): entry is number[][] => Array.isArray(entry) && entry.length >= 4 && entry.every(position) && JSON.stringify(entry[0]) === JSON.stringify(entry.at(-1))
+  if (geometry.type === 'GeometryCollection') return Array.isArray(geometry.geometries) && geometry.geometries.length > 0 && geometry.geometries.every(validateGeoJsonGeometry)
   if (geometry.type === 'Point') return position(geometry.coordinates)
   if (geometry.type === 'MultiPoint') return Array.isArray(geometry.coordinates) && geometry.coordinates.length > 0 && geometry.coordinates.every(position)
   if (geometry.type === 'LineString') return line(geometry.coordinates)
@@ -325,7 +331,7 @@ export class NetworkImportService {
   async importNetworkWorkbook(buffer: Buffer, actorId?: string, fileName = 'network.xlsx') {
     if (buffer.length > 10 * 1024 * 1024) throw new BadRequestException({ message: 'Ukuran file maksimal 10 MB.' })
     const workbook = new ExcelJS.Workbook()
-    try { await workbook.xlsx.load(await normalizeSpreadsheetNamespacePrefixes(buffer) as never) } catch { throw new BadRequestException({ message: 'File XLSX jaringan tidak dapat dibaca.' }) }
+    try { await workbook.xlsx.load(await prepareSpreadsheetForExcelJs(buffer) as never) } catch { throw new BadRequestException({ message: 'File XLSX jaringan tidak dapat dibaca.' }) }
     const sheet = workbook.worksheets[0]
     if (!sheet || sheet.rowCount < 2) throw new BadRequestException({ message: 'Sheet pertama harus berisi header dan minimal satu aset.' })
     if (sheet.rowCount > 10_001) throw new BadRequestException({ message: 'Maksimal 10.000 aset per file XLSX.' })
@@ -399,7 +405,7 @@ export class NetworkImportService {
     const maxRows = options.maxRows ?? 500
     if (buffer.length > maxBytes) throw new BadRequestException({ message: `Ukuran file maksimal ${Math.round(maxBytes / 1024 / 1024)} MB.` })
     const workbook = new ExcelJS.Workbook()
-    try { await workbook.xlsx.load(await normalizeSpreadsheetNamespacePrefixes(buffer) as never) } catch { throw new BadRequestException({ message: 'File XLSX tidak dapat dibaca.' }) }
+    try { await workbook.xlsx.load(await prepareSpreadsheetForExcelJs(buffer) as never) } catch { throw new BadRequestException({ message: 'File XLSX tidak dapat dibaca.' }) }
     const sheet = workbook.worksheets[0]
     if (!sheet || sheet.rowCount < 2) throw new BadRequestException({ message: 'Sheet pertama harus memiliki header dan minimal satu baris lokasi.' })
     const headers: string[] = []

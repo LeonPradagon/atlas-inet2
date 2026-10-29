@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import { LngLatBounds, Map as MapLibreMap, NavigationControl, Popup, setWorkerUrl, type FilterSpecification, type GeoJSONSource } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import type { Feature, FeatureCollection, Geometry, LineString, Point, Polygon } from "geojson";
+import type { Feature, FeatureCollection, Geometry, LineString, Point, Polygon, Position } from "geojson";
 import { SegmentRelations } from "./SegmentRelations";
 import { PageHeader } from "../../components/PageHeader";
 import { api, networkQueryKeys, type Booking, type NetworkAsset, type NetworkAssetPage } from "../../lib/api";
@@ -27,6 +28,79 @@ type ImportedStyle = {
   iconAnchor?: "center" | "bottom" | "bottom-right";
   iconOffset?: [number, number];
 };
+const networkXlsxHeaders = ["Nama", "Tipe Aset", "Area", "Tipe Kabel", "Jumlah Core", "Metode Instalasi", "Sisi Jalan", "Tinggi Tiang", "Nomor Tiang", "ODC", "ODP", "Geometry GeoJSON"];
+
+function buildNetworkWorkbook(assets: NetworkAsset[] = []) {
+  const workbook = new ExcelJS.Workbook();
+  const data = workbook.addWorksheet("Data Jaringan");
+  data.addRow(networkXlsxHeaders);
+  data.columns = [{ width: 32 }, { width: 16 }, { width: 22 }, { width: 20 }, { width: 14 }, { width: 20 }, { width: 14 }, { width: 14 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 68 }];
+  data.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  data.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF3454D1" } };
+  for (const asset of assets) {
+    if (!asset.geometry) continue;
+    data.addRow([asset.name, asset.assetType === "segment" ? "Segmen" : "Aset", asset.area, asset.cableType, asset.totalCores,
+      asset.installation, asset.side, asset.poleHeight, asset.pole, asset.odc, asset.odp, JSON.stringify(asset.geometry)]);
+  }
+  const guide = workbook.addWorksheet("Petunjuk");
+  guide.addRows([
+    ["Impor Jaringan ATLAS"],
+    ["Isi satu baris untuk setiap aset. Kolom Nama dan Geometry GeoJSON wajib."],
+    ["Tipe Aset: Segmen untuk kabel, Aset untuk tiang/ODC/ODP. Jika kosong, tipe geometri menentukan jenis."],
+    ["Geometry GeoJSON wajib berupa geometri GeoJSON; semua koordinat memakai urutan longitude, latitude."],
+    ['Contoh titik: {"type":"Point","coordinates":[106.8,-6.2]}'],
+    ['Contoh kabel: {"type":"LineString","coordinates":[[106.8,-6.2],[106.81,-6.21]]}'],
+    ["Jumlah Core berupa bilangan 0–4096. Metode Instalasi: Aerial atau Burial. Sisi Jalan: Kiri atau Kanan."],
+    ["Tinggi Tiang: 7 m atau 9 m. Ukuran file maksimal 10 MB dan 10.000 aset."],
+  ]);
+  guide.getColumn(1).width = 112;
+  return workbook;
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function xmlEscape(value: unknown) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&apos;" })[char]!);
+}
+
+function kmlCoordinate(position: Position) { return position.join(","); }
+function kmlCoordinates(positions: Position[]) { return positions.map(kmlCoordinate).join(" "); }
+
+function kmlPolygon(rings: Position[][]) {
+  const [outer, ...inner] = rings;
+  if (!outer) return "";
+  const ring = (points: Position[]) => `<LinearRing><coordinates>${kmlCoordinates(points)}</coordinates></LinearRing>`;
+  return `<Polygon><outerBoundaryIs>${ring(outer)}</outerBoundaryIs>${inner.map((points) => `<innerBoundaryIs>${ring(points)}</innerBoundaryIs>`).join("")}</Polygon>`;
+}
+
+function kmlGeometry(geometry: Geometry): string {
+  switch (geometry.type) {
+    case "Point": return `<Point><coordinates>${kmlCoordinate(geometry.coordinates)}</coordinates></Point>`;
+    case "MultiPoint": return `<MultiGeometry>${geometry.coordinates.map((coordinates) => kmlGeometry({ type: "Point", coordinates })).join("")}</MultiGeometry>`;
+    case "LineString": return `<LineString><coordinates>${kmlCoordinates(geometry.coordinates)}</coordinates></LineString>`;
+    case "MultiLineString": return `<MultiGeometry>${geometry.coordinates.map((coordinates) => kmlGeometry({ type: "LineString", coordinates })).join("")}</MultiGeometry>`;
+    case "Polygon": return kmlPolygon(geometry.coordinates);
+    case "MultiPolygon": return `<MultiGeometry>${geometry.coordinates.map(kmlPolygon).join("")}</MultiGeometry>`;
+    case "GeometryCollection": return `<MultiGeometry>${geometry.geometries.map(kmlGeometry).join("")}</MultiGeometry>`;
+  }
+}
+
+function networkKml(assets: NetworkAsset[]) {
+  const placemarks = assets.flatMap((asset) => {
+    if (!asset.geometry) return [];
+    const fields: Array<[string, unknown]> = [["asset_type", asset.assetType], ["area", asset.area], ["source", asset.source], ["cable_type", asset.cableType], ["total_cores", asset.totalCores], ["installation", asset.installation], ["side", asset.side], ["pole", asset.pole], ["pole_height", asset.poleHeight], ["odc", asset.odc], ["odp", asset.odp]];
+    const data = fields.filter(([, value]) => value !== null && value !== undefined && value !== "").map(([name, value]) => `<Data name="${name}"><value>${xmlEscape(value)}</value></Data>`).join("");
+    return [`<Placemark><name>${xmlEscape(asset.name)}</name><ExtendedData>${data}</ExtendedData>${kmlGeometry(asset.geometry)}</Placemark>`];
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>ATLAS - Data Jaringan</name>${placemarks}</Document></kml>`;
+}
 
 function getIconCategory(folderPath: unknown, assetName: unknown) {
   const folders = String(folderPath ?? "")
@@ -296,6 +370,7 @@ export function MapPage() {
   const [iconCategorySearch, setIconCategorySearch] = useState("");
   const [fileError, setFileError] = useState("");
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [routeError, setRouteError] = useState("");
   const [fileName, setFileName] = useState("");
   const [routeLoading, setRouteLoading] = useState(false);
@@ -696,32 +771,36 @@ export function MapPage() {
   }
 
   function downloadNetworkTemplate() {
-    const workbook = new ExcelJS.Workbook()
-    const data = workbook.addWorksheet("Data Jaringan")
-    data.addRow(["Nama", "Tipe Aset", "Area", "Tipe Kabel", "Jumlah Core", "Metode Instalasi", "Sisi Jalan", "Tinggi Tiang", "Nomor Tiang", "ODC", "ODP", "Geometry GeoJSON"])
-    data.columns = [{ width: 32 }, { width: 16 }, { width: 22 }, { width: 20 }, { width: 14 }, { width: 20 }, { width: 14 }, { width: 14 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 68 }]
-    data.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } }
-    data.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF3454D1" } }
-    const guide = workbook.addWorksheet("Petunjuk")
-    guide.addRows([
-      ["Impor Jaringan ATLAS"],
-      ["Isi satu baris untuk setiap aset. Kolom Nama dan Geometry GeoJSON wajib."],
-      ["Tipe Aset: Segmen untuk kabel, Aset untuk tiang/ODC/ODP. Jika kosong, tipe geometri menentukan jenis."],
-      ["Geometry GeoJSON wajib berupa geometri GeoJSON; semua koordinat memakai urutan longitude, latitude."],
-      ['Contoh titik: {"type":"Point","coordinates":[106.8,-6.2]}'],
-      ['Contoh kabel: {"type":"LineString","coordinates":[[106.8,-6.2],[106.81,-6.21]]}'],
-      ["Jumlah Core berupa bilangan 0–4096. Metode Instalasi: Aerial atau Burial. Sisi Jalan: Kiri atau Kanan."],
-      ["Tinggi Tiang: 7 m atau 9 m. Ukuran file maksimal 10 MB dan 10.000 aset."],
-    ])
-    guide.getColumn(1).width = 112
-    void workbook.xlsx.writeBuffer().then((buffer) => {
-      const url = URL.createObjectURL(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }))
-      const link = document.createElement("a")
-      link.href = url
-      link.download = "template-impor-jaringan-atlas.xlsx"
-      link.click()
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-    })
+    void buildNetworkWorkbook().xlsx.writeBuffer().then((buffer) => downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), "template-impor-jaringan-atlas.xlsx"));
+  }
+
+  async function downloadNetworkFile(format: "kml" | "kmz" | "xlsx") {
+    setExporting(true);
+    setFileError("");
+    try {
+      const { bounds } = await api<{ bounds: [number, number, number, number] | null }>("/assets/bounds");
+      if (!bounds) throw new Error("Belum ada aset jaringan untuk diunduh.");
+      const padding = 0.000001;
+      const bbox = [Math.max(-180, bounds[0] - padding), Math.max(-90, bounds[1] - padding), Math.min(180, bounds[2] + padding), Math.min(90, bounds[3] + padding)].join(",");
+      const assets = await api<NetworkAsset[]>(`/assets/map?bbox=${bbox}&zoom=24`);
+      if (!assets.some((asset) => asset.geometry)) throw new Error("Belum ada geometri aset jaringan untuk diunduh.");
+      const baseName = "atlas-data-jaringan";
+      if (format === "xlsx") {
+        const buffer = await buildNetworkWorkbook(assets).xlsx.writeBuffer();
+        downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${baseName}.xlsx`);
+      } else {
+        const kml = networkKml(assets);
+        if (format === "kml") downloadBlob(new Blob([kml], { type: "application/vnd.google-earth.kml+xml;charset=utf-8" }), `${baseName}.kml`);
+        else {
+          const archive = new JSZip();
+          archive.file("doc.kml", kml);
+          downloadBlob(await archive.generateAsync({ type: "blob", compression: "DEFLATE" }), `${baseName}.kmz`);
+        }
+      }
+      setFileModal(null);
+    } catch (error) {
+      setFileError(error instanceof Error ? error.message : "File peta tidak dapat dibuat.");
+    } finally { setExporting(false); }
   }
 
   function saveAssetDetails(event: React.FormEvent<HTMLFormElement>) {
@@ -1123,11 +1202,16 @@ export function MapPage() {
       </div>
       {fileModal && <div className="file-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setFileModal(null); }}>
         <section className="file-modal" role="dialog" aria-modal="true" aria-labelledby="file-modal-title">
-          <header><div><h2 id="file-modal-title">{fileModal === "import" ? "Impor data jaringan" : "Unduh template"}</h2><p>{fileModal === "import" ? "Pilih format file yang ingin diunggah." : "Pilih file template untuk menyiapkan data jaringan."}</p></div><button className="btn-close" aria-label="Tutup" onClick={() => setFileModal(null)} /></header>
+          <header><div><h2 id="file-modal-title">{fileModal === "import" ? "Impor data jaringan" : "Unduh file peta"}</h2><p>{fileModal === "import" ? "Pilih format file yang ingin diunggah." : exporting ? "Sedang menyiapkan file…" : "Unduh seluruh aset jaringan atau template Excel impor."}</p></div><button className="btn-close" aria-label="Tutup" onClick={() => setFileModal(null)} /></header>
           <div className="file-modal-options">{fileModal === "import" ? <>
             <button className="file-modal-option" onClick={() => { setFileModal(null); importInput.current?.click(); }}><span><i className="bi bi-globe2" /></span><div><b>KML / KMZ</b><small>Impor geometri, ikon, warna, dan atribut dari Google Earth.</small></div><i className="bi bi-chevron-right" /></button>
             <button className="file-modal-option" onClick={() => { setFileModal(null); xlsxImportInput.current?.click(); }}><span><i className="bi bi-file-earmark-spreadsheet" /></span><div><b>Excel (.xlsx)</b><small>Impor aset jaringan memakai template ATLAS.</small></div><i className="bi bi-chevron-right" /></button>
-          </> : <button className="file-modal-option" onClick={() => { setFileModal(null); downloadNetworkTemplate(); }}><span><i className="bi bi-file-earmark-arrow-down" /></span><div><b>Template Excel jaringan</b><small>Unduh format Excel beserta petunjuk pengisian.</small></div><i className="bi bi-download" /></button>}</div>
+          </> : <>
+            <button className="file-modal-option" onClick={() => { setFileModal(null); downloadNetworkTemplate(); }}><span><i className="bi bi-file-earmark-arrow-down" /></span><div><b>Template Excel jaringan</b><small>Unduh format impor beserta petunjuk pengisian.</small></div><i className="bi bi-download" /></button>
+            <button className="file-modal-option" disabled={exporting} onClick={() => void downloadNetworkFile("kml")}><span><i className="bi bi-globe2" /></span><div><b>Ekspor KML</b><small>Unduh seluruh aset jaringan dalam format KML.</small></div><i className="bi bi-download" /></button>
+            <button className="file-modal-option" disabled={exporting} onClick={() => void downloadNetworkFile("kmz")}><span><i className="bi bi-globe2" /></span><div><b>Ekspor KMZ</b><small>Unduh seluruh aset jaringan dalam arsip KMZ.</small></div><i className="bi bi-download" /></button>
+            <button className="file-modal-option" disabled={exporting} onClick={() => void downloadNetworkFile("xlsx")}><span><i className="bi bi-file-earmark-spreadsheet" /></span><div><b>Ekspor Excel (.xlsx)</b><small>Unduh seluruh aset; geometri GeoJSON siap diimpor kembali.</small></div><i className="bi bi-download" /></button>
+          </>}</div>
           <footer><button className="btn btn-light" onClick={() => setFileModal(null)}>Tutup</button></footer>
         </section>
       </div>}
