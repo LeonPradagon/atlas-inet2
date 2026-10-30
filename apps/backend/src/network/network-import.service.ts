@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import ExcelJS from 'exceljs'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
 import JSZip from 'jszip'
@@ -13,9 +13,10 @@ type KmlGeometry =
 type KmlStyle = {
   lineColor?: string; lineOpacity?: number; lineWidth?: number
   fillColor?: string; fillOpacity?: number; fillEnabled?: boolean; outlineEnabled?: boolean
-  iconColor?: string; iconOpacity?: number; iconScale?: number; iconHref?: string
+  labelColor?: string; labelOpacity?: number; labelScale?: number; iconColor?: string; iconOpacity?: number; iconScale?: number; iconHref?: string
   iconAnchor?: 'center' | 'bottom' | 'bottom-right'; iconOffset?: [number, number]
 }
+type KmzIcon = { id: string; mimeType: string; content: Buffer }
 type NetworkFeature = { id: string; name: string; assetType: 'segment' | 'asset'; geometry: KmlGeometry; properties: Record<string, unknown>; style: KmlStyle; totalCores: number; fields?: Record<string, string | null> }
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', parseTagValue: false, trimValues: true, processEntities: false })
@@ -164,7 +165,7 @@ function validateGeoJsonGeometry(value: unknown): value is { type: string; coord
   return false
 }
 
-function styleFrom(node: unknown): KmlStyle {
+function styleFrom(node: unknown, resolveIcon?: (href: string) => string | undefined): KmlStyle {
   const style: KmlStyle = {}
   const line = descendants(node, 'LineStyle')[0]
   const lineColor = kmlColor(text(line, 'color'))
@@ -180,13 +181,18 @@ function styleFrom(node: unknown): KmlStyle {
   if (fillEnabled !== undefined) style.fillEnabled = fillEnabled !== '0'
   if (outlineEnabled !== undefined) style.outlineEnabled = outlineEnabled !== '0'
 
+  const label = descendants(node, 'LabelStyle')[0]
+  const labelColor = kmlColor(text(label, 'color'))
+  if (labelColor) { style.labelColor = labelColor.color; style.labelOpacity = labelColor.opacity }
+  const labelScale = text(label, 'scale')
+  if (labelScale !== undefined && Number.isFinite(Number(labelScale)) && Number(labelScale) >= 0) style.labelScale = Number(labelScale)
   const icon = descendants(node, 'IconStyle')[0]
   const iconColor = kmlColor(text(icon, 'color'))
   if (iconColor) { style.iconColor = iconColor.color; style.iconOpacity = iconColor.opacity }
   const iconScale = Number(text(icon, 'scale'))
-  if (Number.isFinite(iconScale) && iconScale > 0) style.iconScale = iconScale
+  if (Number.isFinite(iconScale) && iconScale >= 0) style.iconScale = iconScale
   const iconHref = text(icon, 'href')
-  if (iconHref) style.iconHref = iconHref
+  if (iconHref) style.iconHref = resolveIcon?.(iconHref) ?? iconHref
   const hotspot = descendants(icon, 'hotSpot')[0]
   if (hotspot && typeof hotspot === 'object') {
     const attrs = hotspot as Record<string, unknown>
@@ -205,14 +211,36 @@ function styleFrom(node: unknown): KmlStyle {
   return style
 }
 
-function parseKml(xml: string, file: string): NetworkFeature[] {
+function normalizeArchivePath(value: string) {
+  const parts: string[] = []
+  for (const part of value.replace(/\\/g, '/').split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') parts.pop()
+    else parts.push(part)
+  }
+  return parts.join('/').toLocaleLowerCase('en-US')
+}
+
+function archiveIconMimeType(path: string) {
+  const extension = path.toLowerCase().split('.').at(-1)
+  return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' } as Record<string, string>)[extension ?? '']
+}
+
+function relativeArchiveIconPath(kmlDirectory: string, href: string) {
+  if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(href)) return ''
+  let decoded = href.split(/[?#]/, 1)[0]
+  try { decoded = decodeURIComponent(decoded) } catch { /* keep literal archive path */ }
+  return normalizeArchivePath(`${kmlDirectory}/${decoded}`)
+}
+
+export function parseKml(xml: string, file: string, resolveIcon?: (href: string) => string | undefined): NetworkFeature[] {
   if (XMLValidator.validate(xml) !== true) throw new BadRequestException({ message: 'Isi KML tidak valid.' })
   const document = parser.parse(xml)
   const styles = new Map<string, KmlStyle>()
   for (const style of descendants(document, 'Style')) {
     if (style && typeof style === 'object') {
       const id = String((style as Record<string, unknown>)['@_id'] ?? '')
-      if (id) styles.set(`#${id}`, styleFrom(style))
+      if (id) styles.set(`#${id}`, styleFrom(style, resolveIcon))
     }
   }
   const styleMaps = new Map<string, string>()
@@ -231,6 +259,7 @@ function parseKml(xml: string, file: string): NetworkFeature[] {
     if (!parts.length) continue
     const geometry = parts.length === 1 ? parts[0] : { type: 'GeometryCollection' as const, geometries: parts }
     const properties: Record<string, unknown> = {}
+    const detailFields: Array<[string, string]> = []
     for (const key of ['name', 'description', 'styleUrl']) {
       const value = text(placemark, key)
       if (value) properties[key] = value
@@ -239,19 +268,20 @@ function parseKml(xml: string, file: string): NetworkFeature[] {
       if (!data || typeof data !== 'object') continue
       const key = String((data as Record<string, unknown>)['@_name'] ?? '')
       const value = text(data, 'value')
-      if (key && value !== undefined) properties[key] = value
+      if (key && value !== undefined) { properties[key] = value; detailFields.push([text(data, 'displayName') ?? key, value]) }
     }
     for (const data of descendants(placemark, 'SimpleData')) {
       if (!data || typeof data !== 'object') continue
       const key = String((data as Record<string, unknown>)['@_name'] ?? '')
       const value = (data as Record<string, unknown>)['#text'] ?? Object.values(data as Record<string, unknown>).find((entry) => typeof entry === 'string')
-      if (key && value !== undefined) properties[key] = String(value)
+      if (key && value !== undefined) { properties[key] = String(value); detailFields.push([key, String(value)]) }
     }
 
+    if (detailFields.length) properties.__kmlDetailFields = detailFields
     let styleUrl = String(properties.styleUrl ?? '')
     if (styleMaps.has(styleUrl)) styleUrl = styleMaps.get(styleUrl)!
     const inlineStyle = descendants(placemark, 'Style')[0]
-    const style = inlineStyle ? styleFrom(inlineStyle) : styles.get(styleUrl) ?? {}
+    const style = { ...(styles.get(styleUrl) ?? {}), ...(inlineStyle ? styleFrom(inlineStyle, resolveIcon) : {}) }
     const rawName = String(properties.name ?? '').replace(/\s+/g, ' ').trim()
     const folderPath = entry.folders.slice(-2)
     const typeName = parts.some((part) => part.type === 'LineString') ? 'Segmen' : parts.some((part) => part.type === 'Polygon') ? 'Area' : 'Aset'
@@ -277,6 +307,8 @@ export class NetworkImportService {
     if (!file || !/\.(kml|kmz)$/i.test(file.originalname)) throw new BadRequestException({ message: 'Pilih file KML atau KMZ.' })
     if (file.buffer.length > 50 * 1024 * 1024) throw new BadRequestException({ message: 'Ukuran file maksimal 50 MB.' })
     let xml: string
+    const kmzIcons = new Map<string, KmzIcon>()
+    let resolveKmzIcon: ((href: string) => string | undefined) | undefined
     if (/\.kmz$/i.test(file.originalname)) {
       try {
         const archive = await JSZip.loadAsync(file.buffer)
@@ -284,16 +316,41 @@ export class NetworkImportService {
         const entry = Object.values(archive.files).find((item) => !item.dir && item.name.toLowerCase().endsWith('.kml'))
         if (!entry) throw new BadRequestException({ message: 'Arsip KMZ tidak berisi file KML.' })
         xml = await entry.async('text')
+        const kmlDirectory = entry.name.split('/').slice(0, -1).join('/')
+        const iconPaths = new Map<string, string>()
+        let totalIconBytes = 0
+        for (const image of Object.values(archive.files)) {
+          if (image.dir) continue
+          const mimeType = archiveIconMimeType(image.name)
+          if (!mimeType) continue
+          const uncompressedSize = (image as typeof image & { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0
+          if (uncompressedSize > 1_000_000 || totalIconBytes + uncompressedSize > 15_000_000) continue
+          const content = await image.async('nodebuffer')
+          totalIconBytes += content.length
+          const id = createHash('sha256').update(content).digest('hex')
+          kmzIcons.set(id, { id, mimeType, content })
+          iconPaths.set(normalizeArchivePath(image.name), id)
+        }
+        resolveKmzIcon = (href) => {
+          const iconId = iconPaths.get(relativeArchiveIconPath(kmlDirectory, href))
+          return iconId ? `atlas-kmz-icon:${iconId}` : undefined
+        }
       } catch (error) {
         if (error instanceof BadRequestException) throw error
         throw new BadRequestException({ message: 'Arsip KMZ rusak atau tidak dapat dibaca.' })
       }
     } else xml = file.buffer.toString('utf8')
 
-    const features = parseKml(xml, file.originalname.replace(/\.(kml|kmz)$/i, ''))
+    const features = parseKml(xml, file.originalname.replace(/\.(kml|kmz)$/i, ''), resolveKmzIcon)
     const batchSize = 250
     await this.db.transaction(async (client) => {
-      if (replaceExistingKml) await client.query("DELETE FROM network_assets WHERE source='kml'")
+      if (replaceExistingKml) {
+        await client.query("DELETE FROM network_assets WHERE source='kml'")
+        await client.query('DELETE FROM network_kml_icons')
+      }
+      for (const icon of kmzIcons.values()) {
+        await client.query('INSERT INTO network_kml_icons(id,mime_type,content) VALUES($1,$2,$3) ON CONFLICT(id) DO NOTHING', [icon.id, icon.mimeType, icon.content])
+      }
       for (let offset = 0; offset < features.length; offset += batchSize) {
         const batch = features.slice(offset, offset + batchSize)
         const payload = JSON.stringify(batch.map((feature) => ({

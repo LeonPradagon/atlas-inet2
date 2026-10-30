@@ -1,3 +1,4 @@
+import provinceBoundaries from '../database/regions/province-boundaries.json'
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
@@ -7,6 +8,26 @@ type AssetRecord = {
   id: string; name: string; area: string; assetType: string; source: string; cableType: string; installation: string; side: string;
   pole: string; poleHeight: string | null; odc: string; odp: string; totalCores: number; usedCores: number; bookedCores: number; idleCores: number;
   geometry: unknown; attributes: Record<string, unknown>; createdAt: string
+}
+
+const provinceMatch = (provinceParam: number) => `a.attributes->>'__atlasProvinceCode'=$${provinceParam}`
+
+type RegionName = { provinceCode: string; name: string; level: number }
+type KmzProvinceAsset = { id: string; name: string; area: string; folderPath: string }
+type KmzProvinceBoundary = { provinceCode: string; provinceName: string; geometry: unknown }
+
+const normalizeRegionText = (value: string) => value
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('id-ID')
+  .replace(/\b(provinsi|province|kabupaten|kab\.?|kota|kotamadya|kecamatan|district|desa|kelurahan)\b/g, ' ')
+  .replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+
+const kmzGroup = (path: string) => {
+  const folders = path.split('/').map((part) => part.trim()).filter(Boolean)
+  const popIndex = folders.findIndex((part) => /^POP\s+/i.test(part))
+  if (popIndex >= 0) return folders[popIndex].replace(/^POP\s+/i, '').trim()
+  const boundaryIndex = folders.findIndex((part) => normalizeRegionText(part) === 'full boundry' || normalizeRegionText(part) === 'full boundary')
+  if (boundaryIndex >= 0 && folders[boundaryIndex + 1]) return folders[boundaryIndex + 1]
+  return folders[1] ?? folders[0] ?? ''
 }
 
 @Injectable()
@@ -148,20 +169,22 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
   }
 
-  async listAssetPage(search = '', page = 1, pageSize = 50, coreFilter = 'all') {
+  async listAssetPage(search = '', page = 1, pageSize = 50, coreFilter = 'all', provinceCode?: string) {
     const filter = search.trim()
     const match = `%${filter}%`
+    const provinceCondition = provinceMatch(4)
     const conditions = `($1='' OR a.name ILIKE $2 OR a.area ILIKE $2 OR a.cable_type ILIKE $2 OR a.asset_type ILIKE $2 OR a.attributes::text ILIKE $2)
       AND ($3='all' OR a.asset_type='segment')
       AND ($3<>'filled' OR a.total_cores>0)
-      AND ($3<>'empty' OR a.total_cores=0)`
+      AND ($3<>'empty' OR a.total_cores=0)
+      AND ($4::text IS NULL OR ${provinceCondition})`
     const [{ rows: countRows }, { rows }] = await Promise.all([
       this.db.query<{ total: number }>(`SELECT count(*)::int AS total FROM network_assets a
-        WHERE ${conditions}`, [filter, match, coreFilter]),
+        WHERE ${conditions}`, [filter, match, coreFilter, provinceCode ?? null]),
       this.db.query<AssetRecord>(`WITH page AS (
           SELECT a.id,a.name FROM network_assets a
           WHERE ${conditions}
-          ORDER BY a.name,a.id LIMIT $4 OFFSET $5
+          ORDER BY a.name,a.id LIMIT $5 OFFSET $6
         )
         SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
           a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
@@ -170,7 +193,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
           count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
           GeometryType(a.geometry) AS "geometryType",NULL::jsonb AS geometry,a.attributes,a.created_at AS "createdAt"
         FROM page p JOIN network_assets a ON a.id=p.id LEFT JOIN network_cores c ON c.asset_id=a.id
-        GROUP BY a.id ORDER BY a.name,a.id`, [filter, match, coreFilter, pageSize, (page - 1) * pageSize]),
+        GROUP BY a.id ORDER BY a.name,a.id`, [filter, match, coreFilter, provinceCode ?? null, pageSize, (page - 1) * pageSize]),
     ])
     const pattern = new RegExp((await this.getCableNamePattern()).pattern)
     return { items: rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) })), total: countRows[0].total, page, pageSize }
@@ -198,14 +221,191 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return rows
   }
 
-  async mapBounds() {
+  async mapBounds(provinceCode?: string) {
+    const provinceCondition = provinceMatch(1)
     const { rows } = await this.db.query(`SELECT ST_XMin(extent) AS west,ST_YMin(extent) AS south,ST_XMax(extent) AS east,ST_YMax(extent) AS north
-      FROM (SELECT ST_Extent(geometry) AS extent FROM network_assets) bounds`)
+      FROM (SELECT ST_Extent(geometry) AS extent FROM network_assets a WHERE ($1::text IS NULL OR ${provinceCondition})) bounds`, [provinceCode ?? null])
     const { west, south, east, north } = rows[0]
     return { bounds: west === null ? null : [west, south, east, north] }
   }
 
-  async listMapAssets(bounds: [number, number, number, number], zoom = 16) {
+  async listKmzProvinces() {
+    const { rows: assets } = await this.db.query<KmzProvinceAsset>(`SELECT id,name,COALESCE(area,'') AS area,
+        COALESCE(attributes->>'folderPath','') AS "folderPath"
+      FROM network_assets WHERE source='kml' AND attributes ? 'folderPath' AND COALESCE(attributes->>'__atlasProvinceSource','') <> 'geometry-boundary'`)
+    const { rows: regions } = await this.db.query<RegionName>(`SELECT p.code AS "provinceCode",btrim(p.name) AS name,4 AS level FROM indonesia_provinces p
+      UNION ALL SELECT c.province_code,btrim(c.name),3 FROM indonesia_cities c
+      UNION ALL SELECT c.province_code,btrim(d.name),2 FROM indonesia_districts d JOIN indonesia_cities c ON c.code=d.city_code
+      UNION ALL SELECT c.province_code,btrim(s.name),1 FROM indonesia_subdistricts s
+        JOIN indonesia_districts d ON d.code=s.district_code JOIN indonesia_cities c ON c.code=d.city_code`)
+
+    const assetGroups = new Map<string, KmzProvinceAsset[]>()
+    const folderNamesByGroup = new Map<string, Set<string>>()
+    for (const asset of assets) {
+      const group = kmzGroup(asset.folderPath)
+      if (!group) continue
+      const key = normalizeRegionText(group)
+      const groupAssets = assetGroups.get(key) ?? []
+      groupAssets.push(asset)
+      assetGroups.set(key, groupAssets)
+      const folders = folderNamesByGroup.get(key) ?? new Set<string>()
+      folders.add(asset.folderPath)
+      folderNamesByGroup.set(key, folders)
+    }
+
+    const { rows: boundaries } = await this.db.query<{ folderPath: string; village: string }>(`SELECT DISTINCT
+        COALESCE(attributes->>'folderPath','') AS "folderPath",
+        btrim(split_part(name,' · ',3)) AS village
+      FROM network_assets WHERE source='kml' AND attributes->>'folderPath' ILIKE '%FULL BOUNDRY%' AND name LIKE '% · % · %'`)
+    const villagesByGroup = new Map<string, Set<string>>()
+    for (const boundary of boundaries) {
+      const group = normalizeRegionText(kmzGroup(boundary.folderPath))
+      const village = normalizeRegionText(boundary.village)
+      if (!group || !village) continue
+      const villages = villagesByGroup.get(group) ?? new Set<string>()
+      villages.add(village)
+      villagesByGroup.set(group, villages)
+    }
+
+    const regionsByName = new Map<string, RegionName[]>()
+    for (const region of regions) {
+      const normalized = normalizeRegionText(region.name)
+      if (!normalized) continue
+      const matches = regionsByName.get(normalized) ?? []
+      matches.push(region)
+      regionsByName.set(normalized, matches)
+    }
+    const subdistrictsByName = new Map([...regionsByName.entries()].map(([name, matches]) => [name, matches.filter((region) => region.level === 1)]))
+    const provinceByGroup = new Map<string, { code: string; source: string }>()
+    for (const [group, groupAssets] of assetGroups) {
+      const areaNames = [...new Set(groupAssets.map((asset) => normalizeRegionText(asset.area)).filter(Boolean))]
+      const villages = [...(villagesByGroup.get(group) ?? [])]
+      const votes = new Map<string, number>()
+      for (const village of villages) {
+        const matches = subdistrictsByName.get(village) ?? []
+        const codes = new Set(matches.map((region) => region.provinceCode))
+        if (codes.size === 1) {
+          const code = [...codes][0]
+          votes.set(code, (votes.get(code) ?? 0) + 1)
+        }
+      }
+      const voteRanking = [...votes.entries()].sort((left, right) => right[1] - left[1])
+      const [winner, winnerVotes] = voteRanking[0] ?? []
+      const runnerUpVotes = voteRanking[1]?.[1] ?? 0
+      if (winner && winnerVotes >= 3 && winnerVotes >= runnerUpVotes + 2 && winnerVotes / villages.length >= 0.6) {
+        provinceByGroup.set(group, { code: winner, source: 'village-boundary-consensus' })
+        continue
+      }
+
+      const areaCandidates = areaNames.flatMap((area) => regionsByName.get(area) ?? [])
+      const areaCodes = new Set(areaCandidates.map((region) => region.provinceCode))
+      if (areaCodes.size === 1 && areaCandidates.length) {
+        provinceByGroup.set(group, { code: [...areaCodes][0], source: 'kmz-area-hierarchy' })
+        continue
+      }
+
+      const exactFolderNames = new Set<string>([group])
+      for (const folderPath of folderNamesByGroup.get(group) ?? []) {
+        for (const folder of folderPath.split('/')) {
+          const cleaned = folder.replace(/^\s*POP\s+/i, '').trim()
+          for (const part of [cleaned, ...cleaned.split(/\s*[-–—,;|]\s*/)]) {
+            const normalized = normalizeRegionText(part)
+            if (normalized) exactFolderNames.add(normalized)
+          }
+        }
+      }
+      const candidates = [...exactFolderNames].flatMap((name) => regionsByName.get(name) ?? []).filter((region) => region.level >= 2)
+      if (!candidates.length) continue
+      const bestLevel = Math.max(...candidates.map((region) => region.level))
+      const bestCandidates = candidates.filter((region) => region.level === bestLevel)
+      const codes = new Set(bestCandidates.map((region) => region.provinceCode))
+      if (codes.size === 1) provinceByGroup.set(group, { code: [...codes][0], source: 'kmz-folder-hierarchy' })
+    }
+
+    const updatesByValue = new Map<string, { code: string; source: string; ids: string[] }>()
+    const unresolvedIds: string[] = []
+    for (const [group, groupAssets] of assetGroups) {
+      const assignment = provinceByGroup.get(group)
+      if (!assignment) unresolvedIds.push(...groupAssets.map((asset) => asset.id))
+      else {
+        const key = `${assignment.code}:${assignment.source}`
+        const update = updatesByValue.get(key) ?? { ...assignment, ids: [] }
+        update.ids.push(...groupAssets.map((asset) => asset.id))
+        updatesByValue.set(key, update)
+      }
+    }
+    for (const { code, source, ids } of updatesByValue.values()) {
+      await this.db.query(`UPDATE network_assets SET attributes=COALESCE(attributes,'{}'::jsonb)||jsonb_build_object('__atlasProvinceCode',$2,'__atlasProvinceSource',$3)
+        WHERE id=ANY($1::text[]) AND (attributes->>'__atlasProvinceCode' IS DISTINCT FROM $2 OR attributes->>'__atlasProvinceSource' IS DISTINCT FROM $3)`, [ids, code, source])
+    }
+    if (unresolvedIds.length) await this.db.query(`UPDATE network_assets SET attributes=COALESCE(attributes,'{}'::jsonb)-'__atlasProvinceCode'-'__atlasProvinceSource'
+      WHERE id=ANY($1::text[]) AND attributes ? '__atlasProvinceCode'`, [unresolvedIds])
+
+    // Coordinates are authoritative when folder names do not identify a province.
+    const provinceNames = regions.filter((region) => region.level === 4);
+    const spatialProvinces = provinceBoundaries.features.flatMap((feature) => {
+      const name = normalizeRegionText(({ PROBANTEN: 'Banten', 'DKI JAKARTA': 'Daerah Khusus Ibukota Jakarta', 'DI. ACEH': 'Aceh', 'NUSATENGGARA BARAT': 'Nusa Tenggara Barat' } as Record<string, string>)[feature.properties.Propinsi] ?? feature.properties.Propinsi);
+      const province = provinceNames.find((region) => normalizeRegionText(region.name) === name);
+      return province ? [{ code: province.provinceCode, geometry: feature.geometry }] : [];
+    });
+    await this.db.query(`WITH boundaries AS MATERIALIZED (
+      SELECT value->>'code' AS code, ST_SetSRID(ST_GeomFromGeoJSON(value->'geometry'),4326) AS geometry
+      FROM jsonb_array_elements($1::jsonb)
+    ), assigned AS (
+      SELECT DISTINCT ON (a.id) a.id,b.code FROM network_assets a JOIN boundaries b
+        ON a.geometry && b.geometry AND ST_Covers(b.geometry,ST_PointOnSurface(a.geometry))
+      WHERE a.source='kml' ORDER BY a.id,b.code
+    ) UPDATE network_assets a SET attributes=COALESCE(a.attributes,'{}'::jsonb)||jsonb_build_object('__atlasProvinceCode',assigned.code,'__atlasProvinceSource','geometry-boundary')
+      FROM assigned WHERE a.id=assigned.id AND (a.attributes->>'__atlasProvinceCode' IS DISTINCT FROM assigned.code OR a.attributes->>'__atlasProvinceSource' IS DISTINCT FROM 'geometry-boundary')`, [JSON.stringify(spatialProvinces)]);
+
+    const { rows: spatialGroups } = await this.db.query<{ id: string; folderPath: string; code: string | null }>(`SELECT id,attributes->>'folderPath' AS "folderPath",attributes->>'__atlasProvinceCode' AS code FROM network_assets WHERE source='kml' AND attributes ? 'folderPath'`);
+    const groupCodes = new Map<string, Set<string>>();
+    for (const asset of spatialGroups) {
+      if (!asset.code) continue;
+      const group = normalizeRegionText(kmzGroup(asset.folderPath));
+      const codes = groupCodes.get(group) ?? new Set<string>();
+      codes.add(asset.code);
+      groupCodes.set(group, codes);
+    }
+    for (const asset of spatialGroups) {
+      if (asset.code) continue;
+      const codes = groupCodes.get(normalizeRegionText(kmzGroup(asset.folderPath)));
+      if (codes?.size !== 1) continue;
+      await this.db.query(`UPDATE network_assets SET attributes=attributes||jsonb_build_object('__atlasProvinceCode',$2::text,'__atlasProvinceSource','kmz-group-spatial-consensus') WHERE id=$1`, [asset.id, [...codes][0]]);
+    }
+
+    const { rows } = await this.db.query(`SELECT p.code,btrim(p.name) AS name,count(DISTINCT a.id)::int AS "assetCount",
+        count(DISTINCT a.attributes->>'folderPath')::int AS "folderCount",
+        ST_XMin(ST_Extent(a.geometry)) AS west,ST_YMin(ST_Extent(a.geometry)) AS south,
+        ST_XMax(ST_Extent(a.geometry)) AS east,ST_YMax(ST_Extent(a.geometry)) AS north
+      FROM indonesia_provinces p JOIN network_assets a ON a.attributes->>'__atlasProvinceCode'=p.code AND a.source='kml'
+      GROUP BY p.code,p.name ORDER BY p.name`)
+    const { rows: unresolved } = await this.db.query(`SELECT count(*)::int AS "assetCount",count(DISTINCT attributes->>'folderPath')::int AS "folderCount"
+      FROM network_assets WHERE source='kml' AND attributes ? 'folderPath' AND NOT (attributes ? '__atlasProvinceCode')`)
+    return {
+      items: rows.map(({ west, south, east, north, ...province }) => ({ ...province, bounds: west === null ? null : [west, south, east, north] })),
+      unassigned: unresolved[0] ?? { assetCount: 0, folderCount: 0 },
+    }
+  }
+
+  async listKmzProvinceBoundaries() {
+    const { rows } = await this.db.query<KmzProvinceBoundary>(`SELECT a.attributes->>'__atlasProvinceCode' AS "provinceCode",btrim(p.name) AS "provinceName",
+        ST_AsGeoJSON(ST_SimplifyPreserveTopology(a.geometry,0.0005),5)::json AS geometry
+      FROM network_assets a JOIN indonesia_provinces p ON p.code=a.attributes->>'__atlasProvinceCode'
+      WHERE a.source='kml' AND a.attributes->>'folderPath' ~* 'FULL[ _]BOUNDRY|FULL[ _]BOUNDARY'
+        AND GeometryType(a.geometry) IN ('POLYGON','MULTIPOLYGON')
+      ORDER BY p.name,a.name`)
+    return { type: 'FeatureCollection', features: rows.map(({ provinceCode, provinceName, geometry }) => ({ type: 'Feature', geometry, properties: { provinceCode, provinceName } })) }
+  }
+
+  async getKmzIcon(id: string) {
+    const { rows } = await this.db.query<{ mimeType: string; content: Buffer }>('SELECT mime_type AS "mimeType",content FROM network_kml_icons WHERE id=$1', [id])
+    const icon = rows[0]
+    if (!icon) throw new NotFoundException('Ikon KMZ tidak ditemukan.')
+    return { mimeType: icon.mimeType, data: icon.content.toString('base64') }
+  }
+
+  async listMapAssets(bounds: [number, number, number, number], zoom = 16, provinceCode?: string) {
     // Display geometry only; original geometry stays available for editing and exports.
     const tolerance = zoom >= 16 ? 0 : 360 / (512 * 2 ** zoom)
     const { rows } = await this.db.query<AssetRecord>(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
@@ -213,12 +413,13 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
       count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
       count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
-      ST_AsGeoJSON(CASE WHEN $5::float8 > 0 THEN ST_SimplifyPreserveTopology(a.geometry,$5::float8) ELSE a.geometry END,6)::json AS geometry,
+      ST_AsGeoJSON(CASE WHEN $5::float8 > 0 AND a.source<>'kml' THEN ST_SimplifyPreserveTopology(a.geometry,$5::float8) ELSE a.geometry END,6)::json AS geometry,
       GeometryType(a.geometry) AS "geometryType",a.attributes,a.created_at AS "createdAt"
       FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
       WHERE a.geometry && ST_MakeEnvelope($1,$2,$3,$4,4326)
         AND ST_Intersects(a.geometry,ST_MakeEnvelope($1,$2,$3,$4,4326))
-      GROUP BY a.id ORDER BY a.name`, [...bounds, tolerance])
+        AND ($6::text IS NULL OR ${provinceMatch(6)})
+      GROUP BY a.id ORDER BY a.name`, [...bounds, tolerance, provinceCode ?? null])
     const pattern = new RegExp((await this.getCableNamePattern()).pattern)
     return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
   }

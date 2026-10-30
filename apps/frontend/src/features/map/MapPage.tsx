@@ -1,3 +1,4 @@
+import { kmzLegend } from "./kmzLegend";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
@@ -11,6 +12,8 @@ import { PageHeader } from "../../components/PageHeader";
 import { api, networkQueryKeys, type Booking, type NetworkAsset, type NetworkAssetPage } from "../../lib/api";
 
 type Coordinate = [number, number];
+type MapProvinceOption = { code: string; name: string; assetCount: number; folderCount: number; bounds: [number, number, number, number] | null };
+type MapProvinceResponse = { items: MapProvinceOption[] };
 type RouteLine = Feature<LineString, { id: string; name: string; status: "preview" | "saved" }>;
 type SelectMode = "idle" | "start" | "waypoint" | "end";
 type ImportedStyle = {
@@ -21,6 +24,9 @@ type ImportedStyle = {
   fillOpacity?: number;
   fillEnabled?: boolean;
   outlineEnabled?: boolean;
+  labelColor?: string;
+  labelOpacity?: number;
+  labelScale?: number;
   iconColor?: string;
   iconOpacity?: number;
   iconScale?: number;
@@ -109,17 +115,19 @@ function getIconCategory(folderPath: unknown, assetName: unknown) {
     .reverse();
   const name = String(assetName ?? "");
   const categories: [string, RegExp][] = [
+    ["OTB", /(^|[^A-Z0-9])OTB(?=$|[^A-Z0-9]|\d)/i],
     ["OLT", /(^|[^A-Z0-9])OLT(?=$|[^A-Z0-9]|\d)/i],
     ["ODP", /(^|[^A-Z0-9])ODP(?=$|[^A-Z0-9]|\d)/i],
     ["ODC", /(^|[^A-Z0-9])ODC(?=$|[^A-Z0-9]|\d)/i],
     ["FDT", /(^|[^A-Z0-9])FDT(?=$|[^A-Z0-9]|\d)/i],
-    ["POLE", /(^|[^A-Z0-9])(?:POLE|PL)(?=$|[^A-Z0-9]|\d)/i],
-    ["JC", /(^|[^A-Z0-9])(?:JC|JOINT\s*CLOSURE)(?=$|[^A-Z0-9]|\d)/i],
+    ["POLE", /(^|[^A-Z0-9])(?:POLE|PL|T6|T7|T9|TL)(?=$|[^A-Z0-9]|\d)/i],
+    ["JC", /(^|[^A-Z0-9])(?:JC|CLOSURE|JOINT\s*CLOSURE)(?=$|[^A-Z0-9]|\d)/i],
     ["OFP", /(^|[^A-Z0-9])OFP(?=$|[^A-Z0-9]|\d)/i],
     ["POP", /(^|[^A-Z0-9])POP(?=$|[^A-Z0-9]|\d)/i],
     ["ODF", /(^|[^A-Z0-9])ODF(?=$|[^A-Z0-9]|\d)/i],
     ["SLACK", /(^|[^A-Z0-9])SLACK(?=$|[^A-Z0-9]|\d)/i],
     ["HANDHOLE", /(^|[^A-Z0-9])(?:HH|HANDHOLE)(?=$|[^A-Z0-9]|\d)/i],
+    ["MANHOLE", /(^|[^A-Z0-9])(?:MH|MANHOLE)(?=$|[^A-Z0-9]|\d)/i],
     ["TERMINAL BOX", /(^|[^A-Z0-9])(?:TB|TERMINAL\s*BOX)(?=$|[^A-Z0-9]|\d)/i],
   ];
   for (const folder of folders) {
@@ -140,19 +148,76 @@ function assetIconCategory(asset: NetworkAsset) {
   const categories: Record<string, string> = {
     JOINT_CLOSURE: "JC",
     HANDHOLE: "HANDHOLE",
+    MANHOLE: "MANHOLE",
+    OTB: "OTB",
   };
-  if (["OLT", "ODC", "ODP", "POLE", "FDT", "OFP", "POP", "ODF", "SLACK"].includes(assetKind)) return assetKind;
+  if (["OLT", "ODC", "ODP", "POLE", "FDT", "OFP", "POP", "ODF", "SLACK", "OTB", "MANHOLE"].includes(assetKind)) return assetKind;
   return categories[assetKind] ?? getIconCategory(asset.attributes?.folderPath, asset.attributes?.name ?? asset.name);
+}
+
+function legendStyle(asset: NetworkAsset) {
+  const normalize = (value: unknown) => String(value ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const folders = String(asset.attributes?.folderPath ?? "").split("/").map((folder) => folder.trim()).reverse();
+  const metadata = [asset.attributes?.Spesifikasi, asset.attributes?.Splitter, asset.attributes?.["Tipe Perangkat"], asset.attributes?.assetKind];
+  let rule: (typeof kmzLegend)[number] | undefined;
+  for (const value of [...folders, ...metadata, asset.attributes?.name, asset.name]) {
+    rule = kmzLegend.find((entry) => Boolean(entry.iconUrl) === (asset.assetType !== "segment") && entry.folder !== "-" && entry.folder.split("/").some((folder) => normalize(folder) === normalize(value)));
+    if (rule) break;
+  }
+  const text = [asset.name, ...folders, ...metadata].join(" ").toUpperCase();
+  let category = assetIconCategory(asset);
+  if (!rule) {
+    if (asset.assetType === "segment" && /BRENCH|BRANCH|PATCH.?CORD/.test(text)) category = "BRANCH";
+    else if (asset.assetType === "segment" && /DROP/.test(text)) category = "DROP";
+    else if (asset.assetType === "segment" && /HDPE|DUCT|TRENCHLESS/.test(text)) category = "HDPE";
+    else if (asset.assetType === "segment" && /BACKBONE|CABLE_BB/.test(text)) category = "BACKBONE";
+    else if (asset.assetType === "segment" && /FEEDER|CABLE_FDR/.test(text)) category = "FEEDER";
+    else if (asset.assetType === "segment" && /DISTRIB|CABLE_DST/.test(text)) category = "DISTRIBUTION";
+    const capacity = asset.totalCores || Number(text.match(/(?:^|[^0-9])(288|144|96|48|32|24|16|12|8)\s*(?:C(?:ORE)?S?|PORT)(?:$|[^A-Z])/i)?.[1] ?? 0);
+    const candidates = kmzLegend.filter((entry) => entry.category === category);
+    rule = candidates.find((entry) => capacity > 0 && entry.name.match(/\d+/)?.[0] === String(capacity)) ?? (candidates.length === 1 ? candidates[0] : undefined);
+  }
+  const isLine = asset.assetType === "segment";
+  return { category: rule?.category ?? category, color: rule?.color, size: rule?.size ?? 1, labelSize: rule?.labelSize ?? 0,
+    cableLineWidth: isLine ? rule?.size : undefined, iconUrl: rule?.iconUrl, termination: rule?.termination ?? "Bukan Terminasi" };
+}
+
+function iconPreview(category: string) {
+  const shapes: Record<string, string> = { POLE: "shaded_dot.png", POP: "arrow.png", OLT: "arrow.png", OTB: "arrow.png", ODC: "square.png", ODP: "triangle.png", JC: "forbidden.png", SLACK: "target.png", HANDHOLE: "square.png", MANHOLE: "square.png" };
+  if (shapes[category]) return <img className="map-icon-preview" src={`https://maps.google.com/mapfiles/kml/shapes/${shapes[category]}`} alt="" />;
+  const icons: Record<string, [string, string]> = {
+    OLT: ["bi-hdd-network-fill", "#2864d7"], OTB: ["bi-box-fill", "#00aabb"], ODC: ["bi-square-fill", "#f28c28"], ODP: ["bi-triangle-fill", "#8b4513"],
+    POLE: ["bi-signpost-2-fill", "#c5a900"], JC: ["bi-record-circle-fill", "#f28c28"], HANDHOLE: ["bi-square-fill", "#8993a3"], MANHOLE: ["bi-square-fill", "#202124"],
+    POP: ["bi-arrow-up-right-circle-fill", "#e8b500"], ODF: ["bi-grid-3x3-gap-fill", "#684fc7"], SLACK: ["bi-bullseye", "#e53935"], FDT: ["bi-diagram-3-fill", "#e75b3c"],
+    OFP: ["bi-box-fill", "#178c80"], "TERMINAL BOX": ["bi-box-fill", "#3280c8"], LAINNYA: ["bi-geo-alt-fill", "#3454d1"],
+  };
+  const [icon, color] = icons[category] ?? ["bi-geo-alt-fill", "#3454d1"];
+  return <i className={`bi ${icon} map-icon-preview`} style={{ color }} aria-hidden="true" />;
+}
+
+const localKmzIcons = new Set(["paddle/P.png","pushpin/ylw-pushpin.png","shapes/arrow.png","shapes/cross-hairs.png","shapes/donut.png","shapes/forbidden.png","shapes/homegardenbusiness.png","shapes/info-i.png","shapes/placemark_circle.png","shapes/placemark_square.png","shapes/shaded_dot.png","shapes/square.png","shapes/target.png","shapes/triangle.png"]);
+
+function mapGeometryParts(geometry: Geometry): Geometry[] {
+  return geometry.type === "GeometryCollection" ? geometry.geometries.flatMap(mapGeometryParts) : [geometry];
 }
 
 const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, unknown>>[] =>
   items.reduce<Feature<Geometry, Record<string, unknown>>[]>((features, item) => {
     if (item.geometry) {
       const style = item.attributes?.__kmlStyle as ImportedStyle | undefined;
-      const iconUrl = style?.iconHref?.replace(/^http:\/\//i, "https://");
+      const legend = legendStyle(item);
+      const iconCategory = legend.category;
+      const iconHref = style?.iconHref ?? legend.iconUrl;
+      const kmzIcon = iconHref?.match(/^atlas-kmz-icon:([a-f0-9]{64})$/i)?.[1];
+      const localIcon = iconHref?.match(/^https?:\/\/maps\.google\.com\/mapfiles\/kml\/(.+)$/i)?.[1];
+      const iconUrl = kmzIcon ? iconHref : localIcon && localKmzIcons.has(localIcon) ? `/kml-icons/${localIcon}` : iconHref?.replace(/^http:\/\//i, "https://");
+      const iconLegendColor: Record<string, string> = { POLE: "#e8c300", POP: "#e8b500", OLT: "#2864d7", OTB: "#00bcd4", ODC: "#f28c28", ODP: "#8b4513", JC: "#f28c28", SLACK: "#e53935", HANDHOLE: "#ffffff", MANHOLE: "#202124" };
       const googlePushpin = /\/pushpin\/ylw-pushpin\.png(?:$|[?#])/i.test(style?.iconHref ?? "");
-      const iconCategory = assetIconCategory(item);
-      const routeType = item.attributes?.routeType ?? (item.name.startsWith("Kabel feeder") ? "FEEDER" : item.name.startsWith("Kabel ODC") ? "DISTRIBUTION" : undefined);
+      const lineDescription = `${item.name} ${item.cableType} ${String(item.attributes?.routeType ?? "")}`;
+      const routeType = item.attributes?.routeType ?? (/backbone/i.test(lineDescription) ? "BACKBONE" : /feeder/i.test(lineDescription) ? "FEEDER" : /distrib/i.test(lineDescription) ? "DISTRIBUTION" : /drop/i.test(lineDescription) ? "DROP" : undefined);
+      const coreMatch = lineDescription.match(/(?:^|\D)(12|24|48|96|144|288)\s*(?:core|c)?\b/i);
+      const legendColor: Record<string, string> = { "12": "#8b4513", "24": "#f28c28", "48": "#2864d7", "96": "#e53935", "144": "#22a447", "288": "#202124" };
+      const inferredLineColor = coreMatch ? legendColor[coreMatch[1]] : routeType === "DROP" ? "#8e44ad" : undefined;
       features.push({
         type: "Feature",
         id: item.id,
@@ -160,6 +225,7 @@ const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, 
           id: item.id,
           name: item.name,
           area: item.area,
+          ...Object.fromEntries(Object.entries(item.attributes ?? {}).filter(([, value]) => value == null || ["string", "number", "boolean"].includes(typeof value))),
           source: item.source,
           assetType: item.assetType,
           totalCores: item.totalCores,
@@ -169,39 +235,53 @@ const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, 
           imported: item.source !== "managed",
           geometryType: item.geometry.type,
           iconCategory,
-          atlasIconId: !iconUrl && ["OLT", "ODC", "ODP", "POLE", "JC", "HANDHOLE", "FDT", "OFP", "POP", "ODF", "SLACK", "TERMINAL BOX"].includes(iconCategory) ? `atlas-icon-${iconCategory.toLowerCase().replace(/\s+/g, "-")}` : "",
+          legendLabelSize: style?.labelScale ?? (style?.iconHref ? 1 : legend.labelSize),
+          sourceLabel: item.attributes?.name ?? item.name,
+          labelColor: style?.labelColor ?? (item.source === "kml" ? "#ffffff" : "#17356f"),
+          labelOpacity: style?.labelOpacity ?? 1,
+          legendTermination: legend.termination,
+          legendIconScale: style?.iconScale ?? legend.size,
+          atlasIconId: ["OLT", "OTB", "ODC", "ODP", "POLE", "JC", "HANDHOLE", "MANHOLE", "FDT", "OFP", "POP", "ODF", "SLACK", "TERMINAL BOX"].includes(iconCategory) ? `atlas-icon-${iconCategory.toLowerCase().replace(/\s+/g, "-")}` : "",
           routeType,
-          lineColor: style?.lineColor ?? String(item.attributes?.lineColor ?? (routeType === "FEEDER" ? "#ff0000" : routeType === "DISTRIBUTION" ? "#a000ff" : item.source === "kml" ? "#ffffff" : "#3454d1")),
+          lineColor: style?.lineColor ?? (legend.cableLineWidth ? legend.color : undefined) ?? inferredLineColor ?? String(item.attributes?.lineColor ?? (routeType === "FEEDER" ? "#ff0000" : routeType === "DISTRIBUTION" ? "#a000ff" : item.source === "kml" ? "#ffffff" : "#3454d1")),
           lineOpacity: style?.lineOpacity ?? 1,
-          lineWidth: style?.lineWidth ?? (routeType ? 5 : item.source === "kml" ? 1 : 3),
+          lineWidth: style?.lineWidth ?? legend.cableLineWidth ?? (routeType === "BACKBONE" ? 5 : routeType === "FEEDER" ? 4 : routeType === "DISTRIBUTION" ? 3 : routeType === "DROP" ? 2 : item.source === "kml" ? 1 : 3),
           fillColor: style?.fillColor ?? (item.source === "kml" ? "#ffffff" : "#3454d1"),
           fillOpacity: style?.fillOpacity ?? (item.source === "kml" ? 1 : 0.25),
           fillEnabled: style?.fillEnabled ?? item.source === "kml",
           outlineEnabled: style?.outlineEnabled ?? ((item.geometry.type !== "Polygon" && item.geometry.type !== "MultiPolygon") || item.source === "kml"),
           iconColor: style?.iconColor ?? "#ffffff",
-          markerColor: style?.iconColor ?? ({ OLT: "#e8b500", ODC: "#ff0000", ODP: "#0000ff", POLE: "#536177", JC: "#a000ff", HANDHOLE: "#536177" } as Record<string, string>)[iconCategory] ?? "#3454d1",
+          markerColor: style?.iconColor ?? ({ OLT: "#2864d7", OTB: "#00bcd4", ODC: "#f28c28", ODP: "#8b4513", POLE: "#e8c300", JC: "#f28c28", HANDHOLE: "#fff", MANHOLE: "#202124" } as Record<string, string>)[iconCategory] ?? "#3454d1",
           isManagedFtth: item.attributes?.source === "ftth-design",
           iconOpacity: style?.iconOpacity ?? 1,
           iconScale: style?.iconScale ?? 1,
           iconAnchor: style?.iconAnchor ?? (googlePushpin ? "bottom-right" : "center"),
           iconOffset: style?.iconOffset ?? (googlePushpin ? [12 / 32, 2 / 32] : [0, 0]),
-          iconImageId: iconUrl ? `kml-${encodeURIComponent(iconUrl)}-${(style?.iconColor ?? "#ffffff").slice(1)}` : "",
+          iconImageId: kmzIcon ? `kmz-${kmzIcon}-${(style?.iconColor ?? "#ffffff").slice(1)}` : iconUrl ? `kml-${hashIconReference(iconUrl)}-${(style?.iconColor ?? "#ffffff").slice(1)}` : "",
+          iconHref: iconUrl ?? "",
+          fallbackIconImageId: legend.iconUrl ? `legend-${hashIconReference(legend.iconUrl)}-${(legend.color ?? "#ffffff").slice(1)}` : "",
+          fallbackIconHref: legend.iconUrl?.replace("https://maps.google.com/mapfiles/kml/", "/kml-icons/") ?? "",
+          fallbackIconTint: legend.color ?? "#ffffff",
+          iconTint: style?.iconColor ?? (style?.iconHref ? "#ffffff" : legend.color ?? iconLegendColor[iconCategory] ?? "#ffffff"),
         },
         geometry: item.geometry,
       });
     }
     return features;
-  }, []);
+  }, []).flatMap((feature) => mapGeometryParts(feature.geometry).map((geometry) => ({ ...feature, geometry, properties: { ...feature.properties, geometryType: geometry.type } })));
 
 function addAtlasMapIcons(map: MapLibreMap) {
-  const icons: Record<string, string> = { OLT: "#e8b500", ODC: "#ff0000", ODP: "#0000ff", POLE: "#536177", JC: "#a000ff", HANDHOLE: "#536177", FDT: "#e75b3c", OFP: "#178c80", POP: "#e8b500", ODF: "#684fc7", SLACK: "#64748b", "TERMINAL BOX": "#3280c8" };
+  const icons: Record<string, string> = { OLT: "#2864d7", OTB: "#00bcd4", ODC: "#f28c28", ODP: "#8b4513", POLE: "#e8c300", JC: "#f28c28", HANDHOLE: "#fff", MANHOLE: "#202124", FDT: "#e75b3c", OFP: "#178c80", POP: "#e8b500", ODF: "#684fc7", SLACK: "#e53935", "TERMINAL BOX": "#3280c8" };
   for (const [category, color] of Object.entries(icons)) {
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 64;
     const context = canvas.getContext("2d");
     if (!context) continue;
     context.scale(2, 2);
-    if (category === "ODC" || category === "ODP") {
+    if (category === "ODC") {
+      context.fillStyle = color; context.strokeStyle = "#fff"; context.lineWidth = 2;
+      context.fillRect(6, 6, 20, 20); context.strokeRect(6, 6, 20, 20);
+    } else if (category === "ODP") {
       context.fillStyle = color;
       context.beginPath(); context.moveTo(16, 4); context.lineTo(28, 27); context.lineTo(4, 27); context.closePath(); context.fill();
       context.globalCompositeOperation = "destination-out";
@@ -229,6 +309,27 @@ function addAtlasMapIcons(map: MapLibreMap) {
 }
 const lineCollection = (features: Feature<Geometry, Record<string, unknown>>[]): FeatureCollection<Geometry> => ({ type: "FeatureCollection", features });
 const routeCollection = (features: RouteLine[]): FeatureCollection<LineString> => ({ type: "FeatureCollection", features });
+
+const normalizeProvinceBoundaryName = (value: unknown) => String(value ?? "")
+  .trim()
+  .toLocaleLowerCase("id-ID")
+  .replace(/^(provinsi|province|propinsi)\s+/i, "")
+  .replace(/\s+(province|provinsi|propinsi)$/i, "")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "");
+
+const provinceBoundaryAliases: Record<string, string[]> = {
+  "12": ["sumatera utara", "north sumatra", "north sumatera"],
+  "36": ["banten", "probanten"],
+  "31": ["dki jakarta", "jakarta", "daerah khusus ibukota jakarta"],
+  "32": ["jawa barat", "west java"],
+};
+
+function hashIconReference(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  return (hash >>> 0).toString(16);
+}
 const pointCollection = (points: Coordinate[]): FeatureCollection<Point> => ({
   type: "FeatureCollection",
   features: points.map((coordinates, index) => ({ type: "Feature", properties: { index }, geometry: { type: "Point", coordinates } })),
@@ -243,7 +344,7 @@ function geometryBounds(geometry: Geometry, bounds: LngLatBounds) {
   else addBoundsCoordinates(bounds, geometry.coordinates);
 }
 function nearestPointFeature(map: MapLibreMap, point: { x: number; y: number }) {
-  const nearby = map.queryRenderedFeatures([point.x, point.y], { layers: ["network-point-hit", "network-icons", "network-points"] });
+  const nearby = map.queryRenderedFeatures([point.x, point.y], { layers: ["network-point-hit", "network-icons"] });
   const points = nearby.filter((feature): feature is (typeof nearby)[number] & { geometry: Point } => feature.geometry.type === "Point");
   return points.sort((a, b) => {
     const distance = (feature: typeof a) => {
@@ -254,7 +355,7 @@ function nearestPointFeature(map: MapLibreMap, point: { x: number; y: number }) 
   })[0];
 }
 function pointFeatureAtCursor(map: MapLibreMap, point: { x: number; y: number }) {
-  const features = map.queryRenderedFeatures([point.x, point.y], { layers: ["network-icons", "network-points"] }).filter((feature): feature is typeof feature & { geometry: Point } => feature.geometry.type === "Point");
+  const features = map.queryRenderedFeatures([point.x, point.y], { layers: ["network-icons"] }).filter((feature): feature is typeof feature & { geometry: Point } => feature.geometry.type === "Point");
   return features.sort((a, b) => {
     const distance = (feature: typeof a) => {
       const projected = map.project(feature.geometry.coordinates as Coordinate);
@@ -291,6 +392,27 @@ function firstCoordinate(geometry: NetworkAsset["geometry"]): Coordinate {
   return child ? firstCoordinate(child) : [106.79, -6.26];
 }
 
+function cableLengthMeters(geometry: Geometry | null): number | null {
+  if (!geometry) return null;
+  const lines: number[][][] = [];
+  const collect = (item: Geometry) => {
+    if (item.type === "LineString") lines.push(item.coordinates as number[][]);
+    else if (item.type === "MultiLineString") lines.push(...item.coordinates as number[][][]);
+    else if (item.type === "GeometryCollection") item.geometries.forEach(collect);
+  };
+  collect(geometry);
+  if (!lines.length) return null;
+  const radians = (degrees: number) => degrees * Math.PI / 180;
+  return lines.reduce((total, line) => total + line.slice(1).reduce((length, point, index) => {
+    const [lon1, lat1] = line[index];
+    const [lon2, lat2] = point;
+    const dLat = radians(lat2 - lat1);
+    const dLon = radians(lon2 - lon1);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(dLon / 2) ** 2;
+    return length + 6371008.8 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }, 0), 0);
+}
+
 function matchesAssetSearch(asset: NetworkAsset, query: string) {
   if (!query) return true;
   const searchable = [asset.name, asset.area, asset.cableType, asset.assetType, asset.pole, asset.odc, asset.odp,
@@ -312,31 +434,39 @@ function SegmentCoreSummary({ asset }: { asset: NetworkAsset }) {
 }
 
 export function MapPage() {
-  const initialBounds = useQuery({
-    queryKey: ["network-map-bounds"],
-    queryFn: () => api<{ bounds: [number, number, number, number] | null }>("/assets/bounds"),
+  const mapProvincesQuery = useQuery({
+    queryKey: ["network-map-provinces"],
+    queryFn: () => api<MapProvinceResponse>("/assets/provinces", { timeout: 30_000 }),
+    retry: 0,
     staleTime: Infinity,
     refetchOnWindowFocus: false,
   });
+  const [provinceCode, setProvinceCode] = useState("");
+  const [provincePickMessage, setProvincePickMessage] = useState("");
+  const provinces = mapProvincesQuery.data?.items ?? [];
+  const selectedProvince = provinces.find((province) => province.code === provinceCode);
+  const selectedProvinceCodeRef = useRef(provinceCode);
+  selectedProvinceCodeRef.current = provinceCode;
   const [assetPage, setAssetPage] = useState(1);
   const [search, setSearch] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [coreFilter, setCoreFilter] = useState("all");
   const catalogQuery = useQuery({
-    queryKey: ["segment-catalog", assetPage, catalogSearch, coreFilter],
-    queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${coreFilter}`),
+    queryKey: ["segment-catalog", assetPage, catalogSearch, coreFilter, provinceCode],
+    queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${coreFilter}&provinceCode=${provinceCode}`),
+    enabled: Boolean(provinceCode),
     refetchInterval: 30_000,
-    placeholderData: (previous) => previous,
   });
   const networkSegments = catalogQuery.data?.items ?? [];
   const [mapBounds, setMapBounds] = useState<[number, number, number, number] | null>(null);
   const [mapZoom, setMapZoom] = useState(4);
   const mapAssetsQuery = useQuery({
-    queryKey: ["map-assets", mapBounds, mapZoom],
-    queryFn: ({ signal }) => api<NetworkAsset[]>(`/assets/map?bbox=${mapBounds!.join(",")}&zoom=${mapZoom}`, { signal }),
-    enabled: Boolean(mapBounds),
+    queryKey: ["map-assets", mapBounds, mapZoom, provinceCode],
+    queryFn: ({ signal }) => api<NetworkAsset[]>(`/assets/map?bbox=${mapBounds!.join(",")}&zoom=${mapZoom}&provinceCode=${provinceCode}`, { signal, timeout: 30_000 }),
+    retry: 0,
+    enabled: Boolean(mapBounds && provinceCode),
     staleTime: 20_000,
-    placeholderData: (previous) => previous,
+    placeholderData: (previousData, previousQuery) => previousQuery?.queryKey[3] === provinceCode ? previousData : undefined,
   });
   const { data: bookings = [], isPending: bookingsPending, isError: bookingsError } = useQuery({ queryKey: ["bookings"], queryFn: () => api<Booking[]>("/bookings"), refetchInterval: 30_000 });
   const queryClient = useQueryClient();
@@ -350,6 +480,8 @@ export function MapPage() {
   const assetDetails = useRef<HTMLDetailsElement>(null);
   const modeRef = useRef<SelectMode>("idle");
   const pointsRef = useRef<Coordinate[]>([]);
+  const provincesRef = useRef(provinces);
+  provincesRef.current = provinces;
   const [selectedId, setSelectedId] = useState<string>("");
   const [confirmedRoutes, setConfirmedRoutes] = useState<RouteLine[]>([]);
   const [routePreview, setRoutePreview] = useState<RouteLine | null>(null);
@@ -373,8 +505,32 @@ export function MapPage() {
   const [exporting, setExporting] = useState(false);
   const [routeError, setRouteError] = useState("");
   const [fileName, setFileName] = useState("");
+  const [fileImportCount, setFileImportCount] = useState<number | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeDistance, setRouteDistance] = useState<number | null>(null);
+  const [assetPopup, setAssetPopup] = useState<NetworkAsset | null>(null);
+  const [popupAnchor, setPopupAnchor] = useState<Coordinate | null>(null);
+  const [popupPosition, setPopupPosition] = useState({ left: 12, top: 54 });
+  const popupElement = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const instance = map.current;
+    const element = popupElement.current;
+    if (!instance || !element || !assetPopup || !popupAnchor) return;
+    const position = () => {
+      const point = instance.project(popupAnchor);
+      const container = instance.getContainer();
+      const width = element.offsetWidth;
+      const height = element.offsetHeight;
+      const left = point.x + width + 20 < container.clientWidth ? point.x + 18 : point.x - width - 18;
+      setPopupPosition({ left: Math.max(12, Math.min(left, container.clientWidth - width - 12)), top: Math.max(54, Math.min(point.y - height / 2, container.clientHeight - height - 12)) });
+    };
+    position();
+    instance.on("move", position);
+    instance.on("resize", position);
+    const observer = new ResizeObserver(position);
+    observer.observe(element);
+    return () => { instance.off("move", position); instance.off("resize", position); observer.disconnect(); };
+  }, [assetPopup, popupAnchor]);
   const [fileModal, setFileModal] = useState<"import" | "download" | null>(null);
   const { data: user } = useQuery({ queryKey: ["me"], queryFn: () => api<{ role: string }>("/me") });
 
@@ -383,6 +539,8 @@ export function MapPage() {
     return () => window.clearTimeout(timer);
   }, [search]);
   const knownAssets = useMemo(() => [...new Map([...networkSegments, ...(mapAssetsQuery.data ?? [])].map((asset) => [asset.id, asset])).values()], [networkSegments, mapAssetsQuery.data]);
+  const knownAssetsRef = useRef(knownAssets);
+  knownAssetsRef.current = knownAssets;
 
   const allNetworkFeatures = useMemo(() => assetFeatures(mapAssetsQuery.data ?? []), [mapAssetsQuery.data]);
   const iconCategoryCounts = useMemo(() => {
@@ -437,6 +595,14 @@ export function MapPage() {
     return { type: "Feature", properties: { radiusMeters: draftRadiusMeters }, geometry: { type: "Polygon", coordinates: [coordinates] } };
   }, [selectedDraftAnchor, selectedDraftOltGeometry.data?.geometry, draftRadiusMeters]);
   const selectedSegment = selectedAsset?.assetType === "segment" ? selectedAsset : undefined;
+  const selectedLegend = selectedAsset ? legendStyle(selectedAsset) : undefined;
+  const selectedSegmentGeometry = useQuery({
+    queryKey: ["asset-geometry", selectedSegment?.id],
+    queryFn: () => api<{ geometry: Geometry | null }>(`/assets/${selectedSegment!.id}/geometry`),
+    enabled: Boolean(selectedSegment),
+    staleTime: 60_000,
+  });
+  const selectedCableGeometry = selectedSegmentGeometry.data?.geometry ?? selectedSegment?.geometry ?? null;
   const selectedImported = selectedAsset && selectedAsset.assetType !== "segment" ? selectedAsset : undefined;
   const imported = networkSegments.filter((item) => item.source !== "managed");
   const selectedName = selectedAsset?.name ?? "Pilih aset jaringan";
@@ -497,7 +663,7 @@ export function MapPage() {
   }
 
   useEffect(() => {
-    if (!mapElement.current || map.current || initialBounds.isPending) return;
+    if (!mapElement.current || map.current) return;
     setWorkerUrl(workerUrl);
     localStorage.removeItem("atlas-map-focus");
     localStorage.removeItem("atlas-map-focus-design");
@@ -505,11 +671,8 @@ export function MapPage() {
       container: mapElement.current,
       style: "https://tiles.openfreemap.org/styles/liberty",
       center: [118, -2.5],
-      zoom: 4,
-      ...(initialBounds.data?.bounds ? {
-        bounds: initialBounds.data.bounds,
-        fitBoundsOptions: { padding: 48, maxZoom: 10, duration: 0 },
-      } : {}),
+      zoom: 5.3,
+      maxBounds: [[94, -12], [142, 7]],
     });
     map.current = instance;
     let boundsTimer: ReturnType<typeof setTimeout> | undefined;
@@ -521,16 +684,18 @@ export function MapPage() {
       addAtlasMapIcons(instance);
       const updateBounds = () => {
         const bounds = instance.getBounds();
-        setMapBounds([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].map((value) => Number(value.toFixed(4))) as [number, number, number, number]);
-        setMapZoom(Math.floor(instance.getZoom()));
+        const nextBounds = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].map((value) => Number(value.toFixed(4))) as [number, number, number, number];
+        const nextZoom = Math.floor(instance.getZoom());
+        setMapBounds((previous) => previous?.every((value, index) => value === nextBounds[index]) ? previous : nextBounds);
+        setMapZoom((previous) => previous === nextZoom ? previous : nextZoom);
       };
       instance.on("moveend", () => {
         clearTimeout(boundsTimer);
-        boundsTimer = setTimeout(updateBounds, 250);
+        boundsTimer = setTimeout(updateBounds, 450);
       });
       updateBounds();
       instance.addSource("network-shapes", { type: "geojson", data: shapeFeatures });
-      instance.addSource("network-points-data", { type: "geojson", data: pointFeatures, cluster: true, clusterMaxZoom: 14, clusterRadius: 28 });
+      instance.addSource("network-points-data", { type: "geojson", data: pointFeatures, cluster: false });
       instance.addSource("selected-ftth-boundary", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       instance.addLayer({ id: "selected-ftth-boundary-fill", type: "fill", source: "selected-ftth-boundary", paint: { "fill-color": "#3454d8", "fill-opacity": 0.12 } });
       instance.addLayer({ id: "selected-ftth-boundary-line", type: "line", source: "selected-ftth-boundary", paint: { "line-color": "#3454d8", "line-width": 2, "line-dasharray": [2, 2] } });
@@ -551,41 +716,13 @@ export function MapPage() {
       });
       instance.addLayer({ id: "network-hit", type: "line", source: "network-shapes", filter: visibleLineFilter, paint: { "line-color": "#3454d1", "line-width": 18, "line-opacity": 0 } });
       instance.addLayer({
-        id: "network-clusters",
-        type: "circle",
-        source: "network-points-data",
-        filter: ["has", "point_count"],
-        paint: {
-          "circle-color": "#3454d1",
-          "circle-radius": ["step", ["get", "point_count"], 18, 10, 22, 50, 28, 200, 34],
-          "circle-stroke-color": "#fff",
-          "circle-stroke-width": 2,
-          "circle-opacity": 0.94,
-        },
-      });
-      instance.addLayer({
-        id: "network-cluster-count",
-        type: "symbol",
-        source: "network-points-data",
-        filter: ["has", "point_count"],
-        layout: { "text-field": ["to-string", ["get", "point_count"]], "text-size": 13, "text-font": ["Open Sans Bold"], "text-allow-overlap": true },
-        paint: { "text-color": "#fff" },
-      });
-      instance.addLayer({
-        id: "network-points",
-        type: "circle",
-        source: "network-points-data",
-        filter: ["all", ["!", ["has", "point_count"]], ["all", ["any", ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]], ["any", ["!", ["has", "atlasIconId"]], ["==", ["get", "atlasIconId"], ""]]]],
-        paint: { "circle-radius": ["case", ["in", ["get", "iconCategory"], ["literal", ["OLT", "ODC", "ODP", "POLE", "JC", "HANDHOLE"]]], 9, 3], "circle-color": ["coalesce", ["get", "markerColor"], "#3454d1"], "circle-opacity": ["coalesce", ["get", "iconOpacity"], 1], "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 },
-      });
-      instance.addLayer({
         id: "network-icons",
         type: "symbol",
         source: "network-points-data",
-        filter: ["all", ["!", ["has", "point_count"]], ["any", ["!", ["has", "atlasIconId"]], ["==", ["get", "atlasIconId"], ""], ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]]],
+        filter: ["all", ["!", ["has", "point_count"]], ["any", ["all", ["has", "atlasIconId"], ["!=", ["get", "atlasIconId"], ""]], ["all", ["has", "iconImageId"], ["!=", ["get", "iconImageId"], ""]]]],
         layout: {
-          "icon-image": ["case", ["all", ["has", "atlasIconId"], ["!=", ["get", "atlasIconId"], ""]], ["get", "atlasIconId"], ["get", "iconImageId"]],
-          "icon-size": ["case", ["all", ["has", "atlasIconId"], ["!=", ["get", "atlasIconId"], ""]], ["match", ["get", "iconCategory"], "POLE", 0.62, "OLT", 0.8, "ODC", 0.8, "ODP", 0.8, 0.8], ["min", ["max", ["*", ["coalesce", ["get", "iconScale"], 1], 0.9], 0.9], 1]],
+          "icon-image": ["coalesce", ["image", ["get", "iconImageId"]], ["image", ["get", "fallbackIconImageId"]], ["image", ["get", "atlasIconId"]]],
+          "icon-size": ["case", ["all", ["has", "iconImageId"], ["!=", ["get", "iconImageId"], ""]], ["get", "legendIconScale"], ["all", ["has", "atlasIconId"], ["!=", ["get", "atlasIconId"], ""]], ["match", ["get", "iconCategory"], "POLE", 0.62, "OLT", 0.8, "ODC", 0.8, "ODP", 0.8, 0.8], ["min", ["max", ["*", ["coalesce", ["get", "iconScale"], 1], 0.9], 0.9], 1]],
           "icon-anchor": ["get", "iconAnchor"],
           "icon-offset": ["get", "iconOffset"],
           "icon-allow-overlap": true,
@@ -593,40 +730,66 @@ export function MapPage() {
         },
         paint: { "icon-opacity": ["coalesce", ["get", "iconOpacity"], 1] },
       });
+      instance.addLayer({
+        id: "network-labels",
+        type: "symbol",
+        source: "network-points-data",
+        filter: ["all", ["!", ["has", "point_count"]], [">", ["get", "legendLabelSize"], 0]],
+        layout: { "text-field": ["get", "sourceLabel"], "text-size": ["*", ["get", "legendLabelSize"], 10], "text-font": ["Open Sans Semibold"], "text-offset": [0, 1.2], "text-anchor": "top", "text-allow-overlap": false, "text-ignore-placement": false },
+        paint: { "text-color": ["get", "labelColor"], "text-opacity": ["get", "labelOpacity"], "text-halo-color": "#333", "text-halo-width": 1.5 },
+      });
       instance.addLayer({ id: "network-point-hit", type: "circle", source: "network-points-data", filter: ["!", ["has", "point_count"]], paint: { "circle-radius": 18, "circle-color": "#000", "circle-opacity": 0 } });
       instance.addSource("route-lines", { type: "geojson", data: routeFeatures });
       instance.addLayer({ id: "saved-routes", type: "line", source: "route-lines", filter: ["==", ["get", "status"], "saved"], paint: { "line-color": "#f29b38", "line-width": 5 } });
       instance.addLayer({ id: "preview-route", type: "line", source: "route-lines", filter: ["==", ["get", "status"], "preview"], paint: { "line-color": "#f29b38", "line-width": 5, "line-dasharray": [2, 1] } });
       instance.addSource("route-points", { type: "geojson", data: routePointFeatures });
       instance.addLayer({ id: "route-markers", type: "circle", source: "route-points", paint: { "circle-radius": 7, "circle-color": "#fff", "circle-stroke-width": 3, "circle-stroke-color": "#f29b38" } });
-      instance.moveLayer("selected-ftth-boundary-fill");
-      instance.moveLayer("selected-ftth-boundary-line");
+      void fetch("/data/indonesia-provinces.geojson").then((response) => response.json()).then((data) => {
+        if (!map.current || map.current !== instance) return;
+        instance.addSource("indonesia-provinces", { type: "geojson", data });
+        instance.addLayer({ id: "province-selection-fill", type: "fill", source: "indonesia-provinces", paint: { "fill-color": "#64748b", "fill-opacity": 0.22 } });
+        instance.addLayer({ id: "province-selection-border", type: "line", source: "indonesia-provinces", paint: { "line-color": "#ffffff", "line-width": 2 } });
+        instance.moveLayer("province-selection-fill", "network-polygons");
+        instance.moveLayer("province-selection-border", "network-polygons");
+        instance.on("click", "province-selection-fill", (event) => {
+          if (modeRef.current !== "idle") return;
+          const name = normalizeProvinceBoundaryName(String(event.features?.[0]?.properties?.Propinsi ?? ""));
+          const province = provincesRef.current.find((item) => [item.name, ...(provinceBoundaryAliases[item.code] ?? [])].some((value) => normalizeProvinceBoundaryName(value) === name));
+          if (!province) { setProvincePickMessage("Belum ada aset KMZ yang terpetakan ke provinsi ini. Silakan pilih provinsi lain."); return; }
+          setProvincePickMessage("");
+          if (province.code === selectedProvinceCodeRef.current) return;
+          setSelectedIconCategories(null);
+          setMapBounds(province.bounds);
+          setProvinceCode(province.code);
+          instance.setPaintProperty("province-selection-fill", "fill-opacity", ["case", ["==", ["get", "Propinsi"], event.features?.[0]?.properties?.Propinsi], 0, 0.3]);
+        });
+        instance.on("mouseenter", "province-selection-fill", () => { instance.getCanvas().style.cursor = "pointer"; });
+        instance.on("mouseleave", "province-selection-fill", () => { instance.getCanvas().style.cursor = ""; });
+      }).catch(() => setMapError(true));
+      if (instance.isStyleLoaded()) {
+        instance.moveLayer("selected-ftth-boundary-fill");
+        instance.moveLayer("selected-ftth-boundary-line");
+      }
       instance.on("click", (event) => {
         if (modeRef.current !== "idle") return;
-        const cluster = instance.queryRenderedFeatures(event.point, { layers: ["network-clusters"] })[0];
-        if (cluster) {
-          const clusterId = Number(cluster.properties?.cluster_id);
-          const source = instance.getSource("network-points-data") as GeoJSONSource;
-          void source.getClusterExpansionZoom(clusterId).then((zoom) => {
-            const coordinates = (cluster.geometry as Point).coordinates as Coordinate;
-            instance.easeTo({ center: coordinates, zoom: Math.min(zoom, 18), duration: 450 });
-          });
-          return;
-        }
-        const features = instance.queryRenderedFeatures(event.point, { layers: ["network-icons", "network-points", "network-polygons", "network-lines", "network-hit"] });
-        const boundary = features.find((item) => item.layer.id === "network-polygons") ?? features.find((item) => ["network-lines", "network-hit"].includes(item.layer.id));
-        const feature = pointFeatureAtCursor(instance, event.point) ?? boundary ?? nearestPointFeature(instance, event.point) ?? features[0];
+        const features = instance.queryRenderedFeatures(event.point, { layers: ["network-icons", "network-polygons", "network-lines", "network-hit"] });
+        const cable = features.find((item) => ["network-lines", "network-hit"].includes(item.layer.id) && ["LineString", "MultiLineString"].includes(String(item.properties?.geometryType)));
+        const boundary = features.find((item) => item.layer.id === "network-polygons");
+        const feature = cable ?? pointFeatureAtCursor(instance, event.point) ?? boundary ?? nearestPointFeature(instance, event.point) ?? features[0];
         const id = String(feature?.properties?.id ?? "");
-        if (id) setSelectedId(id);
+        if (id) {
+          setSelectedId(id);
+          setPopupAnchor([event.lngLat.lng, event.lngLat.lat]);
+          setAssetPopup(knownAssetsRef.current.find((asset) => asset.id === id) ?? null);
+        }
       });
       hoverPopup.current = new Popup({ closeButton: false, closeOnClick: false, anchor: "bottom", offset: 12, maxWidth: "260px", className: "network-hover-popup" });
       instance.on("mousemove", (event) => {
-        const clusterFeature = instance.queryRenderedFeatures(event.point, { layers: ["network-clusters"] })[0];
         const pointFeature = pointFeatureAtCursor(instance, event.point);
-        const lineFeature = clusterFeature || pointFeature
+        const lineFeature = pointFeature
           ? undefined
           : instance.queryRenderedFeatures(event.point, { layers: ["network-lines", "network-hit"] }).find((item) => ["LineString", "MultiLineString"].includes(String(item.properties?.geometryType)));
-        const feature = clusterFeature ?? pointFeature ?? lineFeature;
+        const feature = pointFeature ?? lineFeature;
         if (!feature) {
           instance.getCanvas().style.cursor = "";
           hoverPopup.current?.remove();
@@ -636,8 +799,8 @@ export function MapPage() {
         const content = document.createElement("div");
         const title = document.createElement("strong");
         const detail = document.createElement("small");
-        const isCluster = Boolean(clusterFeature);
-        title.textContent = isCluster ? `${Number(feature.properties?.point_count ?? 0).toLocaleString("id-ID")} aset titik` : String(feature.properties?.name ?? "Aset jaringan");
+        const isCluster = false;
+        title.textContent = String(feature.properties?.name ?? "Aset jaringan");
         const sourceLabel = feature.properties?.source === "kml" ? "KML/KMZ" : feature.properties?.source === "xlsx" ? "Excel" : String(feature.properties?.area ?? "Jaringan");
         detail.textContent = isCluster ? "Klik untuk melihat lebih dekat" : `${sourceLabel} · ${String(feature.properties?.geometryType ?? "Segmen")} · Klik untuk detail`;
         content.append(title, document.createElement("br"), detail);
@@ -677,7 +840,15 @@ export function MapPage() {
       map.current?.remove();
       map.current = null;
     };
-  }, [initialBounds.data, initialBounds.isPending]);
+  }, []);
+
+  useEffect(() => {
+    if (!mapReady || !selectedProvince?.bounds) return;
+    map.current?.fitBounds(selectedProvince.bounds, { padding: 48, maxZoom: 10, duration: 0 });
+    setAssetPage(1);
+    setSelectedId("");
+    setAssetPopup(null);
+  }, [mapReady, selectedProvince]);
 
   useEffect(() => {
     (map.current?.getSource("network-shapes") as GeoJSONSource | undefined)?.setData(shapeFeatures);
@@ -691,14 +862,24 @@ export function MapPage() {
     const instance = map.current;
     if (!instance || !mapReady) return;
     const categoryFilter: FilterSpecification = activeIconCategories.length ? ["in", ["get", "iconCategory"], ["literal", activeIconCategories]] : ["==", ["get", "iconCategory"], "__NO_ICON_CATEGORY_SELECTED__"];
-    instance.setFilter("network-icons", ["all", ["any", ["all", ["has", "atlasIconId"], ["!=", ["get", "atlasIconId"], ""]], ["all", ["has", "iconImageId"], ["!=", ["get", "iconImageId"], ""]]], categoryFilter]);
-    instance.setFilter("network-points", ["all", ["any", ["!", ["has", "iconImageId"]], ["==", ["get", "iconImageId"], ""]], ["any", ["!", ["has", "atlasIconId"]], ["==", ["get", "atlasIconId"], ""]], categoryFilter]);
-    instance.setFilter("network-point-hit", categoryFilter);
+    const applyFilters = () => {
+      if (!instance.isStyleLoaded()) return;
+      if (instance.getLayer("network-icons")) instance.setFilter("network-icons", ["all", ["any", ["all", ["has", "atlasIconId"], ["!=", ["get", "atlasIconId"], ""]], ["all", ["has", "iconImageId"], ["!=", ["get", "iconImageId"], ""]]], categoryFilter]);
+      if (instance.getLayer("network-point-hit")) instance.setFilter("network-point-hit", categoryFilter);
+      if (instance.getLayer("network-labels")) instance.setFilter("network-labels", ["all", [">", ["get", "legendLabelSize"], 0], categoryFilter]);
+    };
+    if (instance.isStyleLoaded()) applyFilters();
+    else instance.once("idle", applyFilters);
+    return () => { instance.off("idle", applyFilters); };
+  }, [mapReady, activeIconCategories]);
+  useEffect(() => {
     if (!activeIconCategories.length) {
+      const instance = map.current;
+      if (!instance) return;
       instance.getCanvas().style.cursor = "";
       hoverPopup.current?.remove();
     }
-  }, [mapReady, activeIconCategories]);
+  }, [activeIconCategories]);
   useEffect(() => {
     (map.current?.getSource("route-lines") as GeoJSONSource | undefined)?.setData(routeFeatures);
   }, [routeFeatures]);
@@ -709,31 +890,47 @@ export function MapPage() {
   useEffect(() => {
     const instance = map.current;
     if (!instance || !mapReady) return;
-    const icons = new Map<string, { url: string; color: string }>();
+      const icons = new Map<string, { url: string; color: string }>();
     const assetsById = new Map(knownAssets.map((asset) => [asset.id, asset]));
     for (const feature of allNetworkFeatures) {
-      const url = String(feature.properties?.iconImageId ?? "");
-      if (url) {
+      const fallbackId = String(feature.properties?.fallbackIconImageId ?? "");
+      const fallbackUrl = String(feature.properties?.fallbackIconHref ?? "");
+      if (fallbackId && fallbackUrl) icons.set(fallbackId, { url: fallbackUrl, color: String(feature.properties?.fallbackIconTint ?? "#ffffff") });
+      const id = String(feature.properties?.iconImageId ?? "");
+      const url = String(feature.properties?.iconHref ?? "");
+      if (id && url) {
         const style = assetsById.get(String(feature.properties?.id))?.attributes?.__kmlStyle as ImportedStyle | undefined;
-        if (style?.iconHref) icons.set(url, { url: style.iconHref.replace(/^http:\/\//i, "https://"), color: style.iconColor ?? "#ffffff" });
+        icons.set(id, { url, color: String(feature.properties?.iconTint ?? style?.iconColor ?? "#ffffff") });
       }
     }
+    const addLoadedIcon = (id: string, data: HTMLImageElement | ImageBitmap | ImageData, color: string) => {
+      if (instance.hasImage(id)) return;
+      let image: HTMLImageElement | ImageBitmap | ImageData = data;
+      if (!(data instanceof ImageData)) {
+        try {
+          image = tintKmlIcon(data, color);
+        } catch {
+          /* use the original Google Earth icon if canvas tinting is blocked */
+        }
+      }
+      instance.addImage(id, image, { pixelRatio: Math.max(0.5, Math.max(data.width, data.height) / 32) });
+    };
     for (const [id, { url, color }] of icons) {
       if (instance.hasImage(id)) continue;
-      instance
-        .loadImage(url)
-        .then(({ data }) => {
-          if (instance.hasImage(id)) return;
-          let image: HTMLImageElement | ImageBitmap | ImageData = data;
-          try {
-            image = tintKmlIcon(data, color);
-          } catch {
-            /* use the original Google Earth icon if canvas tinting is blocked */
-          }
-          const pixelRatio = Math.max(0.5, Math.max(data.width, data.height) / 34);
-          instance.addImage(id, image, { pixelRatio });
-        })
-        .catch(() => undefined);
+      if (url.startsWith("atlas-kmz-icon:")) {
+        const iconId = url.slice("atlas-kmz-icon:".length);
+        void api<{ mimeType: string; data: string }>(`/assets/kml-icons/${iconId}`)
+          .then(async ({ mimeType, data }) => {
+            const binary = Uint8Array.from(atob(data), (character) => character.charCodeAt(0));
+            const image = await createImageBitmap(new Blob([binary], { type: mimeType }));
+            addLoadedIcon(id, image, color);
+          })
+          .catch(() => undefined);
+      } else {
+        void instance.loadImage(url)
+          .then(({ data }) => addLoadedIcon(id, data, color))
+          .catch(() => undefined);
+      }
     }
   }, [allNetworkFeatures, mapReady, knownAssets]);
 
@@ -745,8 +942,10 @@ export function MapPage() {
       const form = new FormData();
       form.append("file", file);
       const response = await api<{ importedCount: number; segmentCount: number; firstId?: string }>("/assets/import", { method: "POST", data: form });
-      await invalidateNetwork();
       setFileName(file.name);
+      setFileImportCount(response.importedCount);
+      await queryClient.invalidateQueries({ queryKey: ["network-map-provinces"] });
+      await invalidateNetwork();
       setSelectedId(response.firstId ?? "");
       if (response.firstId) await focusGeometry(response.firstId);
     } catch (error) {
@@ -764,7 +963,8 @@ export function MapPage() {
       form.append("file", file)
       const result = await api<{ importedCount: number; segmentCount: number }>("/assets/import/xlsx", { method: "POST", data: form })
       await invalidateNetwork()
-      setFileName(`${file.name} · ${result.importedCount} aset (${result.segmentCount} segmen)`)
+      setFileName(file.name)
+      setFileImportCount(result.importedCount)
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "File Excel jaringan tidak dapat dibaca.")
     } finally { setImporting(false) }
@@ -778,13 +978,14 @@ export function MapPage() {
     setExporting(true);
     setFileError("");
     try {
-      const { bounds } = await api<{ bounds: [number, number, number, number] | null }>("/assets/bounds");
+      const boundsQuery = provinceCode ? `?provinceCode=${encodeURIComponent(provinceCode)}` : "";
+      const { bounds } = await api<{ bounds: [number, number, number, number] | null }>(`/assets/bounds${boundsQuery}`);
       if (!bounds) throw new Error("Belum ada aset jaringan untuk diunduh.");
       const padding = 0.000001;
       const bbox = [Math.max(-180, bounds[0] - padding), Math.max(-90, bounds[1] - padding), Math.min(180, bounds[2] + padding), Math.min(90, bounds[3] + padding)].join(",");
-      const assets = await api<NetworkAsset[]>(`/assets/map?bbox=${bbox}&zoom=24`);
+      const assets = await api<NetworkAsset[]>(`/assets/map?bbox=${bbox}&zoom=24${provinceCode ? `&provinceCode=${encodeURIComponent(provinceCode)}` : ""}`);
       if (!assets.some((asset) => asset.geometry)) throw new Error("Belum ada geometri aset jaringan untuk diunduh.");
-      const baseName = "atlas-data-jaringan";
+      const baseName = `atlas-data-jaringan${selectedProvince ? `-${selectedProvince.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}` : ""}`;
       if (format === "xlsx") {
         const buffer = await buildNetworkWorkbook(assets).xlsx.writeBuffer();
         downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `${baseName}.xlsx`);
@@ -879,23 +1080,45 @@ export function MapPage() {
         }
       />
       <div className="map-layout">
-        <section className="map-canvas-wrap" aria-busy={initialBounds.isPending || (!mapReady && !mapError) || mapAssetsQuery.isLoading}>
+        <section className="map-canvas-wrap" aria-busy={(!mapReady && !mapError) || (Boolean(provinceCode) && mapAssetsQuery.isLoading)}>
           <div ref={mapElement} className={`map-canvas ${mode !== "idle" ? "map-picking" : ""}`} aria-label="Peta jaringan ATLAS" />
-          {(initialBounds.isPending || (!mapReady && !mapError) || mapAssetsQuery.isLoading) && (
+          <div className="map-province-filter" style={{ position: "absolute", zIndex: 4, top: 12, left: 12, width: "min(290px, calc(100% - 24px))", padding: 10, borderRadius: 12, background: "var(--bs-body-bg, white)", boxShadow: "0 2px 12px #17233b33" }}>
+            <label className="form-label fw-semibold mb-1 text-uppercase" htmlFor="map-province-filter">Pilih provinsi</label>
+            <select id="map-province-filter" className="form-select form-select-sm mb-2" value={provinceCode} disabled={mapProvincesQuery.isPending} onChange={(event) => {
+              const nextProvince = provinces.find((province) => province.code === event.target.value);
+              setProvincePickMessage("");
+              setSelectedIconCategories(null);
+              setMapBounds(nextProvince?.bounds ?? null);
+              setProvinceCode(event.target.value);
+              if (!nextProvince) map.current?.flyTo({ center: [118, -2.5], zoom: 5.3 });
+              const instance = map.current;
+              if (instance?.getLayer("province-selection-fill")) {
+                instance.setPaintProperty("province-selection-fill", "fill-opacity", nextProvince ? ["case", ["in", ["upcase", ["get", "Propinsi"]], ["literal", [nextProvince.name, ...(provinceBoundaryAliases[nextProvince.code] ?? [])].map((name) => name.toUpperCase())]], 0, 0.3] : 0.22);
+              }
+            }}>
+              <option value="">{mapProvincesQuery.isPending ? "Memuat provinsi…" : "Pilih provinsi untuk melihat aset"}</option>
+              {provinces.map((province) => <option key={province.code} value={province.code}>{province.name} · {province.assetCount.toLocaleString("id-ID")} aset</option>)}
+            </select>
+            <small className="d-block">Klik langsung wilayah provinsi untuk menampilkan aset KMZ.</small>
+            {provincePickMessage && <small className="text-warning d-block mt-1" role="status">{provincePickMessage}</small>}
+            {selectedProvince && <small className="text-muted d-block mt-1">{selectedProvince.assetCount.toLocaleString("id-ID")} aset · {selectedProvince.folderCount.toLocaleString("id-ID")} folder KMZ</small>}
+            {!provinceCode && provinces.length > 0 && <small className="text-muted d-block mt-1">Aset jaringan dimuat setelah wilayah provinsi diklik.</small>}
+            {!mapProvincesQuery.isPending && !mapProvincesQuery.isError && !provinces.length && <small className="text-warning d-block mt-1">Belum ada provinsi yang cocok dengan data KMZ.</small>}
+            {mapProvincesQuery.isError && <small className="text-danger d-block mt-1">Daftar provinsi KMZ gagal dimuat.</small>}
+          </div>
+          {((!mapReady && !mapError) || (Boolean(provinceCode) && mapAssetsQuery.isLoading)) && (
             <div className="position-absolute top-50 start-50 translate-middle d-flex align-items-center gap-3 bg-body border rounded-3 shadow px-4 py-3" style={{ zIndex: 5, pointerEvents: "none" }} role="status" aria-live="polite">
               <span className="spinner-border spinner-border-sm text-primary" aria-hidden="true" />
               <span className="text-nowrap">Memuat data peta…</span>
             </div>
           )}
-          <div className="map-overlay-label">
-            <i className="bi bi-broadcast-pin" /> Cakupan routing Pulau Jawa
-          </div>
+          {mapAssetsQuery.isError && <div className="map-error" role="alert">Aset provinsi gagal dimuat. <button className="btn btn-sm btn-outline-danger ms-2" onClick={() => void mapAssetsQuery.refetch()}>Coba lagi</button></div>}
           <div className="map-top-actions">
             {user?.role === "ADMIN" && <div className="map-file-actions">
               <button className="btn btn-light" onClick={() => setFileModal("import")} disabled={importing} aria-busy={importing}>{importing ? <><span className="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true" />Mengimpor...</> : <><i className="bi bi-upload me-1" />Impor</>}</button>
               <button className="btn btn-light" onClick={() => setFileModal("download")}><i className="bi bi-download me-1" />Unduh</button>
             </div>}
-            <details ref={iconFilter} className="map-icon-filter">
+            {provinceCode && <details ref={iconFilter} className="map-icon-filter">
               <summary><i className="bi bi-funnel" /><span>Filter ikon</span><b>{activeIconCategories.length}/{iconCategoryCounts.length}</b></summary>
               <div className="map-icon-filter-menu">
                 <div className="map-icon-filter-actions">
@@ -905,12 +1128,12 @@ export function MapPage() {
                 <input aria-label="Cari kategori ikon" placeholder="Cari jenis ikon" value={iconCategorySearch} onChange={(event) => setIconCategorySearch(event.target.value)} />
                 <div className="map-icon-filter-list">
                   {iconCategoryCounts.filter(([category]) => category.toLowerCase().includes(iconCategorySearch.toLowerCase())).map(([category, count]) => (
-                    <label key={category}><input type="checkbox" checked={activeIconCategories.includes(category)} onChange={(event) => setSelectedIconCategories((current) => (event.target.checked ? [...(current ?? activeIconCategories), category] : (current ?? activeIconCategories).filter((item) => item !== category)))} /><span>{category}</span><small>{count.toLocaleString("id-ID")}</small></label>
+                    <label key={category}><input type="checkbox" checked={activeIconCategories.includes(category)} onChange={(event) => setSelectedIconCategories((current) => (event.target.checked ? [...(current ?? activeIconCategories), category] : (current ?? activeIconCategories).filter((item) => item !== category)))} />{iconPreview(category)}<span>{category}</span><small>{count.toLocaleString("id-ID")}</small></label>
                   ))}
                 </div>
                 {!iconCategoryCounts.length && <small className="map-icon-filter-empty">Belum ada ikon titik.</small>}
               </div>
-            </details>
+            </details>}
           </div>
           {(mode !== "idle" || routeError) && (
             <div className="route-map-message" role="status">
@@ -923,21 +1146,53 @@ export function MapPage() {
               Peta tidak dapat dimuat. Periksa koneksi internet Anda.
             </div>
           )}
+          {assetPopup && (() => {
+            const coordinate = firstCoordinate(assetPopup.geometry);
+            const popupLength = assetPopup.id === selectedSegment?.id ? cableLengthMeters(selectedCableGeometry) : cableLengthMeters(assetPopup.geometry);
+            const attributes = assetPopup.attributes ?? {};
+            const savedFields = attributes.__kmlDetailFields;
+            const sourceFields: Array<[string, unknown]> = Array.isArray(savedFields)
+              ? savedFields.filter((field): field is [string, unknown] => Array.isArray(field) && field.length === 2 && typeof field[0] === "string")
+              : Object.entries(attributes).filter(([key]) => !key.startsWith("__") && !["name", "description", "folderPath", "styleUrl"].includes(key));
+            const originalKmzFields: Array<[string, unknown]> = [
+              ...sourceFields.filter(([key]) => key.trim().toLowerCase() !== "nama objek"),
+              ...["description", "folderPath", "styleUrl"].filter((key) => attributes[key] !== undefined && !sourceFields.some(([label]) => label === key)).map((key): [string, unknown] => [key === "folderPath" ? "Folder KMZ" : key === "description" ? "Deskripsi" : key, attributes[key]]),
+            ];
+            const fields: Array<[string, unknown]> = (assetPopup.source === "kml" ? originalKmzFields : [
+              ["Nama objek", assetPopup.name], ["Tipe perangkat", assetPopup.attributes?.assetKind ?? assetPopup.assetType],
+              ["Tipe geometri", assetPopup.geometry?.type], ["Tipe jaringan", assetPopup.attributes?.networkType ?? assetPopup.attributes?.routeType],
+              ["Area", assetPopup.area], ["Tipe kabel", assetPopup.cableType],
+              ...(assetPopup.assetType === "segment" ? [["Jumlah core", assetPopup.totalCores > 0 ? `${assetPopup.totalCores.toLocaleString("id-ID")} core` : "Belum tercantum di data kabel"], ["Panjang kabel", selectedSegmentGeometry.isPending && assetPopup.id === selectedSegment?.id ? "Menghitung…" : popupLength === null ? "Geometri garis tidak tersedia" : popupLength >= 1000 ? `${(popupLength / 1000).toFixed(2)} km` : `${Math.round(popupLength)} m`]] as Array<[string, unknown]> : []),
+              ["Metode instalasi", assetPopup.installation], ["Sisi jalan", assetPopup.side], ["Nomor tiang", assetPopup.pole],
+              ["ODC", assetPopup.odc], ["ODP", assetPopup.odp], ...Object.entries(assetPopup.attributes ?? {}).filter(([key]) => !key.startsWith("__")).map(([key, value]) => [key, value] as [string, unknown]),
+              ["Longitude", coordinate[0]], ["Latitude", coordinate[1]],
+            ] as Array<[string, unknown]>).filter((entry): entry is [string, unknown] => entry[1] !== undefined && entry[1] !== null && (assetPopup.source === "kml" || entry[1] !== ""));
+            return <div ref={popupElement} className="map-asset-popup" role="dialog" aria-label="Detail aset" style={popupPosition}>
+              <header className="map-asset-popup-header">
+                <div><h3>{String(assetPopup.attributes?.name ?? assetPopup.name)}</h3>{assetPopup.source === "kml" && <small>Atribut asli dari KMZ</small>}</div>
+                <button type="button" className="btn-close" aria-label="Tutup" onClick={() => setAssetPopup(null)} />
+              </header>
+              <table className="map-asset-popup-table" aria-label="Atribut detail aset"><tbody>{fields.map(([label, value], index) => <tr key={index}><th scope="row">{label}</th><td>{String(value)}</td></tr>)}</tbody></table>
+              {assetPopup.source === "kml" && assetPopup.assetType === "segment" && <div className="border-top mt-3 pt-2 small"><strong>Panjang kabel (dihitung dari geometri KMZ)</strong><div>{selectedSegmentGeometry.isPending && assetPopup.id === selectedSegment?.id ? "Menghitung…" : popupLength === null ? "Geometri garis tidak tersedia" : popupLength >= 1000 ? `${(popupLength / 1000).toFixed(2)} km` : `${Math.round(popupLength)} m`}</div></div>}
+            </div>;
+          })()}
         </section>
         <aside className="map-sidebar">
           <div className="map-tools">
             <div className="map-search">
               <label className="form-label fw-semibold">
-                Daftar aset jaringan <span className="text-muted fw-normal">({(catalogQuery.data?.total ?? 0).toLocaleString("id-ID")})</span>
+                {provinceCode
+                  ? <>Daftar aset jaringan <span className="text-muted fw-normal">({(catalogQuery.data?.total ?? 0).toLocaleString("id-ID")})</span></>
+                  : "Daftar aset jaringan · pilih provinsi"}
               </label>
               <div className="input-group">
                 <span className="input-group-text bg-white">
                   <i className="bi bi-search" />
                 </span>
-                <input className="form-control" placeholder="Cari kabel, area, tiang, ODC/ODP, atau lokasi" value={search} onChange={(event) => setSearch(event.target.value)} />
+                <input className="form-control" placeholder="Cari kabel, area, tiang, ODC/ODP, atau lokasi" value={search} onChange={(event) => setSearch(event.target.value)} disabled={!provinceCode} />
               </div>
               <label className="form-label small mt-2 mb-1" htmlFor="map-core-filter">Filter segmen / core</label>
-              <select id="map-core-filter" className="form-select form-select-sm" value={coreFilter} onChange={(event) => { setCoreFilter(event.target.value); setAssetPage(1); }}>
+              <select id="map-core-filter" className="form-select form-select-sm" value={coreFilter} disabled={!provinceCode} onChange={(event) => { setCoreFilter(event.target.value); setAssetPage(1); }}>
                 <option value="all">Semua aset</option>
                 <option value="segments">Semua segmen</option>
                 <option value="filled">Core sudah diisi</option>
@@ -952,7 +1207,7 @@ export function MapPage() {
             </div>
             {fileName && (
               <div className="map-file-status">
-                <i className="bi bi-check-circle-fill" /> {fileName} · {imported.length} aset tersimpan
+                <i className="bi bi-check-circle-fill" /> {fileName} · {(fileImportCount ?? 0).toLocaleString("id-ID")} aset tersimpan
               </div>
             )}
             {fileError && <div className="alert alert-danger py-2 px-3 mb-0 map-alert">{fileError}</div>}
@@ -1019,7 +1274,8 @@ export function MapPage() {
             )}
           </div>
           <div className="segment-list">
-            {catalogQuery.isPending && <div className="map-empty-list">Memuat daftar aset…</div>}
+            {!provinceCode && <div className="map-empty-list">Pilih provinsi di peta untuk menampilkan aset KMZ.</div>}
+            {Boolean(provinceCode) && catalogQuery.isPending && <div className="map-empty-list">Memuat daftar aset…</div>}
             {catalogQuery.isError && <div className="map-empty-list">Daftar aset tidak dapat dimuat.</div>}
             {standaloneSegments.map((segment) => (
               <button key={segment.id} className={`segment-item ${selectedId === segment.id ? "selected" : ""}`} onClick={() => focusAsset(segment)}>
@@ -1058,7 +1314,7 @@ export function MapPage() {
               </button>
             ))}
             {matchedImported.length > filteredImported.length && <div className="map-empty-list">Menampilkan 100 dari {matchedImported.length} aset impor. Gunakan pencarian untuk mempersempit daftar.</div>}
-            {!catalogQuery.isPending && filteredSegments.length + matchedImported.length === 0 && <div className="map-empty-list">Tidak ada aset jaringan yang cocok.</div>}
+            {Boolean(provinceCode) && !catalogQuery.isPending && filteredSegments.length + matchedImported.length === 0 && <div className="map-empty-list">Tidak ada aset jaringan yang cocok.</div>}
           </div>
           {catalogQuery.data && catalogQuery.data.total > catalogQuery.data.pageSize && <div className="asset-pagination">
             <small className="text-muted">Halaman {assetPage.toLocaleString("id-ID")} dari {catalogPageCount.toLocaleString("id-ID")}{catalogQuery.isFetching ? " · Memuat…" : ""}</small>
@@ -1146,7 +1402,20 @@ export function MapPage() {
                 </details>
                 <hr />
                 <div className="asset-info">
+                  {(() => {
+                    const attributes = Object.entries(selectedSegment.attributes ?? {}).filter(([key, value]) => !key.startsWith("__") && value !== undefined && value !== null && value !== "");
+                    const find = (pattern: RegExp) => attributes.find(([key]) => pattern.test(key))?.[1];
+                    const from = find(/^(from|source|origin|upstream|asal|dari|start|olt|odc|fdt)([_ -]?id|[_ -]?name)?$/i) ?? selectedSegment.odc ?? selectedSegment.attributes?.olt ?? selectedSegment.attributes?.fdt;
+                    const to = find(/^(to|target|destination|downstream|tujuan|ke|end|odp)([_ -]?id|[_ -]?name)?$/i) ?? selectedSegment.odp;
+                    return <div className="asset-info-group"><b>Detail koneksi kabel</b>
+                      {from || to ? <div className="route-endpoints">
+                        <span><small>Dari</small><strong>{String(from ?? "Tidak dicantumkan di KMZ")}</strong></span><i className="bi bi-arrow-right" aria-hidden="true" /><span><small>Ke</small><strong>{String(to ?? "Tidak dicantumkan di KMZ")}</strong></span>
+                      </div> : <small className="text-secondary d-block mt-1">KMZ ini tidak mencantumkan field asal dan tujuan secara eksplisit.</small>}
+                      {attributes.length > 0 && <details className="admin-settings mt-2"><summary>Atribut kabel dari KMZ ({attributes.length})</summary><div className="import-detail-list mt-2">{attributes.map(([key, value]) => <div key={key}><span>{key}</span><b>{String(value)}</b></div>)}</div></details>}
+                    </div>;
+                  })()}
                   <div className="asset-info-group"><b>Detail kabel</b><div className="asset-info">
+                    <div><span>Standar legenda</span><b>{selectedLegend?.category} · {selectedLegend?.termination} · garis {selectedLegend?.cableLineWidth ?? "—"} px</b></div>
                     {[["Tipe kabel", selectedSegment.cableType], ["Metode instalasi", selectedSegment.installation], ["Sisi jalan", `Sisi ${selectedSegment.side.toLowerCase()}`]].map(([label, value]) => <div key={label}><span>{label}</span><b>{value}</b></div>)}
                   </div></div>
                   {(selectedSegment.pole || selectedSegment.poleHeight || selectedSegment.odc || selectedSegment.odp) && <div className="asset-info-group"><b>{selectedSegment.source === "managed" ? "Informasi aset" : "Data aset dari sumber impor"}</b><div className="asset-info">
@@ -1177,6 +1446,7 @@ export function MapPage() {
             ) : selectedImported ? (
               <>
                 <p className="text-secondary">Geometri sumber dipertahankan tanpa perubahan.</p>
+                <div className="asset-info mb-3"><div><span>Standar legenda</span><b>{selectedLegend?.category} · {selectedLegend?.termination} · ikon {selectedLegend?.size}× · label {selectedLegend?.labelSize}×</b></div></div>
                 <div className="import-detail-list">
                   {Object.entries(selectedImported.attributes ?? {})
                     .filter(([key]) => key !== "__kmlStyle")

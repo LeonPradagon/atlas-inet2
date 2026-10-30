@@ -95,23 +95,41 @@ export class AtlasController {
   async assets(@Req() req: IncomingMessage, @Query('search') search?: string) { await this.auth.requireUser(req); return this.atlas.listAssets(search ?? '') }
 
   @Get('assets/catalog')
-  async assetCatalog(@Req() req: IncomingMessage, @Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('coreFilter') coreFilter = 'all') {
+  async assetCatalog(@Req() req: IncomingMessage, @Query('search') search?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('coreFilter') coreFilter = 'all', @Query('provinceCode') provinceCode?: string) {
     await this.auth.requireUser(req)
     const parsedPage = page === undefined ? 1 : Number(page)
     const parsedPageSize = pageSize === undefined ? 50 : Number(pageSize)
     if (!Number.isInteger(parsedPage) || parsedPage < 1 || !Number.isInteger(parsedPageSize) || parsedPageSize < 1 || parsedPageSize > 100) throw new BadRequestException({ message: 'Parameter pagination aset tidak valid.' })
     if (!['all','segments','filled','empty'].includes(coreFilter)) throw new BadRequestException({ message: 'Filter core tidak valid.' })
-    return this.atlas.listAssetPage(search ?? '', parsedPage, parsedPageSize, coreFilter)
+    if (provinceCode !== undefined && !/^\d{2}$/.test(provinceCode)) throw new BadRequestException({ message: 'Kode provinsi tidak valid.' })
+    return this.atlas.listAssetPage(search ?? '', parsedPage, parsedPageSize, coreFilter, provinceCode)
   }
 
   @Get('assets/bookable-segments')
   async bookableSegments(@Req() req: IncomingMessage) { await this.auth.requireUser(req); return this.atlas.listBookableSegments() }
 
+  @Get('assets/provinces')
+  async mapProvinces(@Req() req: IncomingMessage) { await this.auth.requireUser(req); return this.atlas.listKmzProvinces() }
+
+  @Get('assets/provinces/boundaries')
+  async mapProvinceBoundaries(@Req() req: IncomingMessage) { await this.auth.requireUser(req); return this.atlas.listKmzProvinceBoundaries() }
+
+  @Get('assets/kml-icons/:id')
+  async kmzIcon(@Req() req: IncomingMessage, @Param('id') id: string) {
+    await this.auth.requireUser(req)
+    if (!/^[a-f0-9]{64}$/.test(id)) throw new BadRequestException({ message: 'ID ikon KMZ tidak valid.' })
+    return this.atlas.getKmzIcon(id)
+  }
+
   @Get('assets/bounds')
-  async mapBounds(@Req() req: IncomingMessage) { await this.auth.requireUser(req); return this.atlas.mapBounds() }
+  async mapBounds(@Req() req: IncomingMessage, @Query('provinceCode') provinceCode?: string) {
+    await this.auth.requireUser(req)
+    if (provinceCode !== undefined && !/^\d{2}$/.test(provinceCode)) throw new BadRequestException({ message: 'Kode provinsi tidak valid.' })
+    return this.atlas.mapBounds(provinceCode)
+  }
 
   @Get('assets/map')
-  async mapAssets(@Req() req: IncomingMessage, @Query('bbox') bbox?: string, @Query('zoom') zoom?: string) {
+  async mapAssets(@Req() req: IncomingMessage, @Query('bbox') bbox?: string, @Query('zoom') zoom?: string, @Query('provinceCode') provinceCode?: string) {
     await this.auth.requireUser(req)
     const values = bbox?.split(',').map(Number) ?? []
     if (values.length !== 4 || values.some((value) => !Number.isFinite(value)) || values[0] < -180 || values[2] > 180 || values[1] < -90 || values[3] > 90 || values[0] >= values[2] || values[1] >= values[3]) {
@@ -119,7 +137,8 @@ export class AtlasController {
     }
     const level = zoom === undefined ? 16 : Number(zoom)
     if (!Number.isFinite(level) || level < 0 || level > 24) throw new BadRequestException({ message: 'Zoom peta tidak valid.' })
-    return this.atlas.listMapAssets(values as [number, number, number, number], level)
+    if (provinceCode !== undefined && !/^\d{2}$/.test(provinceCode)) throw new BadRequestException({ message: 'Kode provinsi tidak valid.' })
+    return this.atlas.listMapAssets(values as [number, number, number, number], level, provinceCode)
   }
 
   @Post('assets/point')
