@@ -95,6 +95,29 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
     return rows.filter((row) => row.latitude != null && row.longitude != null)
   }
 
+  async expand(userId: string, jobId: string, row: number) {
+    await this.progress(userId, jobId);
+    const { rows } = await this.db.query(`SELECT result FROM analysis_bulk_job_rows WHERE job_id=$1 AND row_number=$2`, [jobId,row]);
+    const previous = rows[0]?.result;
+    if (!previous || previous.status !== 'NETWORK_NOT_FOUND' || previous.expansionAvailable !== true) throw new BadRequestException({ message: 'Baris ini tidak memerlukan perluasan radius.' });
+    const { longitude, latitude } = previous;
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) throw new BadRequestException({ message: 'Koordinat hasil analisis tidak valid.' });
+    const network = await this.atlas.nearestNetwork(longitude, latitude, true);
+    let result = { ...previous, network, searchRadiusMeters: 2000, expansionAvailable: false, distanceMeters: null, routeGeometry: null, status: 'NETWORK_NOT_FOUND' };
+    if (network?.nearestPoint?.coordinates) {
+      try {
+        const route = await this.routing.previewNetwork([[longitude,latitude], network.nearestPoint.coordinates]);
+        result = { ...result, status: 'OK', distanceMeters: route.distanceMeters, routeGeometry: route.geometry };
+      } catch { result = { ...result, status: 'ROUTING_UNAVAILABLE', message: 'Jaringan ditemukan, tetapi rute jalan mobil belum tersedia.' }; }
+    }
+    await this.db.transaction(async (client) => {
+      await client.query(`UPDATE analysis_bulk_job_rows SET result=$3::jsonb,status=$4,error_message=NULL WHERE job_id=$1 AND row_number=$2`, [jobId,row,JSON.stringify(result),result.status === 'OK' ? 'OK' : 'ERROR']);
+      await client.query(`UPDATE analysis_bulk_jobs j SET succeeded_rows=(SELECT count(*) FROM analysis_bulk_job_rows WHERE job_id=j.id AND status='OK'),failed_rows=(SELECT count(*) FROM analysis_bulk_job_rows WHERE job_id=j.id AND status='ERROR'),updated_at=now() WHERE id=$1`, [jobId]);
+      await client.query(`UPDATE analysis_bulk_jobs SET status=CASE WHEN failed_rows>0 THEN 'COMPLETED_WITH_ERRORS' ELSE 'COMPLETED' END WHERE id=$1 AND processed_rows=total_rows AND status IN ('COMPLETED','COMPLETED_WITH_ERRORS')`, [jobId]);
+    });
+    return result;
+  }
+
   async cancel(userId: string, jobId: string) {
     await this.db.transaction(async (client) => {
       const { rows } = await client.query(`UPDATE analysis_bulk_jobs SET cancel_requested_at=COALESCE(cancel_requested_at,now()),updated_at=now()
@@ -148,10 +171,10 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
           geocodingProvider = geocoded.provider; geocodingMatch = geocoded.matchQuality; matchedStreet = geocoded.matchedStreet
         }
         const nearest = await this.atlas.nearestNetwork(longitude!,latitude!)
-        if (!nearest?.nearestPoint?.coordinates) result = { address: input.address, longitude, latitude, network: nearest ?? null, distanceMeters: null, status: 'NETWORK_NOT_FOUND', geocodingProvider, geocodingMatch, matchedStreet }
+        if (!nearest?.nearestPoint?.coordinates) result = { address: input.address, longitude, latitude, network: nearest ?? null, distanceMeters: null, searchRadiusMeters: 1000, expansionAvailable: true, status: 'NETWORK_NOT_FOUND', geocodingProvider, geocodingMatch, matchedStreet }
         else {
           try {
-            const route = await this.routing.preview([[longitude!,latitude!], nearest.nearestPoint.coordinates as [number,number]])
+            const route = await this.routing.previewNetwork([[longitude!,latitude!], nearest.nearestPoint.coordinates as [number,number]])
             result = { address: input.address, longitude, latitude, network: nearest, distanceMeters: route.distanceMeters, routeGeometry: route.geometry, status: 'OK', geocodingProvider, geocodingMatch, matchedStreet }
           } catch { result = { address: input.address, longitude, latitude, network: nearest, distanceMeters: null, status: 'ROUTING_UNAVAILABLE', message: 'Rute jalan belum tersedia; jarak penarikan tidak ditampilkan.', geocodingProvider, geocodingMatch, matchedStreet } }
         }

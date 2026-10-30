@@ -1,4 +1,6 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { NetworkCapacityDetail } from './NetworkCapacityDetail'
+import { NearestNetworkMap, type NetworkSearchResult } from './NearestNetworkMap'
+import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import ExcelJS from 'exceljs'
@@ -7,8 +9,8 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import type { FeatureCollection, LineString, Point, Polygon } from 'geojson'
 import { PageHeader } from '../../components/PageHeader'
 import { TablePagination } from '../../components/TablePagination'
-import { api, postCompressedJson } from '../../lib/api'
-import { generateFtthDraft, type DesignFeature } from './ftthDraft'
+import { api } from '../../lib/api'
+
 import { bulkJobStatusLabel } from './bulkJobStatus'
 
 type HistoryItem = { id: string; analysisType: 'ADDRESS' | 'BULK' | 'FTTH_DESIGN'; title: string; status: string | null; itemCount: number; createdAt: string; bulkJobId?: string | null; jobStatus?: string | null; processedRows?: number | null; succeededRows?: number | null; failedRows?: number | null }
@@ -217,16 +219,10 @@ export function AnalysisHistoryPage() {
   const [page, setPage] = useState(1)
   const [selectedId, setSelectedId] = useState('')
   const [busyId, setBusyId] = useState('')
-  const [draftFeatures, setDraftFeatures] = useState<DesignFeature[]>([])
-  const [draftBusy, setDraftBusy] = useState(false)
-  const [draftMessage, setDraftMessage] = useState('')
-  const [draftError, setDraftError] = useState('')
   const detailPanelRef = useRef<HTMLElement>(null)
-  const { data: user } = useQuery({ queryKey: ['me'], queryFn: () => api<{ role: string }>('/me') })
-  const queryClient = useQueryClient()
+
   const history = useQuery({ queryKey: ['analysis-history', type, page], queryFn: () => api<HistoryPage>(`/analysis/history?page=${page}&pageSize=25${type ? `&type=${type}` : ''}`), placeholderData: (previous) => previous })
   const detail = useQuery({ queryKey: ['analysis-history', selectedId], queryFn: () => api<HistoryDetail>(`/analysis/history/${selectedId}`), enabled: Boolean(selectedId) })
-  useEffect(() => { setDraftFeatures([]); setDraftMessage(''); setDraftError('') }, [selectedId])
   useEffect(() => { if (history.data && page > Math.max(1, Math.ceil(history.data.total / history.data.pageSize))) setPage(Math.max(1, Math.ceil(history.data.total / history.data.pageSize))) }, [history.data, page])
   useEffect(() => {
     if (selectedId && !detail.isPending) detailPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -306,31 +302,6 @@ export function AnalysisHistoryPage() {
       await history.refetch()
     } finally { setBusyId('') }
   }
-  const generateSingleDraft = async () => {
-    if (!detail.data || detail.data.analysisType !== 'ADDRESS') return
-    const longitude = Number(result.longitude), latitude = Number(result.latitude)
-    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) { setDraftError('Koordinat analisis tidak tersedia.'); return }
-    setDraftBusy(true); setDraftError(''); setDraftMessage(''); setDraftFeatures([])
-    try {
-      const { features, uncoveredTargets } = await generateFtthDraft([longitude, latitude], 'OLT')
-      setDraftFeatures([{ type: 'Feature', properties: { kind: 'OLT', name: `OLT · ${detail.data.title}`.slice(0, 150), designAnchor: true }, geometry: { type: 'Point', coordinates: [longitude, latitude] } }, ...features])
-      setDraftMessage(uncoveredTargets ? `Draft siap ditinjau; ${uncoveredTargets} titik belum terlayani.` : 'Draft siap ditinjau. Simpan jika hasilnya sudah sesuai.')
-    } catch (error) { setDraftError(error instanceof Error ? error.message : 'Draft FTTH tidak dapat dibuat.') }
-    finally { setDraftBusy(false) }
-  }
-  const saveSingleDraft = async () => {
-    if (!detail.data || !draftFeatures.length) return
-    setDraftBusy(true); setDraftError('')
-    const structured = detail.data.input.structured as { city?: string; province?: string } | undefined
-    const network = result.network as { area?: string } | null
-    try {
-      await postCompressedJson('/assets/ftth-design', { area: network?.area || [structured?.city, structured?.province].filter(Boolean).join(', '), sourceAnalysisId: detail.data.id, features: draftFeatures.map((feature) => ({ ...feature.properties, geometry: feature.geometry })) })
-      setDraftMessage('Draft FTTH tersimpan di Peta Jaringan dan Riwayat Analisis.')
-      setDraftFeatures([])
-      await Promise.all([detail.refetch(), history.refetch(), queryClient.invalidateQueries({ queryKey: ['analysis-history'] })])
-    } catch (error) { setDraftError(error instanceof Error ? error.message : 'Draft FTTH gagal disimpan.') }
-    finally { setDraftBusy(false) }
-  }
 
   return <>
     <PageHeader title="Riwayat Analisis" subtitle="Hasil analisis alamat, massal, dan draft FTTH tersimpan di database dan dapat dibuka kembali." />
@@ -357,7 +328,7 @@ export function AnalysisHistoryPage() {
         : detail.isError || !detail.data ? <div className="alert alert-danger m-3">Detail riwayat tidak dapat dibuka.</div>
           : <><div className="card-header d-flex align-items-start gap-3"><div className="flex-grow-1" style={{ minWidth: 0 }}><span className="detail-label">{detail.data.analysisType === 'ADDRESS' ? 'ANALISIS ALAMAT' : detail.data.analysisType === 'BULK' ? 'ANALISIS MASSAL' : 'DRAFT FTTH'}</span><h3 className="mt-1">{detail.data.title}</h3><p>{dateTime(detail.data.createdAt)}</p></div><button className="btn btn-sm btn-outline-secondary ms-auto flex-shrink-0" onClick={() => setSelectedId('')}>Tutup</button></div>
             <div className="card-body">
-              {detail.data.analysisType === 'ADDRESS' ? <><div className="row g-3 mb-3"><div className="col-md-4"><small className="text-secondary d-block">Status</small><b>{String(result.status ?? '—')}</b></div><div className="col-md-4"><small className="text-secondary d-block">Koordinat</small><b className="font-monospace">{result.latitude != null && result.longitude != null ? `${result.latitude}, ${result.longitude}` : '—'}</b></div><div className="col-md-4"><small className="text-secondary d-block">Jarak jaringan</small><b>{result.distanceMeters == null ? '—' : `${result.distanceMeters} m`}</b></div><div className="col-12"><small className="text-secondary d-block">Jaringan terdekat</small><b>{(result.network as { name?: string } | null)?.name ?? '—'}</b></div></div>{user?.role === 'ADMIN' && relatedDrafts.length === 0 && <section className="border rounded p-3 mb-3"><div className="d-flex gap-2 flex-wrap"><button type="button" className="btn btn-primary" onClick={() => void generateSingleDraft()} disabled={draftBusy || draftFeatures.length > 0 || result.latitude == null || result.longitude == null}>{draftBusy ? <><span className="spinner-border spinner-border-sm me-2" />Membuat draft...</> : <><i className="bi bi-diagram-3 me-2" />Buat draft FTTH</>}</button>{draftFeatures.length > 0 && <button type="button" className="btn btn-outline-success" onClick={() => void saveSingleDraft()} disabled={draftBusy}><i className="bi bi-save me-2" />Simpan draft ke peta</button>}</div>{draftMessage && <div className="alert alert-info py-2 mt-3 mb-0">{draftMessage}</div>}{draftError && <div className="alert alert-danger py-2 mt-3 mb-0">{draftError}</div>}{draftFeatures.length > 0 && <div className="mt-3"><h4 className="h6">Pratinjau draft FTTH</h4><SavedAnalysisMap points={draftFeatures.flatMap((feature) => feature.geometry.type === 'Point' ? [savedMapPoint(feature.geometry.coordinates[1], feature.geometry.coordinates[0], `${feature.properties.kind} · ${feature.properties.name}`, feature.properties.kind)].filter((point): point is SavedMapPoint => point !== null) : [])} routes={draftFeatures.flatMap((feature) => feature.geometry.type === 'LineString' ? [{ routeType: feature.properties.routeType ?? 'DISTRIBUTION', coordinates: feature.geometry.coordinates as [number, number][] }] : [])} radii={draftRadius(draftFeatures.map(({ properties, geometry }) => ({ ...properties, geometry })))} /></div>}</section>}{relatedDrafts.length > 0 && <section className="mb-3"><h4 className="h6">Draft FTTH tersimpan</h4>{relatedDrafts.map((draft) => <div className="border rounded p-3 mb-2 d-flex align-items-center gap-3 flex-wrap" key={draft.id}><div className="flex-grow-1"><b>{draft.title}</b><small className="d-block text-secondary">{Number(draft.result.assetCount ?? 0)} aset · {Number(draft.result.routeCount ?? 0)} jalur kabel · {dateTime(draft.createdAt)}</small></div><button type="button" className="btn btn-sm btn-outline-primary" onClick={() => setSelectedId(draft.id)}>Buka draft</button></div>)}</section>}{mapPoints.length > 0 && <section className="mb-3"><h4 className="h6 mb-2">Peta lokasi{relatedDrafts.length ? ' dan draft FTTH tersimpan' : ' tersimpan'}</h4><SavedAnalysisMap points={mapPoints} routes={mapRoutes} radii={mapRadii} />{mapRadii.length > 0 && <small className="text-secondary">Lingkaran biru menunjukkan radius desain 500 m dari titik awal draft.</small>}</section>}<details><summary>Lihat semua data tersimpan</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.data.input, result }, null, 2)}</pre></details></>
+              {detail.data.analysisType === 'ADDRESS' ? <><div className="row g-3 mb-3"><div className="col-md-4"><small className="text-secondary d-block">Status</small><b>{String(result.status ?? '—')}</b></div><div className="col-md-4"><small className="text-secondary d-block">Koordinat</small><b className="font-monospace">{result.latitude != null && result.longitude != null ? `${result.latitude}, ${result.longitude}` : '—'}</b></div><div className="col-md-4"><small className="text-secondary d-block">Estimasi panjang kabel via jalan mobil</small><b>{result.distanceMeters == null ? '—' : `${result.distanceMeters} m`}</b></div><div className="col-12"><small className="text-secondary d-block">Jaringan terdekat</small><b>{(result.network as { name?: string } | null)?.name ?? '—'}</b></div></div>{relatedDrafts.length > 0 && <section className="mb-3"><h4 className="h6">Draft FTTH tersimpan</h4>{relatedDrafts.map((draft) => <div className="border rounded p-3 mb-2 d-flex align-items-center gap-3 flex-wrap" key={draft.id}><div className="flex-grow-1"><b>{draft.title}</b><small className="d-block text-secondary">{Number(draft.result.assetCount ?? 0)} aset · {Number(draft.result.routeCount ?? 0)} jalur kabel · {dateTime(draft.createdAt)}</small></div><button type="button" className="btn btn-sm btn-outline-primary" onClick={() => setSelectedId(draft.id)}>Buka draft</button></div>)}</section>}{Boolean(result.routeGeometry) && typeof result.latitude === "number" && typeof result.longitude === "number" && <div><NetworkCapacityDetail capacity={(result as unknown as NetworkSearchResult).network?.capacity}/><NearestNetworkMap result={result as unknown as NetworkSearchResult}/></div>} {mapPoints.length > 0 && !result.routeGeometry && <section className="mb-3"><h4 className="h6 mb-2">Peta lokasi{relatedDrafts.length ? ' dan draft FTTH tersimpan' : ' tersimpan'}</h4><SavedAnalysisMap points={mapPoints} routes={mapRoutes} radii={mapRadii} />{mapRadii.length > 0 && <small className="text-secondary">Lingkaran biru menunjukkan radius desain 500 m dari titik awal draft.</small>}</section>}<details><summary>Lihat semua data tersimpan</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.data.input, result }, null, 2)}</pre></details></>
                 : detail.data.analysisType === 'BULK' ? <>{detail.data.bulkJobId && <div className="alert alert-primary d-flex align-items-center justify-content-between gap-2 flex-wrap"><span>Status: <b>{bulkJobStatusLabel(detail.data.jobStatus)}</b> · {detail.data.processedRows ?? 0}/{detail.data.totalRows ?? 0} diproses · {detail.data.succeededRows ?? 0} berhasil · {detail.data.failedRows ?? 0} perlu diperiksa.</span><button className="btn btn-sm btn-primary" onClick={() => { window.location.href = `/analisis-massal?jobId=${detail.data.bulkJobId}` }}>Buka pekerjaan dan hasil</button></div>}<BulkHistoryDetail detail={detail.data} rows={rows} mapPoints={mapPoints} mapRoutes={mapRoutes} mapRadii={mapRadii} onOpenDraft={setSelectedId} /></>
                   : <><div className="alert alert-light border">Draft FTTH tersimpan: <b>{Number(result.assetCount ?? mapPoints.length)} aset</b> · <b>{Number(result.routeCount ?? mapRoutes.length)} jalur kabel</b>.</div>{(mapPoints.length > 0 || mapRoutes.length > 0) && <section className="mb-3"><h4 className="h6 mb-2">Peta draft FTTH tersimpan</h4><SavedAnalysisMap points={mapPoints} routes={mapRoutes} radii={mapRadii} /><small className="text-secondary">Lingkaran biru menunjukkan radius desain 500 m dari titik awal draft.</small></section>}<details><summary>Lihat semua data draft tersimpan</summary><pre className="bg-body-tertiary rounded p-3 mt-2 text-wrap">{JSON.stringify({ input: detail.data.input, result }, null, 2)}</pre></details></>}
             </div></>}

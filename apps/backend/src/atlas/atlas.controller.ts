@@ -257,7 +257,7 @@ export class AtlasController {
   }
 
   @Post('analysis/address')
-  async analyzeAddress(@Req() req: IncomingMessage, @Body() body: { address?: string; structured?: StructuredAddress; coordinates?: { longitude?: number; latitude?: number; provider?: 'photon' | 'manual'; matchQuality?: 'approximate'; matchedStreet?: string }; coordinateConfirmed?: boolean }) {
+  async analyzeAddress(@Req() req: IncomingMessage, @Body() body: { address?: string; structured?: StructuredAddress; coordinates?: { longitude?: number; latitude?: number; provider?: 'photon' | 'manual'; matchQuality?: 'approximate'; matchedStreet?: string }; coordinateConfirmed?: boolean; allowExpand2km?: boolean }) {
     const user = await this.auth.requireUser(req)
     if (!body.address?.trim()) throw new BadRequestException({ message: 'Alamat wajib diisi.' })
     if (!body.structured?.province?.trim() || !body.structured.city?.trim() || !body.structured.district?.trim() || !body.structured.subdistrict?.trim()) {
@@ -267,14 +267,14 @@ export class AtlasController {
       if (body.coordinateConfirmed !== true) throw new BadRequestException({ message: 'Konfirmasi posisi titik pada peta sebelum analisis.' })
       const { longitude, latitude, provider, matchQuality, matchedStreet } = body.coordinates
       if (typeof longitude !== 'number' || typeof latitude !== 'number') throw new BadRequestException({ message: 'Koordinat harus berupa longitude dan latitude.' })
-      const result = await this.analyzeCoordinates(longitude, latitude, body.address, provider, matchQuality, matchedStreet)
+      const result = await this.analyzeCoordinates(longitude, latitude, body.address, provider, matchQuality, matchedStreet, body.allowExpand2km === true)
       const historyId = await this.atlas.saveAnalysisHistory(user.id, 'ADDRESS', body.address.trim(), { address: body.address, structured: body.structured, coordinates: body.coordinates, coordinateConfirmed: true }, result)
       return { ...result, historyId }
     }
     if (body.structured) {
         const result = await this.geocoding.geocodeStructured(body.structured)
         const [longitude, latitude] = result.coordinates
-        const analysis = await this.analyzeCoordinates(longitude, latitude, body.address, result.provider, result.matchQuality, result.matchedStreet)
+        const analysis = await this.analyzeCoordinates(longitude, latitude, body.address, result.provider, result.matchQuality, result.matchedStreet, body.allowExpand2km === true)
         const historyId = await this.atlas.saveAnalysisHistory(user.id, 'ADDRESS', body.address.trim(), { address: body.address, structured: body.structured }, analysis)
         return { ...analysis, historyId }
     }
@@ -349,6 +349,14 @@ export class AtlasController {
     return this.bulk.mapPoints(user.id,id)
   }
 
+  @Post('analysis/bulk/jobs/:id/rows/:row/expand')
+  async expandBulkRow(@Req() req: IncomingMessage, @Param('id') id: string, @Param('row') row: string, @Body() body: { confirmed?: boolean }) {
+    const user = await this.auth.requireUser(req);
+    if (body.confirmed !== true) throw new BadRequestException({ message: 'Persetujuan diperlukan sebelum pencarian hingga 2 km.' });
+    if (!Number.isInteger(Number(row)) || Number(row) < 1) throw new BadRequestException({ message: 'Nomor baris tidak valid.' });
+    return this.bulk.expand(user.id,id,Number(row));
+  }
+
   @Post('analysis/bulk/jobs/:id/cancel')
   async cancelBulkJob(@Req() req: IncomingMessage, @Param('id') id: string) {
     const user = await this.auth.requireUser(req)
@@ -383,14 +391,14 @@ export class AtlasController {
     return this.analyzeCoordinates(longitude, latitude, address)
   }
 
-  private async analyzeCoordinates(longitude: number, latitude: number, address?: string, geocodingProvider?: 'photon' | 'nominatim' | 'manual', geocodingMatch?: 'approximate', matchedStreet?: string) {
+  private async analyzeCoordinates(longitude: number, latitude: number, address?: string, geocodingProvider?: 'photon' | 'nominatim' | 'manual', geocodingMatch?: 'approximate', matchedStreet?: string, allowExpand2km = false) {
     if (!Number.isFinite(longitude) || !Number.isFinite(latitude) || Math.abs(longitude) > 180 || Math.abs(latitude) > 90) throw new BadRequestException({ message: 'Koordinat tidak valid.' })
-    const nearest = await this.atlas.nearestNetwork(longitude, latitude)
-      if (!nearest) return { address, longitude, latitude, network: null, distanceMeters: null, status: 'NETWORK_NOT_FOUND', geocodingProvider, geocodingMatch, matchedStreet }
+    const nearest = await this.atlas.nearestNetwork(longitude, latitude, allowExpand2km)
+      if (!nearest) return { address, longitude, latitude, network: null, distanceMeters: null, searchRadiusMeters: allowExpand2km ? 2000 : 1000, expansionAvailable: !allowExpand2km, status: 'NETWORK_NOT_FOUND', geocodingProvider, geocodingMatch, matchedStreet }
     const target = nearest.nearestPoint?.coordinates as [number, number] | undefined
       if (!target) return { address, longitude, latitude, network: nearest, distanceMeters: null, status: 'NETWORK_NOT_FOUND', geocodingProvider, geocodingMatch, matchedStreet }
     try {
-      const route = await this.routing.preview([[longitude,latitude],target])
+      const route = await this.routing.previewNetwork([[longitude,latitude],target])
         return { address, longitude, latitude, network: nearest, distanceMeters: route.distanceMeters, routeGeometry: route.geometry, status: 'OK', geocodingProvider, geocodingMatch, matchedStreet }
     } catch {
         return { address, longitude, latitude, network: nearest, distanceMeters: null, status: 'ROUTING_UNAVAILABLE', message: 'Rute jalan belum tersedia; jarak penarikan tidak ditampilkan.', geocodingProvider, geocodingMatch, matchedStreet }

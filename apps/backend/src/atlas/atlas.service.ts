@@ -804,14 +804,39 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     })
   }
 
-  async nearestNetwork(longitude: number, latitude: number) {
-    const { rows } = await this.db.query(`SELECT a.id,a.name,a.area,a.cable_type AS "cableType",
-      ST_AsGeoJSON(ST_ClosestPoint(a.geometry,ST_SetSRID(ST_MakePoint($1,$2),4326)))::json AS "nearestPoint",
-      ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography)::int AS "straightDistanceMeters"
-      FROM network_assets a
-      WHERE a.asset_type='segment' AND GeometryType(a.geometry) IN ('LINESTRING','MULTILINESTRING')
-      ORDER BY a.geometry <-> ST_SetSRID(ST_MakePoint($1,$2),4326) LIMIT 1`, [longitude,latitude])
-    return rows[0] ?? null
+  async nearestNetwork(longitude: number, latitude: number, allowExpand2km = false) {
+    for (const radius of (allowExpand2km ? [500, 1000, 2000] : [500, 1000])) {
+      const { rows } = await this.db.query<{ id: string; name: string; area: string; cableType: string; assetType: string; totalCores: number; attributes: Record<string, unknown>; source: string; nearestPoint: { coordinates: [number,number] }; straightDistanceMeters: number; searchRadiusMeters: number; geometry: unknown }>(`SELECT a.id,a.name,a.area,a.cable_type AS "cableType",a.asset_type AS "assetType",a.total_cores AS "totalCores",a.attributes,a.source,
+        ST_AsGeoJSON(a.geometry)::json AS geometry,
+        ST_AsGeoJSON(ST_ClosestPoint(a.geometry,ST_SetSRID(ST_MakePoint($1,$2),4326)))::json AS "nearestPoint",
+        ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography) AS "straightDistanceMeters",
+        $3::int AS "searchRadiusMeters"
+        FROM network_assets a
+        WHERE GeometryType(a.geometry) IN ('POINT','MULTIPOINT','LINESTRING','MULTILINESTRING')
+          AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
+          AND ST_DWithin(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,$3)
+        ORDER BY CASE
+          WHEN a.total_cores>0 AND (a.source='managed' OR a.attributes->>'__coreUsageVerified'='true') AND EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available') THEN 0
+          WHEN a.total_cores>0 AND (SELECT count(*) FROM network_cores c WHERE c.asset_id=a.id AND c.status IN ('Used','Booked'))>=a.total_cores THEN 2
+          ELSE 1 END,
+        ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography),a.id LIMIT 1`, [longitude,latitude,radius]);
+      if (rows[0]) {
+        const asset = rows[0];
+        const { rows: counts } = await this.db.query(`SELECT count(*) FILTER(WHERE status='Used')::int AS used,count(*) FILTER(WHERE status='Booked')::int AS booked,count(*) FILTER(WHERE status='Available')::int AS available FROM network_cores WHERE asset_id=$1`, [asset.id]);
+        const { rows: connectedCables } = await this.db.query(`SELECT DISTINCT a.id,a.name,a.total_cores AS "totalCores" FROM network_asset_relations r JOIN network_assets a ON a.id=r.segment_id WHERE r.asset_id=$1 ORDER BY a.name`, [asset.id]);
+        const attributes = asset.attributes ?? {};
+        const deviceType = Object.entries(attributes).find(([key]) => /^(tipe[ _]?perangkat|assetKind)$/i.test(key))?.[1] ?? (asset.assetType === 'segment' ? 'Kabel' : 'Aset jaringan');
+        const capacityFields = Object.entries(attributes).filter(([key]) => !key.startsWith('__') && /core|port|splitter|spesifikasi|kapasitas/i.test(key)).map(([label,value]) => ({ label, value }));
+        const verified = asset.source === 'managed' || attributes.__coreUsageVerified === true;
+        const full = asset.totalCores > 0 && (counts[0]?.used ?? 0) + (counts[0]?.booked ?? 0) >= asset.totalCores;
+        const chamber = /handhole|manhole|^(HH|MH)$/i.test(String(deviceType));
+        const recommendation = full ? 'CORE_FULL' : chamber && !connectedCables.length ? 'NO_CABLE_RELATION' : verified && asset.totalCores > 0 && counts[0]?.available > 0 ? 'CAPACITY_AVAILABLE' : 'SURVEY_REQUIRED';
+        const recommendationReason = full ? 'Core tercatat penuh. Titik ini tidak direkomendasikan untuk sambungan baru.' : chamber && !connectedCables.length ? 'Aset akses kabel belum memiliki relasi kabel. Titik sambung perlu diperiksa.' : recommendation === 'CAPACITY_AVAILABLE' ? 'Core tersedia tercatat dan diprioritaskan di antara kandidat dalam radius pencarian. Kelayakan fisik tetap perlu diperiksa.' : 'Kapasitas atau pemakaian belum terverifikasi. Jalur kabel merupakan estimasi untuk survei.';
+        return { ...asset, capacity: { deviceType: String(deviceType), totalCores: asset.totalCores > 0 ? asset.totalCores : null, usedCores: counts[0]?.used ?? 0, bookedCores: counts[0]?.booked ?? 0, availableCores: counts[0]?.available ?? 0,
+          recommendation, recommendationReason, usageVerified: asset.source === 'managed' || attributes.__coreUsageVerified === true, fields: capacityFields, connectedCables } };
+      }
+    }
+    return null;
   }
 
   async notifications(userId: string) {

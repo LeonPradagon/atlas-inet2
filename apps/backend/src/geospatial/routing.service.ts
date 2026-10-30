@@ -21,6 +21,10 @@ export class RoutingService {
     return this.route(coordinates, process.env.ROUTING_PROFILE ?? 'car')
   }
 
+  async previewNetwork(coordinates: Coordinate[]) {
+    return this.route(coordinates, 'car')
+  }
+
   async previewFtth(coordinates: Coordinate[]) {
     const profiles = [...new Set([process.env.ROUTING_PROFILE ?? 'car', process.env.FTTH_ROUTING_PROFILE ?? 'bike', 'foot'])]
     const routes = await Promise.allSettled(profiles.map((profile) => this.route(coordinates, profile)))

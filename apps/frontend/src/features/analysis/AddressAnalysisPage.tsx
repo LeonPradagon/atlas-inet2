@@ -1,19 +1,20 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { NetworkCapacityDetail } from './NetworkCapacityDetail';
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { Map as MapLibreMap, Marker, NavigationControl, Popup, setWorkerUrl } from "maplibre-gl";
-import type { MapMouseEvent } from "maplibre-gl";
+import { Map as MapLibreMap, Marker, NavigationControl, setWorkerUrl } from "maplibre-gl";
+
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
-import { distanceMeters, generateFtthDraft, offsetCoordinate, type DesignFeature } from "./ftthDraft";
+import { NearestNetworkMap, type NetworkSearchResult } from "./NearestNetworkMap";
 import { Link } from "@tanstack/react-router";
 import { PageHeader } from "../../components/PageHeader";
-import { api, postCompressedJson, postJson, type ApiError } from "../../lib/api";
+import { api, postJson, type ApiError } from "../../lib/api";
 
-type Result = {
+type Result = NetworkSearchResult & {
   address: string;
   latitude: number;
   longitude: number;
   historyId: string;
-  network: { name: string; area: string; cableType: string } | null;
+
   distanceMeters: number | null;
   status: string;
   message?: string;
@@ -145,256 +146,6 @@ function AddressPinPicker({ point, regionView, onChange, onViewportChange }: { p
 
   return <div ref={container} role="application" aria-label="Pilih atau koreksi titik alamat pada peta" style={{ height: 320, width: "100%", borderRadius: 8, overflow: "hidden" }} />;
 }
-function AddressResultMap({ latitude, longitude, anchorKind, design }: { latitude: number; longitude: number; anchorKind: string; design: DesignFeature[] }) {
-  const container = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!container.current) return;
-    setWorkerUrl(workerUrl);
-    const map = new MapLibreMap({ container: container.current, style: "https://tiles.openfreemap.org/styles/liberty", center: [longitude, latitude], zoom: 15 });
-    map.addControl(new NavigationControl(), "top-right");
-    const circle = Array.from({ length: 65 }, (_, index) => {
-      const bearing = (index / 64) * 2 * Math.PI;
-      const distance = 500 / 6371008.8;
-      const lat1 = (latitude * Math.PI) / 180;
-      const lon1 = (longitude * Math.PI) / 180;
-      const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distance) + Math.cos(lat1) * Math.sin(distance) * Math.cos(bearing));
-      const lon2 = lon1 + Math.atan2(Math.sin(bearing) * Math.sin(distance) * Math.cos(lat1), Math.cos(distance) - Math.sin(lat1) * Math.sin(lat2));
-      return [(lon2 * 180) / Math.PI, (lat2 * 180) / Math.PI];
-    });
-    map.on("load", async () => {
-      const drawAssetIcon = (kind: "OLT" | "ODC" | "ODP" | "POLE", color: string) => {
-        const canvas = document.createElement("canvas");
-        canvas.width = 64;
-        canvas.height = 64;
-        const context = canvas.getContext("2d")!;
-        context.scale(2, 2);
-        if (kind === "ODC" || kind === "ODP") {
-          context.fillStyle = color;
-          context.beginPath();
-          context.moveTo(16, 4);
-          context.lineTo(28, 27);
-          context.lineTo(4, 27);
-          context.closePath();
-          context.fill();
-          context.globalCompositeOperation = "destination-out";
-          context.beginPath();
-          context.arc(16, 19, 3.5, 0, 2 * Math.PI);
-          context.fill();
-          context.globalCompositeOperation = "source-over";
-        } else if (kind === "OLT") {
-          context.fillStyle = "#fff";
-          context.strokeStyle = "#d9a400";
-          context.lineWidth = 1.5;
-          context.beginPath();
-          context.roundRect(5, 7, 22, 20, 2);
-          context.fill();
-          context.stroke();
-          for (const y of [12, 18, 24]) {
-            context.fillStyle = "#e8b500";
-            context.fillRect(8, y - 1, 16, 3);
-            context.fillStyle = "#fff";
-            context.fillRect(10, y, 2, 1);
-          }
-        } else {
-          context.strokeStyle = color;
-          context.fillStyle = color;
-          context.lineWidth = 2.5;
-          context.beginPath();
-          context.moveTo(16, 4);
-          context.lineTo(16, 29);
-          context.moveTo(8, 10);
-          context.lineTo(24, 10);
-          context.moveTo(10, 15);
-          context.lineTo(22, 15);
-          context.moveTo(13, 7);
-          context.lineTo(13, 11);
-          context.moveTo(19, 7);
-          context.lineTo(19, 11);
-          context.stroke();
-          context.beginPath();
-          context.moveTo(11, 29);
-          context.lineTo(21, 29);
-          context.stroke();
-        }
-        map.addImage(`ftth-${kind.toLowerCase()}`, context.getImageData(0, 0, 64, 64), { pixelRatio: 2 });
-      };
-      drawAssetIcon("OLT", "#e8b500");
-      drawAssetIcon("ODC", "#ff0000");
-      drawAssetIcon("ODP", "#0000ff");
-      drawAssetIcon("POLE", "#536177");
-      const bounds = circle.reduce(([west, south, east, north], [lng, lat]) => [Math.min(west, lng), Math.min(south, lat), Math.max(east, lng), Math.max(north, lat)], [Infinity, Infinity, -Infinity, -Infinity]);
-      map.fitBounds(
-        [
-          [bounds[0], bounds[1]],
-          [bounds[2], bounds[3]],
-        ],
-        { padding: 36, maxZoom: 15 },
-      );
-      map.addSource("analysis-location", {
-        type: "geojson",
-        data: {
-          type: "FeatureCollection",
-          features: [
-            { type: "Feature", properties: { kind: "boundary", name: "Radius 500 m" }, geometry: { type: "Polygon", coordinates: [circle] } },
-            { type: "Feature", properties: { kind: anchorKind, name: "Titik awal" }, geometry: { type: "Point", coordinates: [longitude, latitude] } },
-            ...design
-              .filter((feature) => feature.properties.kind === "ODP")
-              .map((feature) => {
-                const [odpLongitude, odpLatitude] = feature.geometry.coordinates as [number, number];
-                const coverage = Array.from({ length: 65 }, (_, index) => offsetCoordinate([odpLongitude, odpLatitude], 150, (index / 64) * 2 * Math.PI));
-                return { type: "Feature" as const, properties: { kind: "coverage", name: `Radius layanan ${feature.properties.name} · 150 m` }, geometry: { type: "Polygon" as const, coordinates: [coverage] } };
-              }),
-            ...design,
-          ],
-        },
-      });
-      map.addLayer({ id: "analysis-radius-fill", type: "fill", source: "analysis-location", filter: ["==", "$type", "Polygon"], paint: { "fill-color": "#3454d1", "fill-opacity": 0.16 } });
-      map.addLayer({ id: "analysis-radius-line", type: "line", source: "analysis-location", filter: ["==", "$type", "Polygon"], paint: { "line-color": "#3454d1", "line-width": 2 } });
-      map.addLayer({ id: "analysis-odp-coverage", type: "fill", source: "analysis-location", filter: ["==", ["get", "kind"], "coverage"], paint: { "fill-color": "#f29b38", "fill-opacity": 0.12 } }, "analysis-radius-line");
-      map.addLayer({ id: "analysis-odp-coverage-line", type: "line", source: "analysis-location", filter: ["==", ["get", "kind"], "coverage"], paint: { "line-color": "#f29b38", "line-width": 1, "line-dasharray": [2, 2] } });
-      map.addLayer({
-        id: "analysis-design-routes",
-        type: "line",
-        source: "analysis-location",
-        filter: ["==", ["get", "kind"], "ROUTE"],
-        paint: { "line-color": ["match", ["get", "routeType"], "FEEDER", "#ff0000", "DISTRIBUTION", "#a000ff", "#64748b"], "line-width": ["match", ["get", "routeType"], "FEEDER", 4.5, 3.5] },
-      });
-      const pointKinds = ["OLT", "HANDHOLE", "JOINT_CLOSURE", "ODC", "ODP", "POLE"];
-      map.addLayer({
-        id: "analysis-design-points",
-        type: "circle",
-        source: "analysis-location",
-        filter: ["all", ["in", ["get", "kind"], ["literal", pointKinds]], ["!", ["in", ["get", "kind"], ["literal", ["OLT", "ODC", "ODP", "POLE"]]]]],
-        paint: {
-          "circle-radius": 12,
-          "circle-color": ["match", ["get", "kind"], "HANDHOLE", "#536177", "JOINT_CLOSURE", "#7256bf", "#536177"],
-          "circle-stroke-color": "#fff",
-          "circle-stroke-width": 2,
-        },
-      });
-      map.addLayer({
-        id: "analysis-design-point-labels",
-        type: "symbol",
-        source: "analysis-location",
-        filter: ["all", ["in", ["get", "kind"], ["literal", pointKinds]], ["!", ["in", ["get", "kind"], ["literal", ["OLT", "ODC", "ODP", "POLE"]]]]],
-        layout: {
-          "text-field": ["match", ["get", "kind"], "HANDHOLE", "HH", "JOINT_CLOSURE", "JC", ""],
-          "text-size": 9,
-          "text-font": ["Noto Sans Bold"],
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
-        },
-        paint: { "text-color": "#fff", "text-halo-color": "rgba(0,0,0,0.2)", "text-halo-width": 0.5 },
-      });
-      map.addLayer({
-        id: "analysis-design-major-icons",
-        type: "symbol",
-        source: "analysis-location",
-        filter: ["in", ["get", "kind"], ["literal", ["OLT", "ODC", "ODP"]]],
-        layout: { "icon-image": ["concat", "ftth-", ["downcase", ["get", "kind"]]], "icon-size": 0.8, "icon-allow-overlap": true, "icon-ignore-placement": true },
-      });
-      map.addLayer({
-        id: "analysis-design-pole-icons",
-        type: "symbol",
-        source: "analysis-location",
-        filter: ["==", ["get", "kind"], "POLE"],
-        layout: { "icon-image": "ftth-pole", "icon-size": 0.62, "icon-allow-overlap": true, "icon-ignore-placement": true },
-      });
-      const interactiveLayers = ["analysis-design-major-icons", "analysis-design-pole-icons", "analysis-design-points", "analysis-design-point-labels", "analysis-design-routes"];
-      const kindLabels: Record<string, string> = { OLT: "Server OLT (POP)", ODC: "ODC (Cabinet)", ODP: "ODP (Tiang)", HANDHOLE: "Handhole", JOINT_CLOSURE: "Joint Closure", POLE: "Tiang", ROUTE: "Jalur kabel" };
-      let activePopup: Popup | undefined;
-      let pinnedPopup = false;
-      let activeFeatureKey = "";
-      const getFeature = (point: MapMouseEvent["point"]) =>
-        map.queryRenderedFeatures(point, { layers: interactiveLayers }).find((feature) => feature.geometry.type === "Point") ?? map.queryRenderedFeatures(point, { layers: ["analysis-design-routes"] })[0];
-      const popupContent = (feature: ReturnType<typeof getFeature>) => {
-        const properties = feature?.properties as { kind?: string; name?: string; routeType?: string; spacingMeters?: number; poleHeight?: string; roadClass?: string } | undefined;
-        const kind = properties?.kind ?? "ASSET";
-        const routeType = properties?.routeType;
-        const title = routeType === "FEEDER" ? "Kabel Feeder" : routeType === "DISTRIBUTION" ? "Kabel Distribusi" : (kindLabels[kind] ?? kind);
-        const content = document.createElement("div");
-        content.className = "small";
-        const heading = document.createElement("strong");
-        heading.className = "d-block mb-1";
-        heading.textContent = title;
-        content.append(heading);
-        const name = document.createElement("span");
-        name.className = "d-block";
-        name.textContent = properties?.name ?? "Titik awal";
-        content.append(name);
-        if (kind === "POLE" && properties?.spacingMeters) {
-          const spacing = document.createElement("span");
-          spacing.className = "d-block text-secondary mt-1";
-          spacing.textContent = `Tinggi ${properties.poleHeight ?? "—"}${properties.roadClass ? ` · kelas jalan ${properties.roadClass}` : ""} · jarak rencana antartiang ±${properties.spacingMeters} m di sepanjang jalur`;
-          content.append(spacing);
-        }
-        if (feature?.geometry.type === "Point") {
-          const [lng, lat] = feature.geometry.coordinates;
-          const coordinates = document.createElement("span");
-          coordinates.className = "d-block text-secondary mt-1";
-          coordinates.textContent = `${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
-          content.append(coordinates);
-        } else if (feature?.geometry.type === "LineString") {
-          const coords = feature.geometry.coordinates as [number, number][];
-          const length = coords.slice(1).reduce((sum, coordinate, index) => sum + distanceMeters(coords[index], coordinate), 0);
-          const distance = document.createElement("span");
-          distance.className = "d-block text-secondary mt-1";
-          distance.textContent = `Panjang jalur ± ${(length / 1000).toFixed(2)} km`;
-          content.append(distance);
-        }
-        return content;
-      };
-      const setPopup = (feature: ReturnType<typeof getFeature>, lngLat: { lng: number; lat: number }, pinned: boolean) => {
-        if (!feature) return;
-        const properties = feature.properties as { kind?: string; name?: string } | undefined;
-        const key = `${properties?.kind}:${properties?.name}`;
-        if (!pinned && (pinnedPopup || key === activeFeatureKey)) return;
-        activeFeatureKey = key;
-        pinnedPopup = pinned;
-        activePopup?.remove();
-        activePopup = new Popup({ closeButton: pinned, closeOnClick: pinned, offset: 12, maxWidth: "260px" }).setLngLat(lngLat).setDOMContent(popupContent(feature)).addTo(map);
-        if (pinned)
-          activePopup.on("close", () => {
-            pinnedPopup = false;
-            activePopup = undefined;
-            activeFeatureKey = "";
-          });
-      };
-      map.on("mousemove", (event) => {
-        const feature = getFeature(event.point);
-        map.getCanvas().style.cursor = feature ? "pointer" : "";
-        if (feature) setPopup(feature, event.lngLat, false);
-        else if (!pinnedPopup) {
-          activePopup?.remove();
-          activePopup = undefined;
-          activeFeatureKey = "";
-        }
-      });
-      map.on("click", (event) => {
-        const feature = getFeature(event.point);
-        if (feature) setPopup(feature, event.lngLat, true);
-        else if (pinnedPopup) {
-          activePopup?.remove();
-          activePopup = undefined;
-          pinnedPopup = false;
-          activeFeatureKey = "";
-        }
-      });
-      map.on("mouseout", () => {
-        map.getCanvas().style.cursor = "";
-        if (!pinnedPopup) {
-          activePopup?.remove();
-          activePopup = undefined;
-          activeFeatureKey = "";
-        }
-      });
-    });
-    return () => map.remove();
-  }, [latitude, longitude, design]);
-
-  return <div ref={container} role="img" aria-label="Peta lokasi dengan boundary radius 500 meter" style={{ height: 620, width: "100%", borderRadius: 8, overflow: "hidden" }} />;
-}
 
 export function AddressAnalysisPage() {
   const [address, setAddress] = useState<AddressFields>({ street: "", number: "", postalCode: "", provinceCode: "", cityCode: "", districtCode: "", subdistrictCode: "" });
@@ -403,15 +154,7 @@ export function AddressAnalysisPage() {
   const [showPinPicker, setShowPinPicker] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [coordinateCopyStatus, setCoordinateCopyStatus] = useState<"idle" | "copied" | "error">("idle");
-  const [assetKind, setAssetKind] = useState("OLT");
-  const [poleHeight, setPoleHeight] = useState("7 m");
-  const [assetName, setAssetName] = useState("");
-  const [designFeatures, setDesignFeatures] = useState<DesignFeature[]>([]);
-  const [designError, setDesignError] = useState("");
-  const [designNotice, setDesignNotice] = useState("");
-  const [designLoading, setDesignLoading] = useState(false);
   const regionLookupId = useRef(0);
-  const queryClient = useQueryClient();
   const addressQuery = [address.street, address.number && `No. ${address.number}`].filter(Boolean).join(" ").trim();
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(addressQuery), 350);
@@ -522,44 +265,8 @@ export function AddressAnalysisPage() {
       structured: { street: string; number: string; subdistrict: string; district: string; city: string; province: string; postalCode: string };
       coordinates: { longitude: number; latitude: number; provider: "photon" | "manual"; matchQuality?: "approximate"; matchedStreet?: string };
       coordinateConfirmed: true;
+      allowExpand2km?: boolean;
     }) => api<Result>("/analysis/address", postJson(value)),
-  });
-  const saveAsset = useMutation({
-    mutationFn: () =>
-      api<{ id: string; name: string }>(
-        "/assets/point",
-        postJson({
-          kind: assetKind,
-          poleHeight: assetKind === "POLE" ? poleHeight : undefined,
-          name: (assetName.trim() || `${assetKind} · ${address.street.trim() || "Titik analisis"}`).slice(0, 150),
-          longitude: analyze.data?.longitude,
-          latitude: analyze.data?.latitude,
-          area: [city?.name, province?.name].filter(Boolean).join(", "),
-        }),
-      ),
-    onSuccess: () => Promise.all([queryClient.invalidateQueries({ queryKey: ["segments"] }), queryClient.invalidateQueries({ queryKey: ["map-assets"] })]),
-  });
-  const saveDesign = useMutation({
-    mutationFn: () =>
-      postCompressedJson<{ savedCount: number; historyId: string; designId: string }>("/assets/ftth-design", {
-        area: [city?.name, province?.name].filter(Boolean).join(", "),
-        sourceAnalysisId: analyze.data!.historyId,
-        features: [
-          {
-            kind: assetKind,
-            name: (assetName.trim() || `${assetKind} · ${address.street.trim() || "Titik analisis"}`).slice(0, 150),
-            poleHeight: assetKind === "POLE" ? poleHeight : undefined,
-            designAnchor: true,
-            geometry: { type: "Point", coordinates: [analyze.data!.longitude, analyze.data!.latitude] },
-          },
-          ...designFeatures.map((feature) => ({ ...feature.properties, geometry: feature.geometry })),
-        ],
-      }),
-    onSuccess: (result) => {
-      localStorage.setItem("atlas-map-focus", JSON.stringify([analyze.data!.longitude, analyze.data!.latitude]));
-      localStorage.setItem("atlas-map-focus-design", result.designId);
-      return Promise.all([queryClient.invalidateQueries({ queryKey: ["segments"] }), queryClient.invalidateQueries({ queryKey: ["map-assets"] }), queryClient.invalidateQueries({ queryKey: ["analysis-history"] })]);
-    },
   });
   const error = analyze.error as ApiError | null;
   const updateAddress = (field: keyof AddressFields, value: string) => {
@@ -726,26 +433,6 @@ export function AddressAnalysisPage() {
       window.setTimeout(() => setCoordinateCopyStatus("idle"), 2000);
     } catch {
       setCoordinateCopyStatus("error");
-    }
-  };
-  const createFtthDraft = async () => {
-    if (!analyze.data) return;
-    setDesignLoading(true);
-    setDesignError("");
-    setDesignNotice("");
-    setDesignFeatures([]);
-    saveDesign.reset();
-    try {
-      const { features, uncoveredTargets, generatedOlt } = await generateFtthDraft([analyze.data.longitude, analyze.data.latitude], assetKind);
-      setDesignFeatures(features);
-      setDesignNotice([
-        generatedOlt ? "Sistem mengusulkan OLT otomatis di jalan terhubung dengan prioritas akses yang lebih baik dan rute feeder pendek; verifikasi lokasinya saat survei lapangan." : "",
-        uncoveredTargets ? `${uncoveredTargets} titik pemerataan tidak dapat dipasangi ODP dengan jalur kabel maksimal 1.500 m pada jaringan GraphHopper. Cakupan mengikuti jalan yang tersedia; sebagian boundary masih belum terlayani.` : "",
-      ].filter(Boolean).join(" "));
-    } catch (error) {
-      setDesignError(error instanceof Error ? error.message : "Draft FTTH tidak dapat dibuat.");
-    } finally {
-      setDesignLoading(false);
     }
   };
 
@@ -1070,7 +757,7 @@ export function AddressAnalysisPage() {
                 {analyze.data.geocodingMatch === "approximate" && (
                   <div className="alert alert-warning">
                     Nama jalan tidak cocok sepenuhnya dengan data peta. Titik mengikuti ruas <b>{analyze.data.matchedStreet ?? "yang paling sesuai"}</b> berdasarkan kecamatan dan kode pos. Periksa posisi di peta sebelum menyimpan aset atau
-                    membuat draft.
+                    menentukan jalur kabel.
                   </div>
                 )}
                 <div className="detail-label">HASIL KONVERSI</div>
@@ -1091,105 +778,6 @@ export function AddressAnalysisPage() {
                   <i className="bi bi-map me-2" />
                   Buka Google Maps
                 </a>
-                <div className="border rounded p-3 mt-3">
-                  <label className="form-label fw-semibold" htmlFor="ftth-asset-kind">
-                    Simpan titik sebagai aset FTTH
-                  </label>
-                  <div className="d-flex gap-2">
-                    <select
-                      id="ftth-asset-kind"
-                      className="form-select"
-                      value={assetKind}
-                      onChange={(event) => {
-                        setAssetKind(event.target.value);
-                        saveAsset.reset();
-                        setDesignFeatures([]);
-                        setDesignError("");
-                        setDesignNotice("");
-                        saveDesign.reset();
-                      }}
-                      disabled={saveAsset.isPending}
-                    >
-                      <option value="OLT">OLT</option>
-                      <option value="JOINT_CLOSURE">Joint Closure</option>
-                      <option value="HANDHOLE">Handhole</option>
-                      <option value="ODC">ODC</option>
-                      <option value="ODP">ODP</option>
-                      <option value="POLE">Tiang</option>
-                    </select>
-                    <button type="button" className="btn btn-primary flex-shrink-0" onClick={() => saveAsset.mutate()} disabled={saveAsset.isPending || saveAsset.isSuccess}>
-                      {saveAsset.isPending ? "Menyimpan..." : "Simpan"}
-                    </button>
-                  </div>
-                  {assetKind === "POLE" && (
-                    <div className="mt-2">
-                      <label className="form-label" htmlFor="ftth-pole-height">
-                        Tinggi tiang
-                      </label>
-                      <select
-                        id="ftth-pole-height"
-                        className="form-select"
-                        value={poleHeight}
-                        onChange={(event) => {
-                          setPoleHeight(event.target.value);
-                          saveAsset.reset();
-                        }}
-                        disabled={saveAsset.isPending}
-                      >
-                        <option value="7 m">7 meter</option>
-                        <option value="9 m">9 meter</option>
-                      </select>
-                    </div>
-                  )}
-                  <input
-                    className="form-control mt-2"
-                    value={assetName}
-                    onChange={(event) => {
-                      setAssetName(event.target.value);
-                      saveAsset.reset();
-                    }}
-                    placeholder={`${assetKind} · Nama aset (opsional)`}
-                    maxLength={150}
-                    aria-label="Nama aset"
-                  />
-                  {saveAsset.isSuccess && <small className="text-success d-block mt-2">Aset tersimpan{assetKind === "POLE" ? ` dengan tinggi ${poleHeight}` : ""}. Buka Peta Jaringan untuk melihatnya.</small>}
-                  {saveAsset.error && <small className="text-danger d-block mt-2">{saveAsset.error.message}</small>}
-                </div>
-                <div className="border rounded p-3 mt-3">
-                  <b className="d-block">Draft FTTH otomatis</b>
-                  <small className="d-block text-secondary mt-1">
-                    Sistem menempatkan ODC dan ODP berdasarkan boundary 500 m, perkiraan radius layanan ODP 150 m, kapasitas maksimal 4 ODP per ODC, dan jalur yang tersedia di GraphHopper. Jarak kabel distribusi maksimal 1.500 m; jarak
-                    antartiang otomatis sekitar 50 m. Tinggi tiang diperkirakan dari kelas jalan: jalan utama 9 m, jalan lokal/gang 7 m. Klik tiang di peta untuk melihat kelas jalan yang terbaca. Perkiraan ini perlu verifikasi survei
-                    lapangan. Jika titik awal bukan OLT, sistem mengusulkan OLT otomatis pada jalan yang dapat dirutekan dengan mempertimbangkan kelas jalan dan rute feeder; titik ini tetap perlu diverifikasi saat survei.
-                  </small>
-                  <button type="button" className="btn btn-primary w-100 mt-2" onClick={() => void createFtthDraft()} disabled={designLoading}>
-                    {designLoading ? (
-                      <>
-                        <span className="spinner-border spinner-border-sm me-2" />
-                        Menghitung rute jalan...
-                      </>
-                    ) : (
-                      <>
-                        <i className="bi bi-diagram-3 me-2" />
-                        Buat draft FTTH
-                      </>
-                    )}
-                  </button>
-                  {designError && <div className="alert alert-danger py-2 px-3 mt-2 mb-0">{designError}</div>}
-                  {designNotice && <div className="alert alert-warning py-2 px-3 mt-2 mb-0">{designNotice}</div>}
-                  {designFeatures.length > 0 && (
-                    <>
-                      <small className="d-block text-success mt-2">
-                        Draft: {designFeatures.filter((feature) => feature.properties.kind === "ODC").length} ODC, {designFeatures.filter((feature) => feature.properties.kind === "ODP").length} ODP,{" "}
-                        {designFeatures.filter((feature) => feature.properties.kind === "POLE").length} tiang, {designFeatures.filter((feature) => feature.properties.kind === "ROUTE").length} jalur.
-                      </small>
-                      <button type="button" className="btn btn-outline-primary w-100 mt-2" onClick={() => saveDesign.mutate()} disabled={saveDesign.isPending || saveDesign.isSuccess}>
-                        {saveDesign.isPending ? "Menyimpan desain..." : saveDesign.isSuccess ? "Desain tersimpan" : "Simpan desain ke peta jaringan"}
-                      </button>
-                      {saveDesign.error && <small className="text-danger d-block mt-2">{saveDesign.error.message}</small>}
-                    </>
-                  )}
-                </div>
                 {coordinateCopyStatus !== "idle" && (
                   <small className={`d-block mt-1 ${coordinateCopyStatus === "error" ? "text-danger" : "text-success"}`}>{coordinateCopyStatus === "copied" ? "Koordinat tersalin." : "Gagal menyalin koordinat."}</small>
                 )}
@@ -1217,9 +805,11 @@ export function AddressAnalysisPage() {
                         </small>
                       </div>
                     </div>
+                    <NetworkCapacityDetail capacity={analyze.data.network.capacity} />
+                    <small className="d-block mt-2">Ditemukan dalam radius {analyze.data.network.searchRadiusMeters ?? 1000} m · Jarak lurus {Math.round(analyze.data.network.straightDistanceMeters ?? 0)} m</small>
                     <div className="distance-card">
                       <div>
-                        <small>Estimasi jarak jalan</small>
+                        <small>Estimasi panjang kabel mengikuti jalan mobil</small>
                         <strong>{analyze.data.distanceMeters === null ? "Belum tersedia" : `${(analyze.data.distanceMeters / 1000).toFixed(2)} km`}</strong>
                       </div>
                       <span className="distance-icon">
@@ -1228,7 +818,9 @@ export function AddressAnalysisPage() {
                     </div>
                   </>
                 ) : (
-                  <div className="alert alert-secondary">Belum ada jaringan dengan geometri di dekat titik ini.</div>
+                  <div className="alert alert-secondary">Tidak ditemukan jaringan dalam radius {analyze.data.searchRadiusMeters ?? 1000} m.
+                    {analyze.data.expansionAvailable && <div className="mt-2">Perluas pencarian hingga 2 km?<button type="button" className="btn btn-primary btn-sm ms-2" disabled={analyze.isPending} onClick={() => { if (analyze.variables) analyze.mutate({ ...analyze.variables, allowExpand2km: true }); }}>Ya, cari hingga 2 km</button></div>}
+                  </div>
                 )}
                 <Link to="/peta-jaringan" className="btn btn-outline-primary w-100 mt-3">
                   <i className="bi bi-map me-2" />
@@ -1254,45 +846,12 @@ export function AddressAnalysisPage() {
           <div className="card-header">
             <div>
               <h3>Peta lokasi</h3>
-              <p>Boundary 500 m dan perkiraan radius layanan 150 m tiap ODP.</p>
+              <p>Jaringan terdekat dalam radius 500 m, 1 km, atau 2 km setelah persetujuan.</p>
             </div>
           </div>
           <div className="card-body">
-            <AddressResultMap latitude={analyze.data.latitude} longitude={analyze.data.longitude} anchorKind={assetKind} design={designFeatures} />
-            <div className="d-flex flex-wrap gap-3 mt-2 small text-secondary">
-              <span>
-                <i className="bi bi-circle-fill text-primary me-1" />
-                Boundary 500 m
-              </span>
-              <span>
-                <i className="bi bi-circle-fill text-warning me-1" />
-                Radius layanan ODP 150 m
-              </span>
-              <span>
-                <i className="bi bi-hdd-network me-1" style={{ color: "#e8b500" }} />
-                OLT
-              </span>
-              <span>
-                <i className="bi bi-triangle-fill me-1" style={{ color: "#ff0000" }} />
-                ODC
-              </span>
-              <span>
-                <i className="bi bi-triangle-fill me-1" style={{ color: "#0000ff" }} />
-                ODP
-              </span>
-              <span>
-                <i className="bi bi-signpost-2 me-1" style={{ color: "#536177" }} />
-                Tiang · ±50 m
-              </span>
-              <span>
-                <i className="bi bi-dash-lg me-1" style={{ color: "#ff0000" }} />
-                Kabel feeder
-              </span>
-              <span>
-                <i className="bi bi-dash-lg me-1" style={{ color: "#a000ff" }} />
-                Kabel distribusi
-              </span>
-            </div>
+            <NearestNetworkMap result={analyze.data} />
+            <small className="d-block mt-2 text-secondary">Biru: jaringan asli · Oranye: estimasi jalur kabel mengikuti jalan mobil · Lingkaran: radius pencarian.</small>
           </div>
         </section>
       )}
