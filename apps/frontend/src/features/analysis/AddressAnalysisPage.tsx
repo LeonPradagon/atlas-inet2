@@ -1,4 +1,5 @@
 import { NetworkCapacityDetail } from './NetworkCapacityDetail';
+import { SubmitSurveyButton } from './SubmitSurveyButton';
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Map as MapLibreMap, Marker, NavigationControl, setWorkerUrl } from "maplibre-gl";
@@ -806,6 +807,7 @@ export function AddressAnalysisPage() {
                       </div>
                     </div>
                     <NetworkCapacityDetail capacity={analyze.data.network.capacity} />
+                    <SubmitSurveyButton key={analyze.data.historyId} historyId={analyze.data.historyId} />
                     <small className="d-block mt-2">Ditemukan dalam radius {analyze.data.network.searchRadiusMeters ?? 1000} m · Jarak lurus {Math.round(analyze.data.network.straightDistanceMeters ?? 0)} m</small>
                     <div className="distance-card">
                       <div>
@@ -851,7 +853,7 @@ export function AddressAnalysisPage() {
           </div>
           <div className="card-body">
             <NearestNetworkMap result={analyze.data} />
-            <small className="d-block mt-2 text-secondary">Biru: jaringan asli · Oranye: estimasi jalur kabel mengikuti jalan mobil · Lingkaran: radius pencarian.</small>
+            <small className="d-block mt-2 text-secondary">Lingkaran: radius pencarian. Klik aset atau jalur untuk melihat detail.</small>
           </div>
         </section>
       )}

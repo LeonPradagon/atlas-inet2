@@ -165,6 +165,12 @@ export class AtlasController {
   @Get('assets/:id/cores')
   async cores(@Req() req: IncomingMessage, @Param('id') id: string) { await this.auth.requireUser(req); return this.atlas.listCores(id) }
 
+  @Post('assets/:id/cores/verify')
+  async verifyCoreUsage(@Req() req: IncomingMessage, @Param('id') id: string, @Body() body: { source?: string; note?: string }) {
+    const user = await this.auth.requireAdmin(req)
+    return this.atlas.verifyCoreUsage(id, body?.source, body?.note, user.id)
+  }
+
   @Get('assets/:id/relations')
   async relations(@Req() req: IncomingMessage, @Param('id') id: string) {
     await this.auth.requireUser(req)
@@ -372,6 +378,18 @@ export class AtlasController {
     if (!Number.isInteger(parsedPage) || parsedPage < 1 || !Number.isInteger(parsedPageSize) || parsedPageSize < 1 || parsedPageSize > 100) throw new BadRequestException({ message: 'Parameter pagination riwayat tidak valid.' })
     return this.atlas.listAnalysisHistory(user.id, type as 'ADDRESS' | 'BULK' | 'FTTH_DESIGN' | undefined, parsedPage, parsedPageSize)
   }
+
+  @Get('surveys/candidates')
+  async surveyCandidates(@Req() req: IncomingMessage) { const user = await this.auth.requireUser(req); return this.atlas.surveyCandidates(user.id) }
+
+  @Get('surveys')
+  async surveys(@Req() req: IncomingMessage) { const user = await this.auth.requireUser(req); return this.atlas.listSurveys(user.id,user.role === 'ADMIN') }
+
+  @Post('surveys')
+  async createSurvey(@Req() req: IncomingMessage, @Body() body: {historyId?: string; rowNumber?: number}) { const user = await this.auth.requireUser(req); return this.atlas.createSurvey(user.id,String(body.historyId ?? ''),Number(body.rowNumber ?? 0)) }
+
+  @Patch('surveys/:id')
+  async updateSurvey(@Req() req: IncomingMessage, @Param('id') id: string, @Body() body: Record<string,unknown>) { const user = await this.auth.requireUser(req); return this.atlas.updateSurvey(user.id,user.role === 'ADMIN',id,body) }
 
   @Get('analysis/history/:id')
   async analysisHistoryDetail(@Req() req: IncomingMessage, @Param('id') id: string) {

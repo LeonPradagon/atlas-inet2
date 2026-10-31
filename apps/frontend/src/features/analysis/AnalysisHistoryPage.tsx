@@ -1,3 +1,4 @@
+import { confirmAction, showError } from '../../lib/dialogs'
 import { NetworkCapacityDetail } from './NetworkCapacityDetail'
 import { NearestNetworkMap, type NetworkSearchResult } from './NearestNetworkMap'
 import { useQuery } from '@tanstack/react-query'
@@ -290,11 +291,11 @@ export function AnalysisHistoryPage() {
       sheet.views = [{ state: 'frozen', ySplit: 1, topLeftCell: 'A2', activeCell: 'A2' }]
       downloadWorkbook(workbook, `ATLAS-${item.analysisType.toLowerCase()}-${item.id.slice(0, 8)}.xlsx`)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Data riwayat gagal diekspor.')
+      await showError(error instanceof Error ? error.message : 'Data riwayat gagal diekspor.')
     } finally { setBusyId('') }
   }
   const deleteHistory = async (item: HistoryItem) => {
-    if (!window.confirm(`Hapus riwayat “${item.title}”?`)) return
+    if (!await confirmAction(`Hapus riwayat “${item.title}”?`)) return
     setBusyId(item.id)
     try {
       await api(`/analysis/history/${item.id}`, { method: 'DELETE' })

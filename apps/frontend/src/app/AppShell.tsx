@@ -19,6 +19,7 @@ const navSections = [
       { to: "/analisis-alamat", label: "Analisis Alamat", icon: "bi-geo-alt" },
       { to: "/analisis-massal", label: "Analisis Massal", icon: "bi-file-earmark-spreadsheet" },
       { to: "/riwayat-analisis", label: "Riwayat Analisis", icon: "bi-clock-history" },
+      { to: "/survei-verifikasi", label: "Survei & Verifikasi", icon: "bi-clipboard-check" },
     ],
   },
   { label: "KAPASITAS", items: [{ to: "/booking-core", label: "Booking Core", icon: "bi-diagram-3" }] },

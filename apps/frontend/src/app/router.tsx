@@ -7,12 +7,13 @@ const mapRoute = createRoute({ getParentRoute: () => rootRoute, path: '/peta-jar
 const addressRoute = createRoute({ getParentRoute: () => rootRoute, path: '/analisis-alamat', component: lazyRouteComponent(() => import('../features/analysis/AddressAnalysisPage'), 'AddressAnalysisPage') })
 const bulkRoute = createRoute({ getParentRoute: () => rootRoute, path: '/analisis-massal', component: lazyRouteComponent(() => import('../features/analysis/BulkAnalysisPage'), 'BulkAnalysisPage') })
 const historyRoute = createRoute({ getParentRoute: () => rootRoute, path: '/riwayat-analisis', component: lazyRouteComponent(() => import('../features/analysis/AnalysisHistoryPage'), 'AnalysisHistoryPage') })
+const surveysRoute = createRoute({ getParentRoute: () => rootRoute, path: '/survei-verifikasi', component: lazyRouteComponent(() => import('../features/analysis/SurveysPage'), 'SurveysPage') })
 const bookingRoute = createRoute({ getParentRoute: () => rootRoute, path: '/booking-core', validateSearch: (search: Record<string, unknown>): { bookingId?: string } => ({ bookingId: typeof search.bookingId === 'string' ? search.bookingId : undefined }), component: lazyRouteComponent(() => import('../features/core-booking/CoreBookingPage'), 'CoreBookingPage') })
 const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: '/audit-trails', component: lazyRouteComponent(() => import('../features/audit/AuditTrailsPage'), 'AuditTrailsPage') })
 const profileRoute = createRoute({ getParentRoute: () => rootRoute, path: '/profil', component: lazyRouteComponent(() => import('../features/profile/ProfilePage'), 'ProfilePage') })
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: '/pengaturan', component: lazyRouteComponent(() => import('../features/settings/SettingsPage'), 'SettingsPage') })
 
-const routeTree = rootRoute.addChildren([dashboardRoute, mapRoute, addressRoute, bulkRoute, historyRoute, bookingRoute, auditRoute, profileRoute, settingsRoute])
+const routeTree = rootRoute.addChildren([dashboardRoute, mapRoute, addressRoute, bulkRoute, historyRoute, surveysRoute, bookingRoute, auditRoute, profileRoute, settingsRoute])
 export const router = createRouter({ routeTree })
 
 declare module '@tanstack/react-router' {

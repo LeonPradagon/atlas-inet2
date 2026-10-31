@@ -43,6 +43,59 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     await this.db.transaction((client) => this.audit(client,actorId,action,'PROCESS',null,details))
   }
 
+  async surveyCandidates(userId: string) {
+    const { rows } = await this.db.query(`WITH candidates AS (
+      SELECT h.id AS "historyId",0 AS "rowNumber",h.title AS address,h.result AS analysis,h.created_at
+      FROM analysis_history h WHERE h.user_id=$1 AND h.analysis_type='ADDRESS' AND h.result->'network'->>'id' IS NOT NULL
+      UNION ALL
+      SELECT h.id,r.row_number,COALESCE(r.input->>'address',h.title || ' · Baris ' || r.row_number),r.result,h.created_at
+      FROM analysis_history h JOIN analysis_bulk_jobs j ON j.history_id=h.id JOIN analysis_bulk_job_rows r ON r.job_id=j.id
+      WHERE h.user_id=$1 AND r.result->'network'->>'id' IS NOT NULL
+    ) SELECT * FROM candidates c WHERE NOT EXISTS(SELECT 1 FROM network_surveys s WHERE s.requested_by=$1 AND s.history_id=c."historyId" AND s.row_number=c."rowNumber") ORDER BY created_at DESC LIMIT 500`,[userId])
+    return rows
+  }
+
+  async listSurveys(userId: string, admin: boolean) {
+    return (await this.db.query(`SELECT s.*,u.name AS requester FROM network_surveys s LEFT JOIN "user" u ON u.id=s.requested_by WHERE ($2::boolean OR s.requested_by=$1) ORDER BY s.updated_at DESC`,[userId,admin])).rows
+  }
+
+  async createSurvey(userId: string, historyId: string, rowNumber: number) {
+    if (!/^[0-9a-f-]{36}$/i.test(historyId) || !Number.isInteger(rowNumber) || rowNumber < 0) throw new BadRequestException({message:'Referensi analisis tidak valid.'})
+    const {rows: candidates} = await this.db.query(`SELECT h.title AS address,h.result AS analysis FROM analysis_history h WHERE h.id=$1 AND h.user_id=$2 AND h.analysis_type='ADDRESS' AND $3=0
+      UNION ALL SELECT COALESCE(r.input->>'address',h.title),r.result FROM analysis_history h JOIN analysis_bulk_jobs j ON j.history_id=h.id JOIN analysis_bulk_job_rows r ON r.job_id=j.id WHERE h.id=$1 AND h.user_id=$2 AND r.row_number=$3`,[historyId,userId,rowNumber])
+    const candidate = candidates[0]
+    if (!candidate) throw new BadRequestException({message:'Hasil analisis tidak tersedia atau sudah diajukan.'})
+    if (!candidate.analysis?.network?.id || !Number.isFinite(candidate.analysis.latitude) || !Number.isFinite(candidate.analysis.longitude)) throw new BadRequestException({message:'Ajukan survei dari hasil yang sudah menemukan jaringan dan koordinat.'})
+    return this.db.transaction(async client => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`survey:${userId}`])
+      const {rows: duplicates} = await client.query(`SELECT id FROM network_surveys WHERE requested_by=$1 AND ((history_id=$2 AND row_number=$3) OR (analysis->'network'->>'id'=$4 AND round((analysis->>'latitude')::numeric,6)=$5::numeric AND round((analysis->>'longitude')::numeric,6)=$6::numeric)) LIMIT 1`,[userId,historyId,rowNumber,candidate.analysis.network.id,candidate.analysis.latitude.toFixed(6),candidate.analysis.longitude.toFixed(6)])
+      if (duplicates.length) throw new ConflictException({message:'Lokasi dan jaringan ini sudah diajukan survei. Buka pengajuan sebelumnya di menu Survei & Verifikasi.'})
+      const {rows} = await client.query(`INSERT INTO network_surveys(requested_by,history_id,row_number,address,analysis) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT DO NOTHING RETURNING id`,[userId,historyId,rowNumber,candidate.address,JSON.stringify(candidate.analysis)])
+      if (!rows.length) throw new ConflictException({message:'Survei sudah diajukan.'})
+      await this.audit(client,userId,'SURVEY_REQUESTED','SURVEY',rows[0].id,{historyId,rowNumber})
+      return rows[0]
+    })
+  }
+
+  async updateSurvey(userId: string, admin: boolean, id: string, body: Record<string, unknown>) {
+    const status = String(body.status ?? '')
+    const allowed: Record<string,string[]> = {WAITING:['IN_PROGRESS'],IN_PROGRESS:['IN_PROGRESS','REVIEW'],REVIEW:['VERIFIED','REVISION'],REVISION:['IN_PROGRESS']}
+    return this.db.transaction(async client => {
+      const {rows} = await client.query('SELECT * FROM network_surveys WHERE id=$1 AND ($3::boolean OR requested_by=$2) FOR UPDATE',[id,userId,admin])
+      const survey = rows[0]
+      if (!survey) throw new NotFoundException({message:'Survei tidak ditemukan.'})
+      if (!allowed[survey.status]?.includes(status) || (['VERIFIED','REVISION'].includes(status) && !admin)) throw new BadRequestException({message:'Perubahan status tidak diizinkan.'})
+      const findings: Record<string,string> = {}
+      for (const key of ['connection','route','length','capacity','evidence','notes']) findings[key] = String(body[key] ?? survey.findings[key] ?? '').trim().slice(0,2000)
+      if (['REVIEW','VERIFIED'].includes(status) && ['connection','route','length','capacity','evidence'].some(key => !findings[key])) throw new BadRequestException({message:'Isi titik sambungan, jalur, panjang aktual, kapasitas, dan referensi bukti survei.'})
+      if (['REVIEW','VERIFIED'].includes(status) && (!Number.isFinite(Number(findings.length)) || Number(findings.length) <= 0)) throw new BadRequestException({message:'Panjang aktual harus berupa angka meter lebih dari nol.'})
+      if (status === 'REVISION' && !findings.notes) throw new BadRequestException({message:'Isi alasan revisi.'})
+      await client.query(`UPDATE network_surveys SET status=$2,findings=$3::jsonb,verified_by=CASE WHEN $2='VERIFIED' THEN $4 ELSE NULL END,verified_at=CASE WHEN $2='VERIFIED' THEN now() ELSE NULL END,updated_at=now() WHERE id=$1`,[id,status,JSON.stringify(findings),userId])
+      await this.audit(client,userId,'SURVEY_STATUS_CHANGED','SURVEY',id,{from:survey.status,to:status,findings})
+      return {id,status}
+    })
+  }
+
   async recordApiRequest(actorId: string | null, method: string, path: string, statusCode: number, durationMs: number) {
     const action = statusCode >= 400 ? 'API_REQUEST_FAILED' : 'API_REQUEST'
     await this.db.transaction((client) => this.audit(client,actorId,action,'API',`${method} ${path}`,{ method,path,statusCode,durationMs }))
@@ -597,6 +650,27 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return rows
   }
 
+  async verifyCoreUsage(assetId: string, source: string | undefined, note: string | undefined, userId: string) {
+    const allowedSources = ['Survei lapangan', 'Data operasional', 'Dokumen inventaris']
+    const cleanNote = String(note ?? '').trim().slice(0, 500)
+    if (!allowedSources.includes(String(source)) || !cleanNote) throw new BadRequestException({ message: 'Pilih sumber verifikasi dan isi catatan pemeriksaan.' })
+    return this.db.transaction(async (client) => {
+      const { rows: assets } = await client.query("SELECT id,total_cores FROM network_assets WHERE id=$1 AND asset_type='segment' FOR UPDATE", [assetId])
+      if (!assets.length) throw new NotFoundException({ message: 'Segmen tidak ditemukan.' })
+      const total = Number(assets[0].total_cores)
+      const { rows: counts } = await client.query(`SELECT count(*)::int AS total,
+        count(*) FILTER (WHERE status='Available')::int AS available,
+        count(*) FILTER (WHERE status='Used')::int AS used,
+        count(*) FILTER (WHERE status='Booked')::int AS booked
+        FROM network_cores WHERE asset_id=$1`, [assetId])
+      if (!total || counts[0].total !== total) throw new ConflictException({ message: 'Daftar core belum lengkap. Lengkapi jumlah core sebelum verifikasi.' })
+      const verification = { verified: true, source, note: cleanNote, verifiedAt: new Date().toISOString(), verifiedBy: userId, totalCores: total, availableCores: counts[0].available, usedCores: counts[0].used, bookedCores: counts[0].booked }
+      await client.query(`UPDATE network_assets SET attributes=jsonb_set(COALESCE(attributes,'{}'::jsonb),'{__coreUsageVerification}',$2::jsonb,true),updated_at=now() WHERE id=$1`, [assetId, JSON.stringify(verification)])
+      await this.audit(client,userId,'CORE_USAGE_VERIFIED','ASSET',assetId,verification)
+      return { assetId, ...verification }
+    })
+  }
+
   private async setCoreCount(client: PoolClient, assetId: string, total: number) {
     await client.query('SELECT id FROM network_assets WHERE id=$1 FOR UPDATE', [assetId])
     const { rows: active } = await client.query(`SELECT id FROM network_cores WHERE asset_id=$1 AND core_number > $2 AND status <> 'Available' LIMIT 1`, [assetId,total])
@@ -615,6 +689,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       if (!rows.length) throw new NotFoundException({ message: 'Core tidak ditemukan.' })
       if (rows[0].status === 'Booked') throw new ConflictException({ message: 'Core yang sedang dibooking tidak dapat diubah.' })
       await client.query('UPDATE network_cores SET status=$3 WHERE asset_id=$1 AND core_number=$2', [assetId,coreNumber,status])
+      await client.query(`UPDATE network_assets SET attributes=attributes-'__coreUsageVerified' || jsonb_build_object('__coreUsageVerification',COALESCE(attributes->'__coreUsageVerification','{}'::jsonb) || '{"verified":false}'::jsonb),updated_at=now() WHERE id=$1`, [assetId])
       await this.audit(client,userId,'CORE_STATUS_CHANGED','CORE',`${assetId}:${coreNumber}`,{ assetId,coreNumber,status })
       if (status === 'Available') {
         await this.allocateWaiting(client,assetId,userId)
@@ -827,13 +902,14 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         const attributes = asset.attributes ?? {};
         const deviceType = Object.entries(attributes).find(([key]) => /^(tipe[ _]?perangkat|assetKind)$/i.test(key))?.[1] ?? (asset.assetType === 'segment' ? 'Kabel' : 'Aset jaringan');
         const capacityFields = Object.entries(attributes).filter(([key]) => !key.startsWith('__') && /core|port|splitter|spesifikasi|kapasitas/i.test(key)).map(([label,value]) => ({ label, value }));
-        const verified = asset.source === 'managed' || attributes.__coreUsageVerified === true;
+        const verification = attributes.__coreUsageVerification && typeof attributes.__coreUsageVerification === 'object' ? attributes.__coreUsageVerification as Record<string, unknown> : null;
+        const verified = asset.source === 'managed' || verification?.verified === true || attributes.__coreUsageVerified === true;
         const full = asset.totalCores > 0 && (counts[0]?.used ?? 0) + (counts[0]?.booked ?? 0) >= asset.totalCores;
         const chamber = /handhole|manhole|^(HH|MH)$/i.test(String(deviceType));
         const recommendation = full ? 'CORE_FULL' : chamber && !connectedCables.length ? 'NO_CABLE_RELATION' : verified && asset.totalCores > 0 && counts[0]?.available > 0 ? 'CAPACITY_AVAILABLE' : 'SURVEY_REQUIRED';
         const recommendationReason = full ? 'Core tercatat penuh. Titik ini tidak direkomendasikan untuk sambungan baru.' : chamber && !connectedCables.length ? 'Aset akses kabel belum memiliki relasi kabel. Titik sambung perlu diperiksa.' : recommendation === 'CAPACITY_AVAILABLE' ? 'Core tersedia tercatat dan diprioritaskan di antara kandidat dalam radius pencarian. Kelayakan fisik tetap perlu diperiksa.' : 'Kapasitas atau pemakaian belum terverifikasi. Jalur kabel merupakan estimasi untuk survei.';
         return { ...asset, capacity: { deviceType: String(deviceType), totalCores: asset.totalCores > 0 ? asset.totalCores : null, usedCores: counts[0]?.used ?? 0, bookedCores: counts[0]?.booked ?? 0, availableCores: counts[0]?.available ?? 0,
-          recommendation, recommendationReason, usageVerified: asset.source === 'managed' || attributes.__coreUsageVerified === true, fields: capacityFields, connectedCables } };
+          recommendation, recommendationReason, usageVerified: asset.source === 'managed' || verification?.verified === true || attributes.__coreUsageVerified === true, verification: verification?.verified === true ? { source: verification.source, note: verification.note, verifiedAt: verification.verifiedAt } : null, fields: capacityFields, connectedCables } };
       }
     }
     return null;

@@ -22,7 +22,8 @@
     "jszip": "^3.10.2",
     "maplibre-gl": "^6.13.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "sweetalert2": "^11.26.25"
   },
   "devDependencies": {
     "@types/geojson": "^7946.0.16",

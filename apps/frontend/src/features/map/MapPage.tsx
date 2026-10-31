@@ -201,7 +201,7 @@ function mapGeometryParts(geometry: Geometry): Geometry[] {
   return geometry.type === "GeometryCollection" ? geometry.geometries.flatMap(mapGeometryParts) : [geometry];
 }
 
-const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, unknown>>[] =>
+export const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, unknown>>[] =>
   items.reduce<Feature<Geometry, Record<string, unknown>>[]>((features, item) => {
     if (item.geometry) {
       const style = item.attributes?.__kmlStyle as ImportedStyle | undefined;
@@ -270,7 +270,7 @@ const assetFeatures = (items: NetworkAsset[]): Feature<Geometry, Record<string, 
     return features;
   }, []).flatMap((feature) => mapGeometryParts(feature.geometry).map((geometry) => ({ ...feature, geometry, properties: { ...feature.properties, geometryType: geometry.type } })));
 
-function addAtlasMapIcons(map: MapLibreMap) {
+export function addAtlasMapIcons(map: MapLibreMap) {
   const icons: Record<string, string> = { OLT: "#2864d7", OTB: "#00bcd4", ODC: "#f28c28", ODP: "#8b4513", POLE: "#e8c300", JC: "#f28c28", HANDHOLE: "#fff", MANHOLE: "#202124", FDT: "#e75b3c", OFP: "#178c80", POP: "#e8b500", ODF: "#684fc7", SLACK: "#e53935", "TERMINAL BOX": "#3280c8" };
   for (const [category, color] of Object.entries(icons)) {
     const canvas = document.createElement("canvas");
@@ -392,7 +392,7 @@ function firstCoordinate(geometry: NetworkAsset["geometry"]): Coordinate {
   return child ? firstCoordinate(child) : [106.79, -6.26];
 }
 
-function cableLengthMeters(geometry: Geometry | null): number | null {
+export function cableLengthMeters(geometry: Geometry | null): number | null {
   if (!geometry) return null;
   const lines: number[][][] = [];
   const collect = (item: Geometry) => {
@@ -433,6 +433,53 @@ function SegmentCoreSummary({ asset }: { asset: NetworkAsset }) {
   </span>;
 }
 
+export function loadNetworkMapIcons(instance: MapLibreMap, features: Feature<Geometry, Record<string, unknown>>[]) {
+  let active = true;
+      const icons = new Map<string, { url: string; color: string }>();
+
+    for (const feature of features) {
+      const fallbackId = String(feature.properties?.fallbackIconImageId ?? "");
+      const fallbackUrl = String(feature.properties?.fallbackIconHref ?? "");
+      if (fallbackId && fallbackUrl) icons.set(fallbackId, { url: fallbackUrl, color: String(feature.properties?.fallbackIconTint ?? "#ffffff") });
+      const id = String(feature.properties?.iconImageId ?? "");
+      const url = String(feature.properties?.iconHref ?? "");
+      if (id && url) {
+        icons.set(id, { url, color: String(feature.properties?.iconTint ?? "#ffffff") });
+      }
+    }
+    const addLoadedIcon = (id: string, data: HTMLImageElement | ImageBitmap | ImageData, color: string) => {
+      if (!active || instance.hasImage(id)) return;
+      let image: HTMLImageElement | ImageBitmap | ImageData = data;
+      if (!(data instanceof ImageData)) {
+        try {
+          image = tintKmlIcon(data, color);
+        } catch {
+          /* use the original Google Earth icon if canvas tinting is blocked */
+        }
+      }
+      instance.addImage(id, image, { pixelRatio: Math.max(0.5, Math.max(data.width, data.height) / 32) });
+    };
+    for (const [id, { url, color }] of icons) {
+      if (instance.hasImage(id)) continue;
+      if (url.startsWith("atlas-kmz-icon:")) {
+        const iconId = url.slice("atlas-kmz-icon:".length);
+        void api<{ mimeType: string; data: string }>(`/assets/kml-icons/${iconId}`)
+          .then(async ({ mimeType, data }) => {
+            const binary = Uint8Array.from(atob(data), (character) => character.charCodeAt(0));
+            const image = await createImageBitmap(new Blob([binary], { type: mimeType }));
+            addLoadedIcon(id, image, color);
+          })
+          .catch(() => undefined);
+      } else {
+        void instance.loadImage(url)
+          .then(({ data }) => addLoadedIcon(id, data, color))
+          .catch(() => undefined);
+      }
+    }
+
+  return () => { active = false; };
+}
+
 export function MapPage() {
   const mapProvincesQuery = useQuery({
     queryKey: ["network-map-provinces"],
@@ -451,6 +498,8 @@ export function MapPage() {
   const [search, setSearch] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [coreFilter, setCoreFilter] = useState("all");
+  const [coreVerificationSource, setCoreVerificationSource] = useState("Survei lapangan");
+  const [coreVerificationNote, setCoreVerificationNote] = useState("");
   const catalogQuery = useQuery({
     queryKey: ["segment-catalog", assetPage, catalogSearch, coreFilter, provinceCode],
     queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${coreFilter}&provinceCode=${provinceCode}`),
@@ -615,7 +664,14 @@ export function MapPage() {
   });
   const updateCore = useMutation({
     mutationFn: ({ coreNumber, status }: { coreNumber: number; status: "Available" | "Used" }) => api(`/assets/${selectedSegment?.id}/cores/${coreNumber}`, { method: "PATCH", data: { status } }),
-    onSuccess: invalidateNetwork,
+    onSuccess: async () => Promise.all([invalidateNetwork(), queryClient.invalidateQueries({ queryKey: ["cores", selectedSegment?.id] })]),
+  });
+  const verifyCoreUsage = useMutation({
+    mutationFn: () => api<{ verifiedAt: string }>(`/assets/${selectedSegment?.id}/cores/verify`, { method: "POST", data: { source: coreVerificationSource, note: coreVerificationNote } }),
+    onSuccess: async () => {
+      setCoreVerificationNote("");
+      await Promise.all([invalidateNetwork(), queryClient.invalidateQueries({ queryKey: ["cores", selectedSegment?.id] })]);
+    },
   });
   const updateAsset = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => api(`/assets/${id}`, { method: "PATCH", data }),
@@ -890,49 +946,8 @@ export function MapPage() {
   useEffect(() => {
     const instance = map.current;
     if (!instance || !mapReady) return;
-      const icons = new Map<string, { url: string; color: string }>();
-    const assetsById = new Map(knownAssets.map((asset) => [asset.id, asset]));
-    for (const feature of allNetworkFeatures) {
-      const fallbackId = String(feature.properties?.fallbackIconImageId ?? "");
-      const fallbackUrl = String(feature.properties?.fallbackIconHref ?? "");
-      if (fallbackId && fallbackUrl) icons.set(fallbackId, { url: fallbackUrl, color: String(feature.properties?.fallbackIconTint ?? "#ffffff") });
-      const id = String(feature.properties?.iconImageId ?? "");
-      const url = String(feature.properties?.iconHref ?? "");
-      if (id && url) {
-        const style = assetsById.get(String(feature.properties?.id))?.attributes?.__kmlStyle as ImportedStyle | undefined;
-        icons.set(id, { url, color: String(feature.properties?.iconTint ?? style?.iconColor ?? "#ffffff") });
-      }
-    }
-    const addLoadedIcon = (id: string, data: HTMLImageElement | ImageBitmap | ImageData, color: string) => {
-      if (instance.hasImage(id)) return;
-      let image: HTMLImageElement | ImageBitmap | ImageData = data;
-      if (!(data instanceof ImageData)) {
-        try {
-          image = tintKmlIcon(data, color);
-        } catch {
-          /* use the original Google Earth icon if canvas tinting is blocked */
-        }
-      }
-      instance.addImage(id, image, { pixelRatio: Math.max(0.5, Math.max(data.width, data.height) / 32) });
-    };
-    for (const [id, { url, color }] of icons) {
-      if (instance.hasImage(id)) continue;
-      if (url.startsWith("atlas-kmz-icon:")) {
-        const iconId = url.slice("atlas-kmz-icon:".length);
-        void api<{ mimeType: string; data: string }>(`/assets/kml-icons/${iconId}`)
-          .then(async ({ mimeType, data }) => {
-            const binary = Uint8Array.from(atob(data), (character) => character.charCodeAt(0));
-            const image = await createImageBitmap(new Blob([binary], { type: mimeType }));
-            addLoadedIcon(id, image, color);
-          })
-          .catch(() => undefined);
-      } else {
-        void instance.loadImage(url)
-          .then(({ data }) => addLoadedIcon(id, data, color))
-          .catch(() => undefined);
-      }
-    }
-  }, [allNetworkFeatures, mapReady, knownAssets]);
+    return loadNetworkMapIcons(instance, allNetworkFeatures);
+  }, [allNetworkFeatures, mapReady]);
 
   async function importFile(file?: File) {
     if (!file) return;
@@ -1365,6 +1380,16 @@ export function MapPage() {
                 </div>
                 <details className="core-list-details">
                   <summary>Rincian {selectedSegment.totalCores} core</summary>
+                  {selectedSegment.source !== "managed" && <div className="border rounded p-2 mt-2 mb-2 small">
+                    <b>{selectedSegment.attributes?.__coreUsageVerification && typeof selectedSegment.attributes.__coreUsageVerification === "object" && (selectedSegment.attributes.__coreUsageVerification as Record<string, unknown>).verified === true ? "Kapasitas terverifikasi" : "Verifikasi pemakaian KMZ"}</b>
+                    {selectedSegment.attributes?.__coreUsageVerification && typeof selectedSegment.attributes.__coreUsageVerification === "object" && (selectedSegment.attributes.__coreUsageVerification as Record<string, unknown>).verified === true ? <small className="d-block text-secondary">Sumber: {String((selectedSegment.attributes.__coreUsageVerification as Record<string, unknown>).source ?? "—")} · {String((selectedSegment.attributes.__coreUsageVerification as Record<string, unknown>).verifiedAt ?? "")}</small> : <small className="d-block text-secondary">Periksa status setiap core dari catatan lapangan atau inventaris, lalu isi sumber dan catatan pemeriksaan.</small>}
+                    {user?.role === "ADMIN" && <div className="mt-2">
+                      <div className="row g-2"><div className="col-sm-5"><select className="form-select form-select-sm" aria-label="Sumber verifikasi" value={coreVerificationSource} onChange={(event) => setCoreVerificationSource(event.target.value)}><option>Survei lapangan</option><option>Data operasional</option><option>Dokumen inventaris</option></select></div><div className="col-sm-7"><input className="form-control form-control-sm" aria-label="Catatan verifikasi" placeholder="Catatan / referensi pemeriksaan" value={coreVerificationNote} onChange={(event) => setCoreVerificationNote(event.target.value)} maxLength={500} /></div></div>
+                      <button className="btn btn-sm btn-outline-primary mt-2" disabled={verifyCoreUsage.isPending || !coreVerificationNote.trim() || coresQuery.data?.length !== selectedSegment.totalCores} onClick={() => verifyCoreUsage.mutate()}>{verifyCoreUsage.isPending ? "Menyimpan..." : "Simpan dan verifikasi kapasitas"}</button>
+                      {coresQuery.data?.length !== selectedSegment.totalCores && <small className="d-block text-warning mt-1">Jumlah core tercatat ({coresQuery.data?.length ?? 0}) belum sama dengan total KMZ ({selectedSegment.totalCores}).</small>}
+                      {verifyCoreUsage.error && <small className="d-block text-danger mt-1">{verifyCoreUsage.error instanceof Error ? verifyCoreUsage.error.message : "Verifikasi gagal disimpan."}</small>}
+                    </div>}
+                  </div>}
                   {coresQuery.isPending ? (
                     <small>Memuat status core...</small>
                   ) : coresQuery.isError ? <small className="text-danger">Status core tidak dapat dimuat.</small> : !coresQuery.data?.length ? <small className="text-secondary">Belum ada core terpasang.</small> : (

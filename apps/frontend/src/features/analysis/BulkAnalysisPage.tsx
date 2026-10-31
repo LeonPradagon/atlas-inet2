@@ -1,4 +1,6 @@
+import { confirmAction } from '../../lib/dialogs'
 import { NetworkCapacityDetail } from './NetworkCapacityDetail'
+import { SubmitSurveyButton } from './SubmitSurveyButton'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import ExcelJS from 'exceljs'
@@ -49,7 +51,7 @@ export function BulkAnalysisPage() {
     } catch(e) {setError(e instanceof Error?e.message:'Unggah gagal')} finally {setLoading(false)}
   }
   const expand = async (row: AnalysisRow) => {
-    if (!window.confirm('Belum ada jaringan dalam radius 1 km. Setujui pencarian hingga 2 km untuk lokasi ini?')) return
+    if (!await confirmAction('Belum ada jaringan dalam radius 1 km. Setujui pencarian hingga 2 km untuk lokasi ini?')) return
     setExpanding(row.row);setError('')
     try { await api('/analysis/bulk/jobs/'+jobId+'/rows/'+row.row+'/expand',postJson({confirmed:true}));await Promise.all([queryClient.invalidateQueries({queryKey:['bulk-job-rows',jobId]}),queryClient.invalidateQueries({queryKey:['bulk-job',jobId]})]) }
     catch(e){setError(e instanceof Error?e.message:'Perluasan gagal')}finally{setExpanding(null)}
@@ -114,11 +116,11 @@ export function BulkAnalysisPage() {
         {rows.map(row=><tr key={row.row} className={selectedRowNumber===row.row?'table-primary':''}>
           <td>{row.row}</td><td><button className="btn btn-link text-start p-0" onClick={()=>setSelectedRowNumber(row.row)}>{row.address}</button><small className="d-block">{row.latitude}, {row.longitude}</small></td>
           <td>{row.network?.name ?? '—'}</td><td>{row.result?.network?.searchRadiusMeters ?? row.result?.searchRadiusMeters ?? '—'} m</td><td>{row.distanceMeters == null?'Belum tersedia':row.distanceMeters>=1000?(row.distanceMeters/1000).toFixed(2)+' km':Math.round(row.distanceMeters)+' m'}</td>
-          <td>{row.status}<small className="d-block">{row.message}</small></td><td>{row.result?.expansionAvailable && <button className="btn btn-outline-primary btn-sm" disabled={expanding!==null} onClick={()=>void expand(row)}>{expanding===row.row?'Mencari…':'Cari hingga 2 km'}</button>}</td>
+          <td>{row.status}<small className="d-block">{row.message}</small></td><td>{row.network && jobQuery.data?.historyId && <SubmitSurveyButton historyId={jobQuery.data.historyId} rowNumber={row.row}/>}{row.result?.expansionAvailable && <button className="btn btn-outline-primary btn-sm" disabled={expanding!==null} onClick={()=>void expand(row)}>{expanding===row.row?'Mencari…':'Cari hingga 2 km'}</button>}</td>
         </tr>)}
       </tbody></table></div>
       <div className="d-flex justify-content-between align-items-center"><small>Halaman {page} · {pageQuery.data?.total ?? 0} baris</small><div className="btn-group"><button className="btn btn-outline-secondary" disabled={page===1} onClick={()=>setPage(p=>p-1)}>Sebelumnya</button><button className="btn btn-outline-secondary" disabled={page*50 >= (pageQuery.data?.total ?? 0)} onClick={()=>setPage(p=>p+1)}>Berikutnya</button></div></div>
-      {selectedRow?.result && Number.isFinite(selectedRow.latitude) && Number.isFinite(selectedRow.longitude) && <section className="mt-4"><h4 className="h6">{selectedRow.address}</h4><NetworkCapacityDetail capacity={selectedRow.result.network?.capacity}/><NearestNetworkMap result={selectedRow.result}/><small>Oranye: estimasi jalur kabel mengikuti jalan mobil. Klik lokasi lain di tabel untuk melihat rutenya.</small></section>}
+      {selectedRow?.result && Number.isFinite(selectedRow.latitude) && Number.isFinite(selectedRow.longitude) && <section className="mt-4"><h4 className="h6">{selectedRow.address}</h4><NetworkCapacityDetail capacity={selectedRow.result.network?.capacity}/><NearestNetworkMap result={selectedRow.result}/><small>Klik lokasi lain di tabel untuk melihat jaringan dan estimasi jalur kabelnya.</small></section>}
     </div></section>}
     {!jobId && <div className="alert alert-info">Unggah lokasi untuk mencari jaringan yang sudah ada. Hasil tersimpan di riwayat analisis.</div>}
   </>

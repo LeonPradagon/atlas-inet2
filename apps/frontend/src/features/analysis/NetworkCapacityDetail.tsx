@@ -1,6 +1,7 @@
 export type NetworkCapacity = {
   recommendation?: string; recommendationReason?: string;
   deviceType: string; totalCores: number | null; usedCores: number; bookedCores: number; availableCores: number; usageVerified: boolean;
+  verification?: { source?: string; note?: string; verifiedAt?: string } | null;
   fields: { label: string; value: unknown }[];
   connectedCables: { id: string; name: string; totalCores: number }[];
 }
@@ -18,6 +19,8 @@ export function NetworkCapacityDetail({ capacity }: { capacity?: NetworkCapacity
         <dt className="col-7">Tersedia</dt><dd className="col-5">{capacity.usageVerified ? capacity.availableCores : 'Belum terverifikasi'}</dd>
       </dl>
       {!capacity.usageVerified && <small className="d-block text-warning">Jumlah core tersedia belum terverifikasi. Kapasitas total dari KMZ tidak memastikan core masih kosong.</small>}
+      {capacity.usageVerified && capacity.verification && <small className="d-block text-success">Diverifikasi via {capacity.verification.source ?? '—'}{capacity.verification.verifiedAt ? ` · ${new Date(capacity.verification.verifiedAt).toLocaleString('id-ID')}` : ''}{capacity.verification.note ? ` · ${capacity.verification.note}` : ''}</small>}
+      {!capacity.usageVerified && <small className="d-block text-secondary mt-1">Admin dapat memeriksa status tiap core di Peta Jaringan, lalu menyimpan sumber dan catatan verifikasi.</small>}
     </> : <small className="d-block text-secondary">Jumlah core tidak dicantumkan untuk aset ini. Kapasitas kabel tidak dapat ditentukan dari jenis perangkat atau kedekatan lokasi saja.</small>}
     {capacity.fields.length > 0 && <table className="table table-sm small mt-2 mb-0"><tbody>{capacity.fields.map(({label,value},i)=><tr key={i}><th scope="row">{label}</th><td className="text-break">{String(value)}</td></tr>)}</tbody></table>}
     <small className="d-block text-secondary mt-2">Port/splitter adalah kapasitas perangkat, berbeda dari jumlah core kabel. Handhole/manhole adalah tempat akses kabel.</small>
