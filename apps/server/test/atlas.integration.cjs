@@ -457,6 +457,515 @@ async function main() {
       "PASS: HTTP authentication and ADMIN/PRESALES access boundaries"
     );
 
+    const call = async (path, user, method, data) => {
+      const response = await request(path, user, method, data);
+      return { body: await response.json(), status: response.status };
+    };
+    const signIn = {
+      body: { message: "Silakan masuk untuk melanjutkan." },
+      status: 401,
+    };
+    const adminOnly = {
+      body: { message: "Akses ini hanya tersedia untuk ADMIN." },
+      status: 403,
+    };
+    const missingBooking = {
+      body: { message: "Booking tidak ditemukan." },
+      status: 404,
+    };
+    const bookingInput = (customer, cores, segmentId = "http-booking") => ({
+      cores,
+      customer,
+      picCustomer: "Customer PIC",
+      picPresales: "Presales PIC",
+      segmentId,
+    });
+    const createOverHttp = async (user, customer, cores) => {
+      const response = await call(
+        "/bookings",
+        user,
+        "POST",
+        bookingInput(customer, cores)
+      );
+      assert.equal(response.status, 201);
+      return response.body.id;
+    };
+    const iso = async (column, id) =>
+      (
+        await q(`SELECT ${column} AS value FROM bookings WHERE id=$1`, [id])
+      ).rows[0].value?.toISOString() ?? null;
+    const trail = async (id) => ({
+      audit: (
+        await q(
+          "SELECT actor_id AS actor,action,details FROM audit_logs WHERE entity_id=$1 ORDER BY id",
+          [id]
+        )
+      ).rows,
+      notifications: (
+        await q(
+          'SELECT user_id AS "user",title,message FROM notifications WHERE booking_id=$1 ORDER BY id',
+          [id]
+        )
+      ).rows,
+    });
+    await segment("http-booking", 2);
+    await segment("http-empty", 0);
+
+    assert.deepEqual(await call("/assets/bookable-segments"), signIn);
+    const bookable = await call("/assets/bookable-segments", "presales");
+    assert.equal(bookable.status, 200);
+    assert.deepEqual(
+      bookable.body.find((s) => s.id === "http-booking"),
+      {
+        area: "Original area",
+        assetType: "segment",
+        id: "http-booking",
+        idleCores: 2,
+        name: "http-booking",
+        totalCores: 2,
+      }
+    );
+    assert.equal(
+      bookable.body.some((s) => s.id === "http-empty"),
+      false,
+      "a segment without capacity is not bookable"
+    );
+
+    assert.deepEqual(await call("/settings/booking-duration"), signIn);
+    assert.deepEqual(await call("/settings/booking-duration", "presales"), {
+      body: { days: 30 },
+      status: 200,
+    });
+    assert.deepEqual(
+      await call("/settings/booking-duration", "presales", "PATCH", {
+        days: 14,
+      }),
+      adminOnly
+    );
+    assert.deepEqual(
+      await call("/settings/booking-duration", "admin", "PATCH", { days: 0 }),
+      { body: { message: "Durasi booking harus 1–365 hari." }, status: 400 }
+    );
+    assert.deepEqual(
+      await call("/settings/booking-duration", "admin", "PATCH", { days: 14 }),
+      { body: { days: 14 }, status: 200 }
+    );
+    assert.deepEqual(await call("/settings/booking-duration", "presales"), {
+      body: { days: 14 },
+      status: 200,
+    });
+    assert.deepEqual(
+      (
+        await q(
+          'SELECT actor_id AS actor,entity_type AS "entityType",entity_id AS "entityId",details FROM audit_logs WHERE action=\'BOOKING_DURATION_UPDATED\''
+        )
+      ).rows,
+      [
+        {
+          actor: "admin",
+          details: { days: 14 },
+          entityId: "booking_duration_days",
+          entityType: "SETTING",
+        },
+      ]
+    );
+
+    assert.deepEqual(
+      await call("/bookings", undefined, "POST", bookingInput("HTTP A", 1)),
+      signIn
+    );
+    const required = {
+      body: { message: "Pelanggan, PIC, segmen, dan jumlah core wajib diisi." },
+      status: 400,
+    };
+    assert.deepEqual(
+      await call("/bookings", "presales", "POST", {
+        ...bookingInput("HTTP A", 1),
+        picCustomer: " ",
+      }),
+      required
+    );
+    assert.deepEqual(
+      await call("/bookings", "presales", "POST", bookingInput("HTTP A", 0)),
+      required
+    );
+    assert.deepEqual(
+      await call(
+        "/bookings",
+        "presales",
+        "POST",
+        bookingInput("HTTP A", 1, "missing-segment")
+      ),
+      { body: { message: "Segmen tidak ditemukan." }, status: 404 }
+    );
+    assert.deepEqual(
+      await call(
+        "/bookings",
+        "presales",
+        "POST",
+        bookingInput("HTTP A", 1, "http-empty")
+      ),
+      {
+        body: {
+          message:
+            "Kapasitas belum diisi. Minta ADMIN melengkapi jumlah core segmen.",
+        },
+        status: 400,
+      }
+    );
+    assert.deepEqual(
+      await call("/bookings", "presales", "POST", bookingInput("HTTP A", 3)),
+      {
+        body: { message: "Jumlah booking melebihi kapasitas total segmen." },
+        status: 400,
+      }
+    );
+    const firstCreated = await call("/bookings", "presales", "POST", {
+      ...bookingInput(" HTTP A ", 1),
+      picCustomer: " Customer PIC ",
+    });
+    const first = firstCreated.body.id;
+    assert.match(
+      first,
+      /^BKG-[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/u
+    );
+    assert.deepEqual(firstCreated, {
+      body: {
+        cores: 1,
+        customer: "HTTP A",
+        id: first,
+        picCustomer: "Customer PIC",
+        picPresales: "Presales PIC",
+        segmentId: "http-booking",
+        status: "Pending Approval",
+      },
+      status: 201,
+    });
+    const second = await createOverHttp("admin", "HTTP B", 1);
+
+    assert.deepEqual(await call("/bookings"), signIn);
+    const listed = await call("/bookings", "presales");
+    assert.equal(listed.status, 200);
+    assert.deepEqual(await call("/bookings", "admin"), listed);
+    const listedIds = listed.body.map((b) => b.id);
+    assert(
+      listedIds.indexOf(second) < listedIds.indexOf(first),
+      "the newest booking is listed first"
+    );
+    assert.deepEqual(
+      listed.body.find((b) => b.id === first),
+      {
+        approvedAt: null,
+        area: "Original area",
+        cores: 1,
+        customer: "HTTP A",
+        expiresAt: null,
+        id: first,
+        picCustomer: "Customer PIC",
+        picPresales: "Presales PIC",
+        rejectedAt: null,
+        requestedAt: await iso("requested_at", first),
+        segmentId: "http-booking",
+        segmentName: "http-booking",
+        status: "Pending Approval",
+      }
+    );
+
+    assert.deepEqual(
+      await call(`/bookings/${first}/approve`, undefined, "POST"),
+      signIn
+    );
+    assert.deepEqual(
+      await call(`/bookings/${first}/approve`, "presales", "POST"),
+      adminOnly
+    );
+    assert.deepEqual(
+      await call("/bookings/BKG-MISSING/approve", "admin", "POST"),
+      missingBooking
+    );
+    assert.deepEqual(
+      await call(`/bookings/${first}/approve`, "admin", "POST"),
+      {
+        body: { allocatedBookingIds: [first], id: first, status: "Booked" },
+        status: 201,
+      }
+    );
+    assert.deepEqual(
+      await call(`/bookings/${first}/approve`, "admin", "POST"),
+      {
+        body: {
+          message:
+            "Hanya booking yang menunggu persetujuan yang dapat disetujui.",
+        },
+        status: 409,
+      }
+    );
+    assert.equal(
+      (
+        await q(
+          "SELECT round(extract(epoch FROM expires_at-approved_at)/86400)::int AS days FROM bookings WHERE id=$1",
+          [first]
+        )
+      ).rows[0].days,
+      14,
+      "an allocated booking expires after the configured duration"
+    );
+    assert.deepEqual(
+      await call(`/bookings/${second}/approve`, "admin", "POST"),
+      {
+        body: { allocatedBookingIds: [second], id: second, status: "Booked" },
+        status: 201,
+      }
+    );
+    const waiting = await createOverHttp("presales", "HTTP D", 2);
+    assert.deepEqual(
+      await call(`/bookings/${waiting}/approve`, "admin", "POST"),
+      {
+        body: { allocatedBookingIds: [], id: waiting, status: "Waiting List" },
+        status: 201,
+      }
+    );
+
+    assert.deepEqual(
+      await call(`/bookings/${first}/release`, undefined, "POST"),
+      signIn
+    );
+    assert.deepEqual(
+      await call("/bookings/BKG-MISSING/release", "presales", "POST"),
+      missingBooking
+    );
+    const inactive = {
+      body: { message: "Hanya booking aktif yang dapat dilepas." },
+      status: 409,
+    };
+    assert.deepEqual(
+      await call(`/bookings/${waiting}/release`, "presales", "POST"),
+      inactive
+    );
+    assert.deepEqual(
+      await call(`/bookings/${first}/release`, "presales", "POST"),
+      {
+        body: { allocated: null, allocatedBookingIds: [], released: first },
+        status: 201,
+      }
+    );
+    assert.deepEqual(
+      await call(`/bookings/${first}/release`, "presales", "POST"),
+      inactive
+    );
+    assert.deepEqual(
+      await call(`/bookings/${second}/release`, "presales", "POST"),
+      {
+        body: {
+          allocated: waiting,
+          allocatedBookingIds: [waiting],
+          released: second,
+        },
+        status: 201,
+      }
+    );
+    const httpSegment = "http-booking";
+    assert.deepEqual(await trail(first), {
+      audit: [
+        {
+          action: "BOOKING_CREATED",
+          actor: "presales",
+          details: {
+            cores: 1,
+            segmentId: httpSegment,
+            status: "Pending Approval",
+          },
+        },
+        {
+          action: "WAITING_LIST_ALLOCATED",
+          actor: "admin",
+          details: { cores: 1, segmentId: httpSegment },
+        },
+        {
+          action: "BOOKING_APPROVED",
+          actor: "admin",
+          details: {
+            allocatedBookingIds: [first],
+            cores: 1,
+            segmentId: httpSegment,
+            status: "Booked",
+          },
+        },
+        {
+          action: "BOOKING_RELEASED",
+          actor: "presales",
+          details: {
+            allocatedBookingIds: [],
+            cores: 1,
+            segmentId: httpSegment,
+          },
+        },
+      ],
+      notifications: [
+        {
+          message: "HTTP A meminta 1 core pada segmen http-booking.",
+          title: "Persetujuan booking core diperlukan",
+          user: "admin",
+        },
+        {
+          message: `HTTP A: 1 core tersedia dan booking ${first} aktif.`,
+          title: "Waiting list dialokasikan",
+          user: "presales",
+        },
+        {
+          message: `Booking ${first} disetujui dan 1 core telah dialokasikan.`,
+          title: "Booking core disetujui",
+          user: "presales",
+        },
+        {
+          message:
+            "HTTP A: 1 core dilepas. 0 permintaan waiting list dialokasikan.",
+          title: "Booking core dilepas",
+          user: "presales",
+        },
+      ],
+    });
+    const secondTrail = await trail(second);
+    assert.deepEqual(secondTrail.audit.at(-1), {
+      action: "BOOKING_RELEASED",
+      actor: "presales",
+      details: {
+        allocatedBookingIds: [waiting],
+        cores: 1,
+        segmentId: httpSegment,
+      },
+    });
+    assert.deepEqual(
+      secondTrail.notifications
+        .filter((n) => n.title === "Booking core dilepas")
+        .map((n) => n.user)
+        .sort(),
+      ["admin", "presales"],
+      "a release notifies PRESALES users and the requester"
+    );
+    assert.deepEqual((await trail(waiting)).audit.at(-1), {
+      action: "WAITING_LIST_ALLOCATED",
+      actor: "presales",
+      details: { cores: 2, segmentId: httpSegment },
+    });
+    assert.deepEqual(
+      (await call("/bookings", "presales")).body.find((b) => b.id === waiting),
+      {
+        approvedAt: await iso("approved_at", waiting),
+        area: "Original area",
+        cores: 2,
+        customer: "HTTP D",
+        expiresAt: await iso("expires_at", waiting),
+        id: waiting,
+        picCustomer: "Customer PIC",
+        picPresales: "Presales PIC",
+        rejectedAt: null,
+        requestedAt: await iso("requested_at", waiting),
+        segmentId: httpSegment,
+        segmentName: "http-booking",
+        status: "Booked",
+      }
+    );
+    assert.deepEqual(
+      (await call("/assets/bookable-segments", "presales")).body.find(
+        (s) => s.id === "http-booking"
+      ).idleCores,
+      0
+    );
+    console.log(
+      "PASS: HTTP booking routes list, create, approve and release with ADMIN/PRESALES boundaries, duration and bookable segments"
+    );
+
+    const rejected = await createOverHttp("presales", "HTTP C", 2);
+    assert.deepEqual(
+      await call(`/bookings/${rejected}/reject`, undefined, "POST"),
+      signIn
+    );
+    assert.deepEqual(
+      await call(`/bookings/${rejected}/reject`, "presales", "POST"),
+      adminOnly
+    );
+    assert.deepEqual(
+      await call("/bookings/BKG-MISSING/reject", "admin", "POST"),
+      missingBooking
+    );
+    assert.deepEqual(
+      await call(`/bookings/${rejected}/reject`, "admin", "POST"),
+      { body: { id: rejected, status: "Rejected" }, status: 201 }
+    );
+    const notPending = {
+      body: {
+        message: "Hanya booking yang menunggu persetujuan yang dapat ditolak.",
+      },
+      status: 409,
+    };
+    assert.deepEqual(
+      await call(`/bookings/${rejected}/reject`, "admin", "POST"),
+      notPending
+    );
+    assert.deepEqual(
+      await call(`/bookings/${waiting}/reject`, "admin", "POST"),
+      notPending
+    );
+    assert.equal(
+      (await call(`/bookings/${rejected}/approve`, "admin", "POST")).status,
+      409
+    );
+    assert.deepEqual(
+      (
+        await q(
+          'SELECT status,rejected_by AS "rejectedBy",approved_by AS "approvedBy",approved_at AS "approvedAt",expires_at AS "expiresAt",(SELECT count(*)::int FROM booking_cores WHERE booking_id=$1) AS "heldCores" FROM bookings WHERE id=$1',
+          [rejected]
+        )
+      ).rows[0],
+      {
+        approvedAt: null,
+        approvedBy: null,
+        expiresAt: null,
+        heldCores: 0,
+        rejectedBy: "admin",
+        status: "Rejected",
+      }
+    );
+    assert.deepEqual(await trail(rejected), {
+      audit: [
+        {
+          action: "BOOKING_CREATED",
+          actor: "presales",
+          details: {
+            cores: 2,
+            segmentId: httpSegment,
+            status: "Pending Approval",
+          },
+        },
+        {
+          action: "BOOKING_REJECTED",
+          actor: "admin",
+          details: { cores: 2, segmentId: httpSegment },
+        },
+      ],
+      notifications: [
+        {
+          message: "HTTP C meminta 2 core pada segmen http-booking.",
+          title: "Persetujuan booking core diperlukan",
+          user: "admin",
+        },
+        {
+          message: `Permintaan booking ${rejected} untuk HTTP C ditolak oleh ADMIN.`,
+          title: "Booking core ditolak",
+          user: "presales",
+        },
+      ],
+    });
+    const rejectedRow = (await call("/bookings", "admin")).body.find(
+      (b) => b.id === rejected
+    );
+    assert.equal(rejectedRow.status, "Rejected");
+    assert.equal(rejectedRow.rejectedAt, await iso("rejected_at", rejected));
+    console.log(
+      "PASS: HTTP booking rejection sets status, audit and PRESALES notification without holding cores"
+    );
+
     const ExcelJS = require("exceljs");
     const {
       NetworkImportService,
