@@ -299,6 +299,17 @@ export function parseKml(xml: string, file: string, resolveIcon?: (href: string)
   return features
 }
 
+function kmzFolderPaths(features: NetworkFeature[]) {
+  const folders = new Set<string>()
+  for (const feature of features) {
+    const path = String(feature.properties.folderPath ?? '').split('/').map((part) => part.trim()).filter(Boolean)
+    path.forEach((_, index) => folders.add(path.slice(0, index + 1).join(' / ')))
+  }
+  return [...folders].sort((a, b) => a.localeCompare(b))
+}
+
+const countFtthFolders = (features: NetworkFeature[]) => kmzFolderPaths(features).filter((path) => /ftth/i.test(path.split(' / ')[path.split(' / ').length - 1] ?? '')).length
+
 @Injectable()
 export class NetworkImportService {
   constructor(@Inject(Database) private readonly db: Database) {}
@@ -342,6 +353,7 @@ export class NetworkImportService {
     } else xml = file.buffer.toString('utf8')
 
     const features = parseKml(xml, file.originalname.replace(/\.(kml|kmz)$/i, ''), resolveKmzIcon)
+    const importId = randomUUID()
     const batchSize = 250
     await this.db.transaction(async (client) => {
       if (replaceExistingKml) {
@@ -355,7 +367,7 @@ export class NetworkImportService {
         const batch = features.slice(offset, offset + batchSize)
         const payload = JSON.stringify(batch.map((feature) => ({
           id: feature.id, name: feature.name, asset_type: feature.assetType, total_cores: feature.totalCores,
-          attributes: feature.properties, geometry: feature.geometry, area: feature.fields?.area, cable_type: feature.fields?.cableType,
+          attributes: { ...feature.properties, __atlasImportId: importId }, geometry: feature.geometry, area: feature.fields?.area, cable_type: feature.fields?.cableType,
           installation: feature.fields?.installation, road_side: feature.fields?.side, pole: feature.fields?.pole,
           pole_height: feature.fields?.poleHeight, odc: feature.fields?.odc, odp: feature.fields?.odp,
         })))
@@ -376,12 +388,20 @@ export class NetworkImportService {
           CROSS JOIN LATERAL generate_series(1,total_cores) n WHERE total_cores > 0`, [payload])
       }
       await client.query(`INSERT INTO audit_logs(actor_id,action,entity_type,entity_id,details)
-        VALUES($1,'NETWORK_IMPORTED','NETWORK_IMPORT',$2,$3::jsonb)`, [actorId ?? null,randomUUID(),JSON.stringify({ source: 'kml/kmz', fileName: file.originalname, importedCount: features.length, segmentCount: features.filter((feature) => feature.assetType === 'segment').length, replacesExisting: replaceExistingKml })])
+        VALUES($1,'NETWORK_IMPORTED','NETWORK_IMPORT',$2,$3::jsonb)`, [actorId ?? null,importId,JSON.stringify({ source: 'kml/kmz', fileName: file.originalname, importedCount: features.length, segmentCount: features.filter((feature) => feature.assetType === 'segment').length, ftthFolderCount: countFtthFolders(features), folderPaths: kmzFolderPaths(features), replacesExisting: replaceExistingKml })])
     })
+    const { rows: boundsRows } = features.length ? await this.db.query<{ west: number | null; south: number | null; east: number | null; north: number | null }>(`SELECT
+      ST_XMin(extent)::float AS west,ST_YMin(extent)::float AS south,ST_XMax(extent)::float AS east,ST_YMax(extent)::float AS north
+      FROM (SELECT ST_Extent(geometry) AS extent FROM network_assets WHERE attributes->>'__atlasImportId'=$1) assets`, [importId]) : { rows: [] }
+    const bounds = boundsRows[0]?.west == null ? null : [boundsRows[0].west, boundsRows[0].south!, boundsRows[0].east!, boundsRows[0].north!] as [number, number, number, number]
     return {
       importedCount: features.length,
       segmentCount: features.filter((feature) => feature.assetType === 'segment').length,
+      ftthFolderCount: countFtthFolders(features),
+      folderPaths: kmzFolderPaths(features),
       firstId: features[0]?.id,
+      importId,
+      bounds,
     }
   }
 

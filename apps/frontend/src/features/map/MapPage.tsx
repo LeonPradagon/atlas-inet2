@@ -14,6 +14,7 @@ import { api, networkQueryKeys, type Booking, type NetworkAsset, type NetworkAss
 type Coordinate = [number, number];
 type MapProvinceOption = { code: string; name: string; assetCount: number; folderCount: number; bounds: [number, number, number, number] | null };
 type MapProvinceResponse = { items: MapProvinceOption[] };
+type MapImportPackage = { id: string; name: string; importedCount: number; segmentCount: number; ftthFolderCount: number; folderPaths: string[]; createdAt: string; actorName: string | null; actorEmail: string | null };
 type RouteLine = Feature<LineString, { id: string; name: string; status: "preview" | "saved" }>;
 type SelectMode = "idle" | "start" | "waypoint" | "end";
 type ImportedStyle = {
@@ -481,6 +482,11 @@ export function loadNetworkMapIcons(instance: MapLibreMap, features: Feature<Geo
 }
 
 export function MapPage() {
+  const mapImportsQuery = useQuery({
+    queryKey: ["network-map-imports"],
+    queryFn: () => api<MapImportPackage[]>("/assets/imports"),
+    staleTime: 30_000,
+  });
   const mapProvincesQuery = useQuery({
     queryKey: ["network-map-provinces"],
     queryFn: () => api<MapProvinceResponse>("/assets/provinces", { timeout: 30_000 }),
@@ -489,6 +495,11 @@ export function MapPage() {
     refetchOnWindowFocus: false,
   });
   const [provinceCode, setProvinceCode] = useState("");
+  const [selectedImportIds, setSelectedImportIds] = useState<string[]>([]);
+  const [activeImportId, setActiveImportId] = useState("");
+  const packageBoundsRequest = useRef(0);
+  const selectedImportPackages = (mapImportsQuery.data ?? []).filter((item) => selectedImportIds.includes(item.id));
+  const activeImportPackage = selectedImportPackages.find((item) => item.id === activeImportId) ?? selectedImportPackages[selectedImportPackages.length - 1];
   const [provincePickMessage, setProvincePickMessage] = useState("");
   const provinces = mapProvincesQuery.data?.items ?? [];
   const selectedProvince = provinces.find((province) => province.code === provinceCode);
@@ -501,30 +512,30 @@ export function MapPage() {
   const [coreVerificationSource, setCoreVerificationSource] = useState("Survei lapangan");
   const [coreVerificationNote, setCoreVerificationNote] = useState("");
   const catalogQuery = useQuery({
-    queryKey: ["segment-catalog", assetPage, catalogSearch, coreFilter, provinceCode],
-    queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${coreFilter}&provinceCode=${provinceCode}`),
-    enabled: Boolean(provinceCode),
+    queryKey: ["segment-catalog", assetPage, catalogSearch, coreFilter, provinceCode, selectedImportIds],
+    queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${coreFilter}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : `&provinceCode=${provinceCode}`}`),
+    enabled: Boolean(provinceCode || selectedImportIds.length),
     refetchInterval: 30_000,
   });
   const networkSegments = catalogQuery.data?.items ?? [];
   const [mapBounds, setMapBounds] = useState<[number, number, number, number] | null>(null);
   const [mapZoom, setMapZoom] = useState(4);
   const mapAssetsQuery = useQuery({
-    queryKey: ["map-assets", mapBounds, mapZoom, provinceCode],
-    queryFn: ({ signal }) => api<NetworkAsset[]>(`/assets/map?bbox=${mapBounds!.join(",")}&zoom=${mapZoom}&provinceCode=${provinceCode}`, { signal, timeout: 30_000 }),
+    queryKey: ["map-assets", mapBounds, mapZoom, provinceCode, selectedImportIds],
+    queryFn: ({ signal }) => api<NetworkAsset[]>(`/assets/map?bbox=${mapBounds!.join(",")}&zoom=${mapZoom}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : `&provinceCode=${provinceCode}`}`, { signal, timeout: 30_000 }),
     retry: 0,
-    enabled: Boolean(mapBounds && provinceCode),
+    enabled: Boolean(mapBounds && (provinceCode || selectedImportIds.length)),
     staleTime: 20_000,
-    placeholderData: (previousData, previousQuery) => previousQuery?.queryKey[3] === provinceCode ? previousData : undefined,
+    placeholderData: (previousData, previousQuery) => previousQuery?.queryKey[3] === provinceCode && JSON.stringify(previousQuery?.queryKey[4]) === JSON.stringify(selectedImportIds) ? previousData : undefined,
   });
   const { data: bookings = [], isPending: bookingsPending, isError: bookingsError } = useQuery({ queryKey: ["bookings"], queryFn: () => api<Booking[]>("/bookings"), refetchInterval: 30_000 });
   const queryClient = useQueryClient();
   const invalidateNetwork = () => Promise.all(networkQueryKeys.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
   const mapElement = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
+  const skipProvinceFitRef = useRef(false);
   const hoverPopup = useRef<Popup | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
-  const xlsxImportInput = useRef<HTMLInputElement>(null);
   const iconFilter = useRef<HTMLDetailsElement>(null);
   const assetDetails = useRef<HTMLDetailsElement>(null);
   const modeRef = useRef<SelectMode>("idle");
@@ -551,10 +562,14 @@ export function MapPage() {
   const [iconCategorySearch, setIconCategorySearch] = useState("");
   const [fileError, setFileError] = useState("");
   const [importing, setImporting] = useState(false);
+  const [importAttemptName, setImportAttemptName] = useState("");
+  const [showImportHistory, setShowImportHistory] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [routeError, setRouteError] = useState("");
   const [fileName, setFileName] = useState("");
   const [fileImportCount, setFileImportCount] = useState<number | null>(null);
+  const [fileImportSegmentCount, setFileImportSegmentCount] = useState<number | null>(null);
+  const [fileImportFolderCount, setFileImportFolderCount] = useState<number | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeDistance, setRouteDistance] = useState<number | null>(null);
   const [assetPopup, setAssetPopup] = useState<NetworkAsset | null>(null);
@@ -809,11 +824,20 @@ export function MapPage() {
         instance.moveLayer("province-selection-border", "network-polygons");
         instance.on("click", "province-selection-fill", (event) => {
           if (modeRef.current !== "idle") return;
+          if (instance.queryRenderedFeatures(event.point, { layers: ["network-icons", "network-lines", "network-hit", "network-polygons", "network-point-hit"] }).length) return;
+          packageBoundsRequest.current += 1;
           const name = normalizeProvinceBoundaryName(String(event.features?.[0]?.properties?.Propinsi ?? ""));
           const province = provincesRef.current.find((item) => [item.name, ...(provinceBoundaryAliases[item.code] ?? [])].some((value) => normalizeProvinceBoundaryName(value) === name));
           if (!province) { setProvincePickMessage("Belum ada aset KMZ yang terpetakan ke provinsi ini. Silakan pilih provinsi lain."); return; }
           setProvincePickMessage("");
-          if (province.code === selectedProvinceCodeRef.current) return;
+          if (province.code === selectedProvinceCodeRef.current) {
+            setSelectedImportIds([]);
+            setActiveImportId("");
+            setMapBounds(province.bounds);
+            return;
+          }
+          setSelectedImportIds([]);
+          setActiveImportId("");
           setSelectedIconCategories(null);
           setMapBounds(province.bounds);
           setProvinceCode(province.code);
@@ -899,12 +923,18 @@ export function MapPage() {
   }, []);
 
   useEffect(() => {
-    if (!mapReady || !selectedProvince?.bounds) return;
-    map.current?.fitBounds(selectedProvince.bounds, { padding: 48, maxZoom: 10, duration: 0 });
+    const province = provincesRef.current.find((item) => item.code === provinceCode);
+    if (!mapReady || !province?.bounds) return;
+    if (skipProvinceFitRef.current) {
+      skipProvinceFitRef.current = false;
+      setAssetPage(1);
+      return;
+    }
+    map.current?.fitBounds(province.bounds, { padding: 48, maxZoom: 10, duration: 0 });
     setAssetPage(1);
     setSelectedId("");
     setAssetPopup(null);
-  }, [mapReady, selectedProvince]);
+  }, [mapReady, provinceCode]);
 
   useEffect(() => {
     (map.current?.getSource("network-shapes") as GeoJSONSource | undefined)?.setData(shapeFeatures);
@@ -952,53 +982,63 @@ export function MapPage() {
   async function importFile(file?: File) {
     if (!file) return;
     setImporting(true);
+    setImportAttemptName(file.name);
     try {
       setFileError("");
       const form = new FormData();
       form.append("file", file);
-      const response = await api<{ importedCount: number; segmentCount: number; firstId?: string }>("/assets/import", { method: "POST", data: form });
+      const response = await api<{ importedCount: number; segmentCount: number; ftthFolderCount: number; folderPaths: string[]; firstId?: string; importId: string; bounds: [number, number, number, number] | null }>("/assets/import", { method: "POST", data: form });
       setFileName(file.name);
       setFileImportCount(response.importedCount);
+      setFileImportSegmentCount(response.segmentCount);
+      setFileImportFolderCount(response.folderPaths.length);
+      const packageIds = [...new Set([...selectedImportIds, response.importId])];
+      setSelectedImportIds(packageIds);
+      setActiveImportId(response.importId);
+      setProvinceCode("");
+      await queryClient.invalidateQueries({ queryKey: ["network-map-imports"] });
       await queryClient.invalidateQueries({ queryKey: ["network-map-provinces"] });
       await invalidateNetwork();
       setSelectedId(response.firstId ?? "");
-      if (response.firstId) await focusGeometry(response.firstId);
+      if (response.firstId) {
+        const { bounds } = await api<{ bounds: [number, number, number, number] | null }>(`/assets/bounds?importIds=${packageIds.join(",")}`);
+        if (bounds && map.current) { setMapBounds(bounds); map.current.fitBounds(bounds, { padding: 64, maxZoom: 12, duration: 500 }); }
+        else await focusGeometry(response.firstId);
+      }
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "File tidak dapat dibaca.");
     } finally { setImporting(false); }
   }
 
-  async function importNetworkXlsx(file?: File) {
-    if (!file) return
-    setImporting(true)
-    try {
-      setFileError("")
-      if (!/\.xlsx$/i.test(file.name)) throw new Error("Pilih file Excel .xlsx.")
-      const form = new FormData()
-      form.append("file", file)
-      const result = await api<{ importedCount: number; segmentCount: number }>("/assets/import/xlsx", { method: "POST", data: form })
-      await invalidateNetwork()
-      setFileName(file.name)
-      setFileImportCount(result.importedCount)
-    } catch (error) {
-      setFileError(error instanceof Error ? error.message : "File Excel jaringan tidak dapat dibaca.")
-    } finally { setImporting(false) }
-  }
-
-  function downloadNetworkTemplate() {
-    void buildNetworkWorkbook().xlsx.writeBuffer().then((buffer) => downloadBlob(new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), "template-impor-jaringan-atlas.xlsx"));
+  function toggleMapPackage(id: string) {
+    const request = ++packageBoundsRequest.current;
+    const isSelected = selectedImportIds.includes(id);
+    const next = isSelected ? selectedImportIds.filter((item) => item !== id) : [...selectedImportIds, id];
+    setSelectedImportIds(next);
+    setProvinceCode("");
+    setSelectedId("");
+    setAssetPopup(null);
+    setSelectedIconCategories(null);
+    setAssetPage(1);
+    if (isSelected) {
+      if (activeImportId === id) setActiveImportId(next[next.length - 1] ?? "");
+    } else setActiveImportId(id);
+    if (!next.length) { setMapBounds(null); return; }
+    void api<{ bounds: [number, number, number, number] | null }>(`/assets/bounds?importIds=${next.join(",")}`)
+      .then(({ bounds }) => { if (request === packageBoundsRequest.current && bounds && map.current) { setMapBounds(bounds); map.current.fitBounds(bounds, { padding: 64, maxZoom: 12, duration: 500 }); } })
+      .catch(() => { if (request === packageBoundsRequest.current) setFileError("Batas paket peta gagal dimuat."); });
   }
 
   async function downloadNetworkFile(format: "kml" | "kmz" | "xlsx") {
     setExporting(true);
     setFileError("");
     try {
-      const boundsQuery = provinceCode ? `?provinceCode=${encodeURIComponent(provinceCode)}` : "";
+      const boundsQuery = activeImportId ? `?importId=${encodeURIComponent(activeImportId)}` : provinceCode ? `?provinceCode=${encodeURIComponent(provinceCode)}` : "";
       const { bounds } = await api<{ bounds: [number, number, number, number] | null }>(`/assets/bounds${boundsQuery}`);
       if (!bounds) throw new Error("Belum ada aset jaringan untuk diunduh.");
       const padding = 0.000001;
       const bbox = [Math.max(-180, bounds[0] - padding), Math.max(-90, bounds[1] - padding), Math.min(180, bounds[2] + padding), Math.min(90, bounds[3] + padding)].join(",");
-      const assets = await api<NetworkAsset[]>(`/assets/map?bbox=${bbox}&zoom=24${provinceCode ? `&provinceCode=${encodeURIComponent(provinceCode)}` : ""}`);
+      const assets = await api<NetworkAsset[]>(`/assets/map?bbox=${bbox}&zoom=24${activeImportId ? `&importId=${encodeURIComponent(activeImportId)}` : provinceCode ? `&provinceCode=${encodeURIComponent(provinceCode)}` : ""}`);
       if (!assets.some((asset) => asset.geometry)) throw new Error("Belum ada geometri aset jaringan untuk diunduh.");
       const baseName = `atlas-data-jaringan${selectedProvince ? `-${selectedProvince.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}` : ""}`;
       if (format === "xlsx") {
@@ -1067,12 +1107,16 @@ export function MapPage() {
       const geometry = existing ?? (await api<{ geometry: Geometry | null }>(`/assets/${id}/geometry`)).geometry;
       if (!geometry) return;
       if (geometry.type === "Point") {
-        map.current.flyTo({ center: firstCoordinate(geometry), zoom: 16, essential: true });
+        map.current.flyTo({ center: firstCoordinate(geometry), zoom: Math.max(map.current.getZoom(), 16), essential: true });
         return;
       }
       const bounds = new LngLatBounds();
       geometryBounds(geometry, bounds);
-      if (!bounds.isEmpty()) map.current.fitBounds(bounds, { padding: 64, maxZoom: 14, duration: 500 });
+      if (!bounds.isEmpty()) {
+        const camera = map.current.cameraForBounds(bounds, { padding: 64 });
+        const currentZoom = map.current.getZoom();
+        if (camera) map.current.easeTo({ ...camera, zoom: Math.max(currentZoom, Math.min(camera.zoom ?? currentZoom, 14)), duration: 500 });
+      }
     } catch {
       setMapError(true);
     }
@@ -1095,13 +1139,16 @@ export function MapPage() {
         }
       />
       <div className="map-layout">
-        <section className="map-canvas-wrap" aria-busy={(!mapReady && !mapError) || (Boolean(provinceCode) && mapAssetsQuery.isLoading)}>
+        <section className="map-canvas-wrap" aria-busy={(!mapReady && !mapError) || (Boolean(provinceCode || selectedImportIds.length) && mapAssetsQuery.isLoading)}>
           <div ref={mapElement} className={`map-canvas ${mode !== "idle" ? "map-picking" : ""}`} aria-label="Peta jaringan ATLAS" />
           <div className="map-province-filter" style={{ position: "absolute", zIndex: 4, top: 12, left: 12, width: "min(290px, calc(100% - 24px))", padding: 10, borderRadius: 12, background: "var(--bs-body-bg, white)", boxShadow: "0 2px 12px #17233b33" }}>
             <label className="form-label fw-semibold mb-1 text-uppercase" htmlFor="map-province-filter">Pilih provinsi</label>
             <select id="map-province-filter" className="form-select form-select-sm mb-2" value={provinceCode} disabled={mapProvincesQuery.isPending} onChange={(event) => {
               const nextProvince = provinces.find((province) => province.code === event.target.value);
+              packageBoundsRequest.current += 1;
               setProvincePickMessage("");
+              setSelectedImportIds([]);
+              setActiveImportId("");
               setSelectedIconCategories(null);
               setMapBounds(nextProvince?.bounds ?? null);
               setProvinceCode(event.target.value);
@@ -1116,12 +1163,59 @@ export function MapPage() {
             </select>
             <small className="d-block">Klik langsung wilayah provinsi untuk menampilkan aset KMZ.</small>
             {provincePickMessage && <small className="text-warning d-block mt-1" role="status">{provincePickMessage}</small>}
-            {selectedProvince && <small className="text-muted d-block mt-1">{selectedProvince.assetCount.toLocaleString("id-ID")} aset · {selectedProvince.folderCount.toLocaleString("id-ID")} folder KMZ</small>}
-            {!provinceCode && provinces.length > 0 && <small className="text-muted d-block mt-1">Aset jaringan dimuat setelah wilayah provinsi diklik.</small>}
+            {selectedProvince && !selectedImportIds.length && <small className="text-muted d-block mt-1">{selectedProvince.assetCount.toLocaleString("id-ID")} aset · {selectedProvince.folderCount.toLocaleString("id-ID")} folder KMZ</small>}
+            {!provinceCode && !selectedImportIds.length && provinces.length > 0 && <small className="text-muted d-block mt-1">Aset jaringan dimuat setelah wilayah provinsi diklik.</small>}
             {!mapProvincesQuery.isPending && !mapProvincesQuery.isError && !provinces.length && <small className="text-warning d-block mt-1">Belum ada provinsi yang cocok dengan data KMZ.</small>}
             {mapProvincesQuery.isError && <small className="text-danger d-block mt-1">Daftar provinsi KMZ gagal dimuat.</small>}
           </div>
-          {((!mapReady && !mapError) || (Boolean(provinceCode) && mapAssetsQuery.isLoading)) && (
+          <section className="map-package-picker" aria-label="Map Package">
+            <header><b>Map Package</b><button type="button" className="map-package-history" aria-label="Riwayat proses impor" title="Riwayat proses impor" onClick={() => { setShowImportHistory(true); void mapImportsQuery.refetch(); }}><i className="bi bi-clock-history" aria-hidden="true" /></button></header>
+            <p>Tampilkan beberapa paket bersama. Pilihan terakhir aktif untuk edit dan ekspor.</p>
+            <details>
+              <summary>{activeImportPackage?.name ?? "Pilih paket KMZ"}<i className="bi bi-chevron-down" aria-hidden="true" /></summary>
+              <div className="map-package-menu">
+                {mapImportsQuery.isPending && <small>Memuat paket…</small>}
+                {mapImportsQuery.isError && <small className="text-danger">Daftar paket gagal dimuat.</small>}
+                {!mapImportsQuery.isPending && !mapImportsQuery.isError && !mapImportsQuery.data?.length && <small>Belum ada paket. Impor file KML/KMZ untuk memulai.</small>}
+                {mapImportsQuery.data?.map((item) => {
+                  const selected = selectedImportIds.includes(item.id);
+                  const active = activeImportId === item.id;
+                  return <div key={item.id} className={`map-package-option ${selected ? "selected" : ""}`}>
+                    <input type="checkbox" checked={selected} onChange={() => toggleMapPackage(item.id)} aria-label={`Tampilkan ${item.name}`} />
+                    <button type="button" onClick={() => { if (!selected) toggleMapPackage(item.id); setActiveImportId(item.id); }}>
+                      <span><b title={item.name}>{item.name}</b><small>{item.importedCount.toLocaleString("id-ID")} objek · {item.folderPaths.length.toLocaleString("id-ID")} folder KMZ</small></span>
+                      {active && <b>AKTIF</b>}
+                    </button>
+                    {item.folderPaths.length > 0 && <details className="map-package-folder-list">
+                      <summary aria-label={`Lihat ${item.folderPaths.length} folder KMZ`} title="Lihat folder KMZ"><i className="bi bi-folder2-open" /></summary>
+                      <div><b>Folder dalam KMZ · {item.folderPaths.length}</b>{item.folderPaths.map((name) => <small key={name} title={name}>{name}</small>)}</div>
+                    </details>}
+                  </div>;
+                })}
+              </div>
+            </details>
+            {selectedImportPackages.length > 0 && <small className="map-package-summary">{selectedImportPackages.length} paket ditampilkan bersama</small>}
+          </section>
+          {showImportHistory && <div className="map-import-history-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowImportHistory(false); }}>
+            <section className="map-import-history" role="dialog" aria-modal="true" aria-labelledby="map-import-history-title">
+              <header><div><h2 id="map-import-history-title">Riwayat proses impor</h2><p>Hasil dan akun yang mengimpor paket KML/KMZ.</p></div><button type="button" className="btn-close" aria-label="Tutup" onClick={() => setShowImportHistory(false)} /></header>
+              <div className="map-import-history-list" aria-live="polite">
+                {importing && <div className="map-import-history-item is-running"><b><span className="spinner-border spinner-border-sm me-2" />Sedang diproses</b><small>{importAttemptName}</small></div>}
+                {fileError && <div className="map-import-history-item is-failed"><b>Impor gagal</b><small>{importAttemptName} · {fileError}</small></div>}
+                {mapImportsQuery.isPending && <small>Memuat riwayat impor…</small>}
+                {mapImportsQuery.isError && <small className="text-danger">Riwayat impor gagal dimuat.</small>}
+                {mapImportsQuery.data?.map((item) => <article className="map-import-history-item" key={item.id}>
+                  <b>{item.name}<span>Berhasil</span></b>
+                  <small>{item.importedCount.toLocaleString("id-ID")} objek · {item.segmentCount.toLocaleString("id-ID")} kabel · {item.folderPaths.length.toLocaleString("id-ID")} folder KMZ</small>
+                  <small>Diimpor oleh {item.actorName || item.actorEmail || "Akun tidak diketahui"}{item.actorName && item.actorEmail ? ` · ${item.actorEmail}` : ""}</small>
+                  <small>{new Date(item.createdAt).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}</small>
+                </article>)}
+                {!importing && !fileError && !mapImportsQuery.isPending && !mapImportsQuery.isError && !mapImportsQuery.data?.length && <small>Belum ada riwayat impor.</small>}
+              </div>
+              <footer><button type="button" className="btn btn-light" onClick={() => setShowImportHistory(false)}>Tutup</button></footer>
+            </section>
+          </div>}
+          {((!mapReady && !mapError) || (Boolean(provinceCode || selectedImportIds.length) && mapAssetsQuery.isLoading)) && (
             <div className="position-absolute top-50 start-50 translate-middle d-flex align-items-center gap-3 bg-body border rounded-3 shadow px-4 py-3" style={{ zIndex: 5, pointerEvents: "none" }} role="status" aria-live="polite">
               <span className="spinner-border spinner-border-sm text-primary" aria-hidden="true" />
               <span className="text-nowrap">Memuat data peta…</span>
@@ -1196,7 +1290,7 @@ export function MapPage() {
           <div className="map-tools">
             <div className="map-search">
               <label className="form-label fw-semibold">
-                {provinceCode
+                {provinceCode || selectedImportIds.length
                   ? <>Daftar aset jaringan <span className="text-muted fw-normal">({(catalogQuery.data?.total ?? 0).toLocaleString("id-ID")})</span></>
                   : "Daftar aset jaringan · pilih provinsi"}
               </label>
@@ -1204,10 +1298,10 @@ export function MapPage() {
                 <span className="input-group-text bg-white">
                   <i className="bi bi-search" />
                 </span>
-                <input className="form-control" placeholder="Cari kabel, area, tiang, ODC/ODP, atau lokasi" value={search} onChange={(event) => setSearch(event.target.value)} disabled={!provinceCode} />
+                <input className="form-control" placeholder="Cari kabel, area, tiang, ODC/ODP, atau lokasi" value={search} onChange={(event) => setSearch(event.target.value)} disabled={!provinceCode && !selectedImportIds.length} />
               </div>
               <label className="form-label small mt-2 mb-1" htmlFor="map-core-filter">Filter segmen / core</label>
-              <select id="map-core-filter" className="form-select form-select-sm" value={coreFilter} disabled={!provinceCode} onChange={(event) => { setCoreFilter(event.target.value); setAssetPage(1); }}>
+              <select id="map-core-filter" className="form-select form-select-sm" value={coreFilter} disabled={!provinceCode && !selectedImportIds.length} onChange={(event) => { setCoreFilter(event.target.value); setAssetPage(1); }}>
                 <option value="all">Semua aset</option>
                 <option value="segments">Semua segmen</option>
                 <option value="filled">Core sudah diisi</option>
@@ -1217,12 +1311,12 @@ export function MapPage() {
             <div className="map-tool-actions">
               {user?.role === "ADMIN" && <>
                 <input ref={importInput} className="d-none" type="file" accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" onChange={(event) => { void importFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
-                <input ref={xlsxImportInput} className="d-none" type="file" accept=".xlsx" onChange={(event) => { void importNetworkXlsx(event.target.files?.[0]); event.currentTarget.value = ""; }} />
               </>}
             </div>
             {fileName && (
-              <div className="map-file-status">
-                <i className="bi bi-check-circle-fill" /> {fileName} · {(fileImportCount ?? 0).toLocaleString("id-ID")} aset tersimpan
+              <div className="map-file-status" role="status" aria-live="polite">
+                <i className="bi bi-check-circle-fill" />
+                <span><b>Map Package</b><small>{fileName}</small><strong>{(fileImportCount ?? 0).toLocaleString("id-ID")} objek · {(fileImportSegmentCount ?? 0).toLocaleString("id-ID")} kabel · {(fileImportFolderCount ?? 0).toLocaleString("id-ID")} folder · {((fileImportCount ?? 0) - (fileImportSegmentCount ?? 0)).toLocaleString("id-ID")} aset lain</strong></span>
               </div>
             )}
             {fileError && <div className="alert alert-danger py-2 px-3 mb-0 map-alert">{fileError}</div>}
@@ -1289,8 +1383,8 @@ export function MapPage() {
             )}
           </div>
           <div className="segment-list">
-            {!provinceCode && <div className="map-empty-list">Pilih provinsi di peta untuk menampilkan aset KMZ.</div>}
-            {Boolean(provinceCode) && catalogQuery.isPending && <div className="map-empty-list">Memuat daftar aset…</div>}
+            {!provinceCode && !selectedImportIds.length && <div className="map-empty-list">Pilih provinsi di peta atau Map Package untuk menampilkan aset.</div>}
+            {Boolean(provinceCode || selectedImportIds.length) && catalogQuery.isPending && <div className="map-empty-list">Memuat daftar aset…</div>}
             {catalogQuery.isError && <div className="map-empty-list">Daftar aset tidak dapat dimuat.</div>}
             {standaloneSegments.map((segment) => (
               <button key={segment.id} className={`segment-item ${selectedId === segment.id ? "selected" : ""}`} onClick={() => focusAsset(segment)}>
@@ -1329,7 +1423,7 @@ export function MapPage() {
               </button>
             ))}
             {matchedImported.length > filteredImported.length && <div className="map-empty-list">Menampilkan 100 dari {matchedImported.length} aset impor. Gunakan pencarian untuk mempersempit daftar.</div>}
-            {Boolean(provinceCode) && !catalogQuery.isPending && filteredSegments.length + matchedImported.length === 0 && <div className="map-empty-list">Tidak ada aset jaringan yang cocok.</div>}
+            {Boolean(provinceCode || selectedImportIds.length) && !catalogQuery.isPending && filteredSegments.length + matchedImported.length === 0 && <div className="map-empty-list">Tidak ada aset jaringan yang cocok.</div>}
           </div>
           {catalogQuery.data && catalogQuery.data.total > catalogQuery.data.pageSize && <div className="asset-pagination">
             <small className="text-muted">Halaman {assetPage.toLocaleString("id-ID")} dari {catalogPageCount.toLocaleString("id-ID")}{catalogQuery.isFetching ? " · Memuat…" : ""}</small>
@@ -1497,15 +1591,13 @@ export function MapPage() {
       </div>
       {fileModal && <div className="file-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setFileModal(null); }}>
         <section className="file-modal" role="dialog" aria-modal="true" aria-labelledby="file-modal-title">
-          <header><div><h2 id="file-modal-title">{fileModal === "import" ? "Impor data jaringan" : "Unduh file peta"}</h2><p>{fileModal === "import" ? "Pilih format file yang ingin diunggah." : exporting ? "Sedang menyiapkan file…" : "Unduh seluruh aset jaringan atau template Excel impor."}</p></div><button className="btn-close" aria-label="Tutup" onClick={() => setFileModal(null)} /></header>
+          <header><div><h2 id="file-modal-title">{fileModal === "import" ? "Impor data jaringan" : "Unduh file peta"}</h2><p>{fileModal === "import" ? "Pilih file KML atau KMZ untuk diunggah." : exporting ? "Sedang menyiapkan file…" : "Unduh seluruh aset jaringan."}</p></div><button className="btn-close" aria-label="Tutup" onClick={() => setFileModal(null)} /></header>
           <div className="file-modal-options">{fileModal === "import" ? <>
             <button className="file-modal-option" onClick={() => { setFileModal(null); importInput.current?.click(); }}><span><i className="bi bi-globe2" /></span><div><b>KML / KMZ</b><small>Impor geometri, ikon, warna, dan atribut dari Google Earth.</small></div><i className="bi bi-chevron-right" /></button>
-            <button className="file-modal-option" onClick={() => { setFileModal(null); xlsxImportInput.current?.click(); }}><span><i className="bi bi-file-earmark-spreadsheet" /></span><div><b>Excel (.xlsx)</b><small>Impor aset jaringan memakai template ATLAS.</small></div><i className="bi bi-chevron-right" /></button>
           </> : <>
-            <button className="file-modal-option" onClick={() => { setFileModal(null); downloadNetworkTemplate(); }}><span><i className="bi bi-file-earmark-arrow-down" /></span><div><b>Template Excel jaringan</b><small>Unduh format impor beserta petunjuk pengisian.</small></div><i className="bi bi-download" /></button>
             <button className="file-modal-option" disabled={exporting} onClick={() => void downloadNetworkFile("kml")}><span><i className="bi bi-globe2" /></span><div><b>Ekspor KML</b><small>Unduh seluruh aset jaringan dalam format KML.</small></div><i className="bi bi-download" /></button>
             <button className="file-modal-option" disabled={exporting} onClick={() => void downloadNetworkFile("kmz")}><span><i className="bi bi-globe2" /></span><div><b>Ekspor KMZ</b><small>Unduh seluruh aset jaringan dalam arsip KMZ.</small></div><i className="bi bi-download" /></button>
-            <button className="file-modal-option" disabled={exporting} onClick={() => void downloadNetworkFile("xlsx")}><span><i className="bi bi-file-earmark-spreadsheet" /></span><div><b>Ekspor Excel (.xlsx)</b><small>Unduh seluruh aset; geometri GeoJSON siap diimpor kembali.</small></div><i className="bi bi-download" /></button>
+            <button className="file-modal-option" disabled={exporting} onClick={() => void downloadNetworkFile("xlsx")}><span><i className="bi bi-file-earmark-spreadsheet" /></span><div><b>Ekspor Excel (.xlsx)</b><small>Unduh seluruh aset jaringan dalam format Excel.</small></div><i className="bi bi-download" /></button>
           </>}</div>
           <footer><button className="btn btn-light" onClick={() => setFileModal(null)}>Tutup</button></footer>
         </section>
