@@ -15,14 +15,14 @@
     "migrate:local": "node --env-file=../../.env --import tsx src/database/migrate.ts",
     "bootstrap-admin": "node --import tsx src/auth/bootstrap-admin.ts",
     "bootstrap-admin:local": "node --env-file=../../.env --import tsx src/auth/bootstrap-admin.ts",
+    "test": "node --import tsx --test test/*.test.cjs",
     "test:integration:local": "npm run build && node --env-file=../../.env test/atlas.integration.cjs"
   },
   "dependencies": {
+    "@better-auth/kysely-adapter": "^1.7.7",
     "@nestjs/common": "^11.2.6",
     "@nestjs/core": "^11.2.6",
     "@nestjs/platform-express": "^11.2.6",
-    "@better-auth/kysely-adapter": "^1.7.7",
-    "@types/pg": "^8.23.1",
     "better-auth": "^1.7.7",
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.11.2",
@@ -34,6 +34,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.19.15",
+    "@types/pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   }

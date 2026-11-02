@@ -32,6 +32,10 @@ Semua segmen, termasuk hasil impor KML/KMZ, dapat dilengkapi kapasitas dan detai
 
 Relasi disimpan terpisah dari geometri/atribut impor. Teks tiang/ODC/ODP lama tetap menjadi informasi sumber; pemilihan aset dilakukan manual tanpa klasifikasi otomatis. Laporan utilisasi menyertakan `relatedAssets` dan frontend mengekspor nama aset serta tinggi tiang.
 
+### Unit test
+
+Dari `apps/backend`, jalankan `npm test`. Unit test geocoding dan impor jaringan tidak memerlukan database atau provider eksternal.
+
 ### Pengujian transaksi
 
 Dari `apps/backend`, jalankan `npm run test:integration:local`. Script membuat database PostGIS baru dengan nama acak berawalan `atlas_test_`, menjalankan skenario FIFO, konkurensi, rollback, relasi, laporan, dan akses HTTP ADMIN/PRESALES dengan sesi pengujian, lalu menutup koneksi dan menghapus database tersebut. Akun dan data aplikasi tidak dipakai sebagai data pengujian. Pengguna database perlu izin membuat database; pengujian ini tidak memvalidasi login Better Auth atau provider geocoding/routing.
