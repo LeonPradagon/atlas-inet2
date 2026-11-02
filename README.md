@@ -7,20 +7,20 @@ Monorepo ATLAS dengan React/TanStack, NestJS, Better Auth, dan PostgreSQL/PostGI
 ```sh
 cp .env.example .env
 docker compose up -d postgis
-npm --prefix apps/backend install
-npm --prefix apps/frontend install
+npm --prefix apps/server install
+npm --prefix apps/web install
 ```
 
-Di terminal pertama jalankan backend:
+Di terminal pertama jalankan server:
 
 ```sh
-npm run dev:backend
+npm run dev:server
 ```
 
 Di terminal kedua:
 
 ```sh
-npm run dev:frontend
+npm run dev:web
 ```
 
 Buka <http://localhost:5176>. Backend menjalankan migrasi saat startup. Isi kredensial bootstrap admin di `.env`, lalu dari root jalankan `npm run bootstrap-admin:local`. ADMIN dapat membuat akun lewat `POST /api/users`; pendaftaran publik dinonaktifkan. PostGIS dipetakan ke port host `5434` agar tidak bentrok dengan PostgreSQL lokal; API dan frontend memakai port `3000` dan `5176`.
@@ -63,8 +63,8 @@ ADMIN juga dapat mengimpor data jaringan melalui template Excel di halaman peta;
 
 ## Struktur
 
-- `apps/frontend` — `app`, `components`, `features`, dan `lib` untuk React/TanStack
-- `apps/backend` — `auth`, `atlas`, `network`, `geospatial`, `database`, dan `health` untuk NestJS
+- `apps/web` — `app`, `components`, `features`, dan `lib` untuk React/TanStack
+- `apps/server` — `auth`, `atlas`, `network`, `geospatial`, `database`, dan `health` untuk NestJS
 - `docker-compose.yaml` — PostGIS lokal; profile `deploy` menambahkan frontend dan backend
 
 Endpoint utama: `GET /api/health`, `GET /api/me`, `GET /api/dashboard`, `GET /api/assets`, `POST /api/assets/import`, `GET/POST /api/bookings`, `POST /api/bookings/:id/release`, `POST /api/analysis/address`, `POST /api/analysis/bulk`, dan `POST /api/routes/preview`. Semua kecuali health dan auth memerlukan sesi.

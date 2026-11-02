@@ -18,7 +18,7 @@ services:
 
   backend:
     build:
-      context: ./apps/backend
+      context: ./apps/server
       dockerfile: Dockerfile.production
     environment:
       NODE_ENV: production
@@ -71,7 +71,7 @@ services:
   bootstrap-admin:
     profiles: [bootstrap]
     build:
-      context: ./apps/backend
+      context: ./apps/server
       dockerfile: Dockerfile.production
     command: ["node", "dist/auth/bootstrap-admin.js"]
     environment:
@@ -89,7 +89,7 @@ services:
 
   frontend:
     build:
-      context: ./apps/frontend
+      context: ./apps/web
       dockerfile: Dockerfile.production
     ports:
       - "${WEB_HTTP_BIND:-0.0.0.0:80}:80"

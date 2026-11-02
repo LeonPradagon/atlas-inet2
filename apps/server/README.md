@@ -20,7 +20,7 @@ NestJS API; migrasi PostGIS dijalankan saat startup. `DATABASE_URL` wajib tersed
 - `/api/analysis/address`, `/api/analysis/bulk` — analisis alamat tunggal atau XLSX
 - `POST /api/routes/preview` — pratinjau rute GraphHopper
 
-Production Compose menghubungkan backend ke Photon dan GraphHopper melalui jaringan internal. Frontend mempublikasikan endpoint provider melalui HTTPS di `/photon` dan `/graphhopper` dengan pembatasan laju. Untuk development lokal, `.env` memakai URL publik tersebut pada `GEOCODER_URL` dan `ROUTING_URL`. Untuk membuat administrator pertama pada development lokal, isi `BOOTSTRAP_ADMIN_EMAIL` dan `BOOTSTRAP_ADMIN_PASSWORD` (minimal 12 karakter) di `.env` root, lalu dari folder `apps/backend` jalankan `npm run bootstrap-admin:local`. Script ini memakai `.env` root dan tidak membuat akun jika password belum disetel.
+Production Compose menghubungkan backend ke Photon dan GraphHopper melalui jaringan internal. Frontend mempublikasikan endpoint provider melalui HTTPS di `/photon` dan `/graphhopper` dengan pembatasan laju. Untuk development lokal, `.env` memakai URL publik tersebut pada `GEOCODER_URL` dan `ROUTING_URL`. Untuk membuat administrator pertama pada development lokal, isi `BOOTSTRAP_ADMIN_EMAIL` dan `BOOTSTRAP_ADMIN_PASSWORD` (minimal 12 karakter) di `.env` root, lalu dari folder `apps/server` jalankan `npm run bootstrap-admin:local`. Script ini memakai `.env` root dan tidak membuat akun jika password belum disetel.
 
 ## Utilisasi, FIFO, dan aset terkait
 
@@ -34,8 +34,8 @@ Relasi disimpan terpisah dari geometri/atribut impor. Teks tiang/ODC/ODP lama te
 
 ### Unit test
 
-Dari `apps/backend`, jalankan `npm test`. Unit test geocoding dan impor jaringan tidak memerlukan database atau provider eksternal.
+Dari `apps/server`, jalankan `npm test`. Unit test geocoding dan impor jaringan tidak memerlukan database atau provider eksternal.
 
 ### Pengujian transaksi
 
-Dari `apps/backend`, jalankan `npm run test:integration:local`. Script membuat database PostGIS baru dengan nama acak berawalan `atlas_test_`, menjalankan skenario FIFO, konkurensi, rollback, relasi, laporan, dan akses HTTP ADMIN/PRESALES dengan sesi pengujian, lalu menutup koneksi dan menghapus database tersebut. Akun dan data aplikasi tidak dipakai sebagai data pengujian. Pengguna database perlu izin membuat database; pengujian ini tidak memvalidasi login Better Auth atau provider geocoding/routing.
+Dari `apps/server`, jalankan `npm run test:integration:local`. Script membuat database PostGIS baru dengan nama acak berawalan `atlas_test_`, menjalankan skenario FIFO, konkurensi, rollback, relasi, laporan, dan akses HTTP ADMIN/PRESALES dengan sesi pengujian, lalu menutup koneksi dan menghapus database tersebut. Akun dan data aplikasi tidak dipakai sebagai data pengujian. Pengguna database perlu izin membuat database; pengujian ini tidak memvalidasi login Better Auth atau provider geocoding/routing.

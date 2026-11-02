@@ -2,9 +2,9 @@
   "name": "atlas-inet",
   "private": true,
   "scripts": {
-    "dev:backend": "npm --prefix apps/backend run start:dev:local",
-    "dev:frontend": "npm --prefix apps/frontend run dev",
-    "migrate:local": "npm --prefix apps/backend run migrate:local",
-    "bootstrap-admin:local": "npm --prefix apps/backend run bootstrap-admin:local"
+    "dev:server": "npm --prefix apps/server run start:dev:local",
+    "dev:web": "npm --prefix apps/web run dev",
+    "migrate:local": "npm --prefix apps/server run migrate:local",
+    "bootstrap-admin:local": "npm --prefix apps/server run bootstrap-admin:local"
   }
 }

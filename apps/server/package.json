@@ -1,5 +1,5 @@
 {
-  "name": "atlas-inet-backend",
+  "name": "atlas-inet-server",
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
