@@ -19,16 +19,16 @@ export function AccountMenu({
         menu.current?.removeAttribute("open");
       }
     };
-    const escape = (event: KeyboardEvent) => {
+    const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         menu.current?.removeAttribute("open");
       }
     };
     document.addEventListener("pointerdown", close);
-    document.addEventListener("keydown", escape);
+    document.addEventListener("keydown", closeOnEscape);
     return () => {
       document.removeEventListener("pointerdown", close);
-      document.removeEventListener("keydown", escape);
+      document.removeEventListener("keydown", closeOnEscape);
     };
   }, []);
   return (

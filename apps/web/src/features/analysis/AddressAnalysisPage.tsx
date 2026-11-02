@@ -865,6 +865,7 @@ export function AddressAnalysisPage() {
                         updateAddress("street", event.target.value)
                       }
                       placeholder="Contoh: Jl. Panjang Arteri Klp. Dua Raya"
+                      role="combobox"
                       value={address.street}
                     />
                     {!selectedPoint && addressQuery.length >= 3 && (
@@ -1315,10 +1316,7 @@ export function AddressAnalysisPage() {
                   <i className="bi bi-geo-alt-fill" />
                   <span>{analyze.data.address}</span>
                 </div>
-                <div
-                  aria-label="Koordinat"
-                  className="bg-body-tertiary d-flex align-items-center justify-content-between mt-3 w-100 gap-2 rounded border px-3 py-2"
-                >
+                <div className="bg-body-tertiary d-flex align-items-center justify-content-between mt-3 w-100 gap-2 rounded border px-3 py-2">
                   <div className="min-w-0">
                     <small className="d-block text-secondary">Koordinat</small>
                     <b className="font-monospace user-select-all text-break">

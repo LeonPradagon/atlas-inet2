@@ -9,7 +9,9 @@
     let theme;
     try {
       theme = localStorage.getItem("atlas-theme");
-    } catch {}
+    } catch {
+      // Storage is blocked; fall back to the system theme.
+    }
     if (theme !== "light" && theme !== "dark") {
       theme = matchMedia("(prefers-color-scheme: dark)").matches
         ? "dark"

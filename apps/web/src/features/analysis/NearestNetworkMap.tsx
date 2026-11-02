@@ -1,7 +1,7 @@
 import type { Feature, Geometry } from "geojson";
 import {
   LngLatBounds,
-  Map,
+  Map as MapLibreMap,
   NavigationControl,
   Popup,
   setWorkerUrl,
@@ -66,13 +66,13 @@ export function NetworkLocationsMap({
   points: { row: number; latitude: number; longitude: number }[];
   onSelect: (row: number) => void;
 }) {
-  const element = useRef<HTMLDivElement>(null);
+  const element = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!(element.current && points.length)) {
       return;
     }
     setWorkerUrl(workerUrl);
-    const map = new Map({
+    const map = new MapLibreMap({
       container: element.current,
       style: "https://tiles.openfreemap.org/styles/liberty",
       center: [118, -2.5],
@@ -118,7 +118,7 @@ export function NetworkLocationsMap({
         }
       });
       const bounds = points.reduce(
-        (bounds, point) => bounds.extend([point.longitude, point.latitude]),
+        (extent, point) => extent.extend([point.longitude, point.latitude]),
         new LngLatBounds()
       );
       map.fitBounds(bounds, { padding: 48, maxZoom: 15, duration: 0 });
@@ -131,7 +131,7 @@ export function NetworkLocationsMap({
     };
   }, [points, onSelect]);
   return (
-    <div
+    <section
       aria-label="Peta seluruh lokasi analisis massal"
       ref={element}
       style={{ height: 360, borderRadius: 8 }}
@@ -143,7 +143,7 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
   const [assetError, setAssetError] = useState("");
   const [assetCount, setAssetCount] = useState(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
-  const element = useRef<HTMLDivElement>(null);
+  const element = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!element.current) {
       return;
@@ -154,7 +154,7 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
     let viewportTimer: ReturnType<typeof setTimeout> | undefined;
     let stopIcons: (() => void) | undefined;
     let active = true;
-    const assetsById = new globalThis.Map<string, NetworkAsset>();
+    const assetsById = new Map<string, NetworkAsset>();
     setWorkerUrl(workerUrl);
     const center: [number, number] = [result.longitude, result.latitude];
     const radius =
@@ -198,7 +198,7 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
         properties: { kind: "route" },
       });
     }
-    const map = new Map({
+    const map = new MapLibreMap({
       container: element.current,
       style: "https://tiles.openfreemap.org/styles/liberty",
       center,
@@ -411,7 +411,7 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
           if (!active || version !== requestVersion) {
             return;
           }
-          const unique = new globalThis.Map<string, NetworkAsset>();
+          const unique = new Map<string, NetworkAsset>();
           for (const asset of assets) {
             unique.set(
               JSON.stringify([
@@ -425,15 +425,17 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
           }
           const visible = [...unique.values()];
           assetsById.clear();
-          visible.forEach((asset) => assetsById.set(asset.id, asset));
-          const features = assetFeatures(visible);
+          for (const asset of visible) {
+            assetsById.set(asset.id, asset);
+          }
+          const visibleFeatures = assetFeatures(visible);
           stopIcons?.();
-          stopIcons = loadNetworkMapIcons(map, features);
+          stopIcons = loadNetworkMapIcons(map, visibleFeatures);
           (
             map.getSource(
               "nearby-assets"
             ) as import("maplibre-gl").GeoJSONSource
-          ).setData({ type: "FeatureCollection", features });
+          ).setData({ type: "FeatureCollection", features: visibleFeatures });
           setAssetCount(visible.length);
           setAssetError("");
         } catch {
@@ -602,9 +604,9 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
         new LngLatBounds()
       );
       if (result.routeGeometry?.type === "LineString") {
-        result.routeGeometry.coordinates.forEach((p) =>
-          bounds.extend([p[0], p[1]])
-        );
+        for (const p of result.routeGeometry.coordinates) {
+          bounds.extend([p[0], p[1]]);
+        }
       }
       map.fitBounds(bounds, { padding: 48, maxZoom: 16, duration: 0 });
       clearTimeout(viewportTimer);
@@ -631,7 +633,7 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
         ditampilkan satu kali.
       </small>
       {assetError && <div className="alert alert-warning">{assetError}</div>}
-      <div
+      <section
         aria-label="Peta jaringan terdekat dan estimasi jalur kabel mengikuti jalan mobil"
         ref={element}
         style={{ height: 500, borderRadius: 8 }}

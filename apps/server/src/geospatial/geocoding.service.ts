@@ -696,7 +696,7 @@ export class GeocodingService {
       }
       const value = (name: string) => {
         const field = Object.keys(attributes).find(
-          (key) => key.toLowerCase() === name
+          (fieldName) => fieldName.toLowerCase() === name
         );
         const fieldValue = field ? attributes[field] : undefined;
         return typeof fieldValue === "string"
@@ -722,9 +722,7 @@ export class GeocodingService {
     }
   }
 
-  async geocodeStructured(
-    address: StructuredAddress
-  ): Promise<{
+  async geocodeStructured(address: StructuredAddress): Promise<{
     coordinates: [number, number];
     provider: "photon" | "nominatim";
     matchQuality?: "approximate";

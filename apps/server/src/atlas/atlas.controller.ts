@@ -715,7 +715,7 @@ export class AtlasController {
       maxBytes: 15 * 1024 * 1024,
       maxRows: 500,
     });
-    const rows = [];
+    const rows: Record<string, unknown>[] = [];
     for (const item of source) {
       try {
         const result =

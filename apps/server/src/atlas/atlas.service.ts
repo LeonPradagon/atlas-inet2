@@ -1829,6 +1829,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       });
     }
     try {
+      // biome-ignore lint/correctness/noUnusedInstantiation: the constructor throws on invalid syntax, which is the check
       new RegExp(pattern);
     } catch {
       throw new BadRequestException({

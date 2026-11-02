@@ -98,7 +98,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (isPending) {
     return (
       <main className="auth-screen">
-        <div aria-label="Memuat sesi" className="spinner-border text-primary" />
+        <div
+          aria-label="Memuat sesi"
+          className="spinner-border text-primary"
+          role="status"
+        />
       </main>
     );
   }

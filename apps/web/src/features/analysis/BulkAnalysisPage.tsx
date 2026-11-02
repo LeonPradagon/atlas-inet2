@@ -211,7 +211,7 @@ export function BulkAnalysisPage() {
         const result = await api<{ rows: AnalysisRow[] }>(
           `/analysis/bulk/jobs/${jobId}/rows?page=${current}&pageSize=100`
         );
-        result.rows.forEach((row) =>
+        for (const row of result.rows) {
           sheet.addRow([
             row.address,
             row.latitude ?? "",
@@ -220,8 +220,8 @@ export function BulkAnalysisPage() {
             row.distanceMeters ?? "",
             row.status,
             row.message ?? "",
-          ])
-        );
+          ]);
+        }
       }
     }
     downloadWorkbook(workbook, "ATLAS-hasil-analisis.xlsx");

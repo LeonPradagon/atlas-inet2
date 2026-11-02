@@ -493,16 +493,20 @@ export function CoreBookingPage() {
         </section>
       )}
       {showForm && (
+        // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only backdrop close; Escape and focus trapping are missing until these modals move to <dialog>
         <div
           className="modal-backdrop-custom"
-          onClick={() => setShowForm(false)}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setShowForm(false);
+            }
+          }}
           role="presentation"
         >
           <section
             aria-labelledby="booking-title"
             aria-modal="true"
             className="booking-modal"
-            onClick={(event) => event.stopPropagation()}
             role="dialog"
           >
             <div className="modal-heading">
@@ -524,15 +528,25 @@ export function CoreBookingPage() {
                   kapasitas pada halaman peta jaringan.
                 </div>
               )}
-              <label className="form-label">Nama pelanggan</label>
+              <label className="form-label" htmlFor="booking-customer">
+                Nama pelanggan
+              </label>
               <input
                 className="form-control mb-3"
+                id="booking-customer"
                 name="customer"
                 placeholder="Nama perusahaan"
                 required
               />
-              <label className="form-label">Segmen jaringan</label>
-              <select className="form-select mb-3" name="segmentId" required>
+              <label className="form-label" htmlFor="booking-segment-id">
+                Segmen jaringan
+              </label>
+              <select
+                className="form-select mb-3"
+                id="booking-segment-id"
+                name="segmentId"
+                required
+              >
                 {bookableSegments.map((segment) => (
                   <option key={segment.id} value={segment.id}>
                     {segment.name} · {segment.idleCores} core tersedia
@@ -541,10 +555,13 @@ export function CoreBookingPage() {
               </select>
               <div className="row g-3">
                 <div className="col-6">
-                  <label className="form-label">Jumlah core</label>
+                  <label className="form-label" htmlFor="booking-cores">
+                    Jumlah core
+                  </label>
                   <input
                     className="form-control"
                     defaultValue="2"
+                    id="booking-cores"
                     min="1"
                     name="cores"
                     required
@@ -552,18 +569,24 @@ export function CoreBookingPage() {
                   />
                 </div>
                 <div className="col-6">
-                  <label className="form-label">PIC customer</label>
+                  <label className="form-label" htmlFor="booking-pic-customer">
+                    PIC customer
+                  </label>
                   <input
                     className="form-control"
+                    id="booking-pic-customer"
                     name="picCustomer"
                     placeholder="Nama PIC"
                     required
                   />
                 </div>
               </div>
-              <label className="form-label mt-3">PIC presales</label>
+              <label className="form-label mt-3" htmlFor="booking-pic-presales">
+                PIC presales
+              </label>
               <input
                 className="form-control"
+                id="booking-pic-presales"
                 name="picPresales"
                 placeholder="Nama PIC presales"
                 required

@@ -839,7 +839,7 @@ export function AnalysisHistoryPage() {
       const saved = await api<HistoryDetail>(`/analysis/history/${item.id}`);
       const outerResult =
         saved.result && typeof saved.result === "object" ? saved.result : {};
-      const result =
+      const historyResult =
         outerResult.result && typeof outerResult.result === "object"
           ? (outerResult.result as Record<string, unknown>)
           : outerResult;
@@ -854,25 +854,25 @@ export function AnalysisHistoryPage() {
         "Status",
       ]);
       const resultData =
-        result.data && typeof result.data === "object"
-          ? (result.data as Record<string, unknown>)
+        historyResult.data && typeof historyResult.data === "object"
+          ? (historyResult.data as Record<string, unknown>)
           : {};
-      const bulkRows = Array.isArray(result.rows)
-        ? result.rows
+      const bulkRows = Array.isArray(historyResult.rows)
+        ? historyResult.rows
         : Array.isArray(resultData.rows)
           ? resultData.rows
-          : Array.isArray(result.results)
-            ? result.results
+          : Array.isArray(historyResult.results)
+            ? historyResult.results
             : [];
       if (saved.analysisType === "BULK") {
         if (saved.bulkJobId) {
           for (
-            let page = 1;
-            page <= Math.ceil((saved.totalRows ?? item.itemCount) / 100);
-            page++
+            let rowPage = 1;
+            rowPage <= Math.ceil((saved.totalRows ?? item.itemCount) / 100);
+            rowPage++
           ) {
             const resultPage = await api<{ rows: BulkRow[] }>(
-              `/analysis/bulk/jobs/${saved.bulkJobId}/rows?page=${page}&pageSize=100`
+              `/analysis/bulk/jobs/${saved.bulkJobId}/rows?page=${rowPage}&pageSize=100`
             );
             for (const row of resultPage.rows) {
               sheet.addRow([
@@ -901,26 +901,26 @@ export function AnalysisHistoryPage() {
       } else if (saved.analysisType === "ADDRESS") {
         const inputAddress = (saved.input as { address?: string } | undefined)
           ?.address;
-        const coordinates = Array.isArray(result.coordinates)
-          ? (result.coordinates as unknown[])
+        const coordinates = Array.isArray(historyResult.coordinates)
+          ? (historyResult.coordinates as unknown[])
           : [];
         sheet.addRow([
-          String(result.address ?? inputAddress ?? saved.title),
-          result.latitude ?? coordinates[1] ?? "",
-          result.longitude ?? coordinates[0] ?? "",
-          (result.network as { name?: string } | null)?.name ?? "",
-          result.distanceMeters ?? "",
-          String(result.status ?? ""),
+          String(historyResult.address ?? inputAddress ?? saved.title),
+          historyResult.latitude ?? coordinates[1] ?? "",
+          historyResult.longitude ?? coordinates[0] ?? "",
+          (historyResult.network as { name?: string } | null)?.name ?? "",
+          historyResult.distanceMeters ?? "",
+          String(historyResult.status ?? ""),
         ]);
       } else {
         const featureCollection =
-          result.features &&
-          typeof result.features === "object" &&
-          !Array.isArray(result.features)
-            ? (result.features as { features?: unknown[] })
+          historyResult.features &&
+          typeof historyResult.features === "object" &&
+          !Array.isArray(historyResult.features)
+            ? (historyResult.features as { features?: unknown[] })
             : null;
-        const features = Array.isArray(result.features)
-          ? result.features
+        const features = Array.isArray(historyResult.features)
+          ? historyResult.features
           : (featureCollection?.features ?? []);
         for (const value of features) {
           const feature = value as DraftFeature & {
@@ -1191,6 +1191,7 @@ export function AnalysisHistoryPage() {
                 )
               ).toLocaleString("id-ID")}
             </span>
+            {/* biome-ignore lint/a11y/useSemanticElements: Bootstrap btn-group markup; a fieldset breaks its layout */}
             <div
               aria-label="Pagination riwayat analisis"
               className="btn-group btn-group-sm"

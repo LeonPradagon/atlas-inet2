@@ -30,6 +30,7 @@ export function TablePagination({
           Halaman {page.toLocaleString("id-ID")} /{" "}
           {pageCount.toLocaleString("id-ID")}
         </span>
+        {/* biome-ignore lint/a11y/useSemanticElements: Bootstrap btn-group markup; a fieldset breaks its layout */}
         <div
           aria-label={`Pagination ${label}`}
           className="btn-group btn-group-sm"

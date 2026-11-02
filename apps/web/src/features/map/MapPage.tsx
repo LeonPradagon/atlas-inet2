@@ -270,7 +270,9 @@ function iconPreview(category: string) {
       <img
         alt=""
         className="map-icon-preview"
+        height={18}
         src={`https://maps.google.com/mapfiles/kml/shapes/${shapes[category]}`}
+        width={18}
       />
     );
   }
@@ -342,12 +344,16 @@ function addBoundsCoordinates(bounds: LngLatBounds, coordinates: unknown) {
   ) {
     bounds.extend([coordinates[0], coordinates[1]]);
   } else {
-    coordinates.forEach((entry) => addBoundsCoordinates(bounds, entry));
+    for (const entry of coordinates) {
+      addBoundsCoordinates(bounds, entry);
+    }
   }
 }
 function geometryBounds(geometry: Geometry, bounds: LngLatBounds) {
   if (geometry.type === "GeometryCollection") {
-    geometry.geometries.forEach((child) => geometryBounds(child, bounds));
+    for (const child of geometry.geometries) {
+      geometryBounds(child, bounds);
+    }
   } else {
     addBoundsCoordinates(bounds, geometry.coordinates);
   }
@@ -561,7 +567,7 @@ export function MapPage() {
         queryClient.invalidateQueries({ queryKey: [key] })
       )
     );
-  const mapElement = useRef<HTMLDivElement>(null);
+  const mapElement = useRef<HTMLElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const skipProvinceFitRef = useRef(false);
   const hoverPopup = useRef<Popup | null>(null);
@@ -1890,7 +1896,7 @@ export function MapPage() {
           }
           className="map-canvas-wrap"
         >
-          <div
+          <section
             aria-label="Peta jaringan ATLAS"
             className={`map-canvas ${mode === "idle" ? "" : "map-picking"}`}
             ref={mapElement}
@@ -2115,6 +2121,7 @@ export function MapPage() {
             )}
           </section>
           {showImportHistory && (
+            // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only backdrop close; Escape and focus trapping are missing until these modals move to <dialog>
             <div
               className="map-import-history-backdrop"
               onMouseDown={(event) => {
@@ -2122,6 +2129,7 @@ export function MapPage() {
                   setShowImportHistory(false);
                 }
               }}
+              role="presentation"
             >
               <section
                 aria-labelledby="map-import-history-title"
@@ -2510,6 +2518,7 @@ export function MapPage() {
                   >
                     <tbody>
                       {fields.map(([label, value], index) => (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: labels can repeat (fixed fields plus raw attributes) and the rows are stateless
                         <tr key={index}>
                           <th scope="row">{label}</th>
                           <td>{String(value)}</td>
@@ -2542,7 +2551,10 @@ export function MapPage() {
         <aside className="map-sidebar">
           <div className="map-tools">
             <div className="map-search">
-              <label className="form-label fw-semibold">
+              <label
+                className="form-label fw-semibold"
+                htmlFor="map-asset-search"
+              >
                 {provinceCode || selectedImportIds.length ? (
                   <>
                     Daftar aset jaringan{" "}
@@ -2562,6 +2574,7 @@ export function MapPage() {
                 <input
                   className="form-control"
                   disabled={!(provinceCode || selectedImportIds.length)}
+                  id="map-asset-search"
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Cari kabel, area, tiang, ODC/ODP, atau lokasi"
                   value={search}
@@ -2841,6 +2854,7 @@ export function MapPage() {
                   {catalogPageCount.toLocaleString("id-ID")}
                   {catalogQuery.isFetching ? " · Memuat…" : ""}
                 </small>
+                {/* biome-ignore lint/a11y/useSemanticElements: Bootstrap btn-group markup; a fieldset breaks its layout */}
                 <div
                   aria-label="Pagination daftar aset"
                   className="btn-group btn-group-sm"
@@ -3345,22 +3359,31 @@ export function MapPage() {
                       key={selectedSegment.id}
                       onSubmit={saveAssetDetails}
                     >
-                      <label className="form-label">Area</label>
+                      <label className="form-label" htmlFor="asset-area">
+                        Area
+                      </label>
                       <input
                         className="form-control form-control-sm mb-2"
                         defaultValue={selectedSegment.area}
+                        id="asset-area"
                         name="area"
                       />
-                      <label className="form-label">Tipe kabel</label>
+                      <label className="form-label" htmlFor="asset-cable-type">
+                        Tipe kabel
+                      </label>
                       <input
                         className="form-control form-control-sm mb-2"
                         defaultValue={selectedSegment.cableType}
+                        id="asset-cable-type"
                         name="cableType"
                       />
-                      <label className="form-label">Jumlah core total</label>
+                      <label className="form-label" htmlFor="asset-total-cores">
+                        Jumlah core total
+                      </label>
                       <input
                         className="form-control form-control-sm"
                         defaultValue={selectedSegment.totalCores}
+                        id="asset-total-cores"
                         max="4096"
                         min="0"
                         name="totalCores"
@@ -3371,19 +3394,28 @@ export function MapPage() {
                         Core terpakai diatur per nomor di Rincian core;
                         jumlahnya dihitung otomatis.
                       </small>
-                      <label className="form-label">Metode instalasi</label>
+                      <label
+                        className="form-label"
+                        htmlFor="asset-installation"
+                      >
+                        Metode instalasi
+                      </label>
                       <select
                         className="form-select form-select-sm mb-2"
                         defaultValue={selectedSegment.installation}
+                        id="asset-installation"
                         name="installation"
                       >
                         <option value="Aerial">Aerial</option>
                         <option value="Burial">Burial</option>
                       </select>
-                      <label className="form-label">Sisi jalan</label>
+                      <label className="form-label" htmlFor="asset-side">
+                        Sisi jalan
+                      </label>
                       <select
                         className="form-select form-select-sm mb-2"
                         defaultValue={selectedSegment.side}
+                        id="asset-side"
                         name="side"
                       >
                         <option value="Kiri">Kiri</option>
@@ -3466,6 +3498,7 @@ export function MapPage() {
         </aside>
       </div>
       {fileModal && (
+        // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only backdrop close; Escape and focus trapping are missing until these modals move to <dialog>
         <div
           className="file-modal-backdrop"
           onMouseDown={(event) => {
@@ -3473,6 +3506,7 @@ export function MapPage() {
               setFileModal(null);
             }
           }}
+          role="presentation"
         >
           <section
             aria-labelledby="file-modal-title"

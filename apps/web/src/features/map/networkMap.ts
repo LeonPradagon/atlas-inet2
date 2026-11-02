@@ -533,8 +533,10 @@ export function addAtlasMapIcons(map: MapLibreMap) {
 function hashIconReference(value: string) {
   let hash = 2_166_136_261;
   for (let index = 0; index < value.length; index += 1) {
+    // biome-ignore lint/suspicious/noBitwiseOperators: FNV-1a XOR step
     hash = Math.imul(hash ^ value.charCodeAt(index), 16_777_619);
   }
+  // biome-ignore lint/suspicious/noBitwiseOperators: unsigned 32-bit result
   return (hash >>> 0).toString(16);
 }
 

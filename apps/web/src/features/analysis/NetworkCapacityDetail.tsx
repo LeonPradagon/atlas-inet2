@@ -91,8 +91,8 @@ export function NetworkCapacityDetail({
       {capacity.fields.length > 0 && (
         <table className="table-sm small mt-2 mb-0 table">
           <tbody>
-            {capacity.fields.map(({ label, value }, i) => (
-              <tr key={i}>
+            {capacity.fields.map(({ label, value }) => (
+              <tr key={label}>
                 <th scope="row">{label}</th>
                 <td className="text-break">{String(value)}</td>
               </tr>

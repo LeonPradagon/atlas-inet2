@@ -561,7 +561,7 @@ export function parseKml(
       const value =
         (data as Record<string, unknown>)["#text"] ??
         Object.values(data as Record<string, unknown>).find(
-          (entry) => typeof entry === "string"
+          (candidate) => typeof candidate === "string"
         );
       if (key && value !== undefined) {
         properties[key] = String(value);
@@ -641,9 +641,9 @@ function kmzFolderPaths(features: NetworkFeature[]) {
       .split("/")
       .map((part) => part.trim())
       .filter(Boolean);
-    path.forEach((_, index) =>
-      folders.add(path.slice(0, index + 1).join(" / "))
-    );
+    for (let index = 0; index < path.length; index += 1) {
+      folders.add(path.slice(0, index + 1).join(" / "));
+    }
   }
   return [...folders].sort((a, b) => a.localeCompare(b));
 }
@@ -886,8 +886,8 @@ export class NetworkImportService {
       });
     }
     const headers: string[] = [];
-    sheet.getRow(1).eachCell((cell, column) => {
-      headers[column - 1] = cell.text.trim().toLowerCase();
+    sheet.getRow(1).eachCell((cell, columnNumber) => {
+      headers[columnNumber - 1] = cell.text.trim().toLowerCase();
     });
     const column = (pattern: RegExp) =>
       headers.findIndex((header) => pattern.test(header));
@@ -1132,8 +1132,8 @@ export class NetworkImportService {
       });
     }
     const headers: string[] = [];
-    sheet.getRow(1).eachCell((cell, column) => {
-      headers[column - 1] = cell.text.trim();
+    sheet.getRow(1).eachCell((cell, columnNumber) => {
+      headers[columnNumber - 1] = cell.text.trim();
     });
     const addressIndex = headers.findIndex((value) =>
       /alamat|address/iu.test(value)
