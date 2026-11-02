@@ -5,7 +5,8 @@ NestJS API; migrasi PostGIS dijalankan saat startup. `DATABASE_URL` wajib tersed
 ## Struktur
 
 - `src/auth` — Better Auth, sesi, role, dan bootstrap administrator
-- `src/atlas` — endpoint dan aturan aset, core, booking, analisis, serta notifikasi
+- `src/atlas` — endpoint dan aturan aset, core, analisis, serta notifikasi
+- `src/booking` — endpoint dan aturan booking core, waiting list FIFO, dan kedaluwarsa booking
 - `src/network` — parsing dan penyimpanan impor jaringan
 - `src/geospatial` — adapter geocoding dan routing
 - `src/database` — koneksi PostgreSQL dan migrasi PostGIS

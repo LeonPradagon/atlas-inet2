@@ -258,12 +258,6 @@ export class AtlasController {
     );
   }
 
-  @Get("assets/bookable-segments")
-  async bookableSegments(@Req() req: IncomingMessage) {
-    await this.auth.requireUser(req);
-    return this.atlas.listBookableSegments();
-  }
-
   @Get("assets/provinces")
   async mapProvinces(@Req() req: IncomingMessage) {
     await this.auth.requireUser(req);
@@ -469,60 +463,6 @@ export class AtlasController {
       user.id,
       file.originalname
     );
-  }
-
-  @Get("bookings")
-  async bookings(@Req() req: IncomingMessage) {
-    await this.auth.requireUser(req);
-    return this.atlas.listBookings();
-  }
-
-  @Post("bookings")
-  async createBooking(
-    @Req() req: IncomingMessage,
-    @Body() body: {
-      customer?: string;
-      picCustomer?: string;
-      picPresales?: string;
-      segmentId?: string;
-      cores?: number;
-    }
-  ) {
-    const user = await this.auth.requireUser(req);
-    return this.atlas.createBooking(body, user.id);
-  }
-
-  @Post("bookings/:id/approve")
-  async approveBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
-    const user = await this.auth.requireAdmin(req);
-    return this.atlas.approveBooking(id, user.id);
-  }
-
-  @Post("bookings/:id/reject")
-  async rejectBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
-    const user = await this.auth.requireAdmin(req);
-    return this.atlas.rejectBooking(id, user.id);
-  }
-
-  @Post("bookings/:id/release")
-  async releaseBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
-    const user = await this.auth.requireUser(req);
-    return this.atlas.releaseBooking(id, user.id);
-  }
-
-  @Get("settings/booking-duration")
-  async duration(@Req() req: IncomingMessage) {
-    await this.auth.requireUser(req);
-    return this.atlas.getBookingDuration();
-  }
-
-  @Patch("settings/booking-duration")
-  async setDuration(
-    @Req() req: IncomingMessage,
-    @Body() body: { days?: number }
-  ) {
-    const user = await this.auth.requireAdmin(req);
-    return this.atlas.setBookingDuration(Number(body.days), user.id);
   }
 
   @Get("settings/cable-name-pattern")

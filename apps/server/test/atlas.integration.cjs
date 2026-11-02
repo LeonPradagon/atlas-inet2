@@ -35,6 +35,7 @@ async function main() {
     };
     const { Database } = require("../dist/database/database");
     const { AtlasService } = require("../dist/atlas/atlas.service");
+    const { BookingService } = require("../dist/booking/booking.service");
     const { migrateDatabase } = require("../dist/database/migration-runner");
     db = new Database();
     await migrateDatabase(db.pool);
@@ -48,7 +49,8 @@ async function main() {
     await db.query(
       `INSERT INTO "user"(id,name,email,role) VALUES('admin','Test Admin','admin@atlas.test','ADMIN'),('presales','Test Presales','presales@atlas.test','PRESALES')`
     );
-    const atlas = new AtlasService(db);
+    const bookings = new BookingService(db);
+    const atlas = new AtlasService(db, bookings);
     const q = (sql, values) => db.query(sql, values);
     const savedDesign = await atlas.saveFtthDesign(
       [
@@ -89,7 +91,7 @@ async function main() {
       "PASS: FTTH design persists its selected anchor and coverage radius"
     );
     const requestBooking = async (segmentId, cores) => {
-      const pending = await atlas.createBooking(
+      const pending = await bookings.createBooking(
         {
           cores,
           customer: `Customer ${randomBytes(4).toString("hex")}`,
@@ -107,7 +109,7 @@ async function main() {
       return pending.id;
     };
     const booking = async (segmentId, cores) =>
-      atlas.approveBooking(await requestBooking(segmentId, cores), "admin");
+      bookings.approveBooking(await requestBooking(segmentId, cores), "admin");
     const status = async (id) =>
       (await q("SELECT status FROM bookings WHERE id=$1", [id])).rows[0].status;
     const segment = async (id, count) => {
@@ -128,7 +130,7 @@ async function main() {
     const before = Number(
       (await q("SELECT count(*) AS n FROM notifications")).rows[0].n
     );
-    const released = await atlas.releaseBooking(hold.id, "presales");
+    const released = await bookings.releaseBooking(hold.id, "presales");
     assert.equal(released.allocatedBookingIds.length, 3);
     assert.equal(released.allocated, released.allocatedBookingIds[0]);
     for (const b of queue) {
@@ -157,7 +159,7 @@ async function main() {
     }
     const tailRequest = await requestBooking("fifo", 2);
     const head = await booking("fifo", 4),
-      tail = await atlas.approveBooking(tailRequest, "admin");
+      tail = await bookings.approveBooking(tailRequest, "admin");
     assert.equal(head.status, "Waiting List");
     assert.equal(
       tail.status,
@@ -236,7 +238,7 @@ async function main() {
       "UPDATE bookings SET expires_at=now()-interval '1 second' WHERE id=$1",
       [expiring.id]
     );
-    await Promise.all([atlas.expireBookings(), atlas.expireBookings()]);
+    await Promise.all([bookings.expireBookings(), bookings.expireBookings()]);
     assert.equal(await status(expiring.id), "Expired");
     for (const b of expiryQueue) {
       assert.equal(await status(b.id), "Booked");
@@ -261,15 +263,15 @@ async function main() {
     assert.equal(concurrent.filter((b) => b.status === "Booked").length, 8);
     const active = concurrent.filter((b) => b.status === "Booked");
     const outcomes = await Promise.allSettled([
-      atlas.releaseBooking(active[0].id, "presales"),
-      atlas.releaseBooking(active[0].id, "presales"),
+      bookings.releaseBooking(active[0].id, "presales"),
+      bookings.releaseBooking(active[0].id, "presales"),
     ]);
     assert.equal(
       outcomes.filter((result) => result.status === "fulfilled").length,
       1
     );
     await Promise.all(
-      active.slice(1, 5).map((b) => atlas.releaseBooking(b.id, "presales"))
+      active.slice(1, 5).map((b) => bookings.releaseBooking(b.id, "presales"))
     );
     const consistency = (
       await q(`SELECT (SELECT count(*) FROM network_cores WHERE asset_id='concurrent' AND status='Booked') AS cores,
@@ -354,7 +356,7 @@ async function main() {
     );
     assert.equal((await atlas.listRelations("related")).length, 4);
     const db2 = new Database(),
-      atlas2 = new AtlasService(db2);
+      atlas2 = new AtlasService(db2, new BookingService(db2));
     assert.equal((await atlas2.listRelations("related")).length, 4);
     await db2.onModuleDestroy();
     await atlas.saveRelations("related", [], "admin");

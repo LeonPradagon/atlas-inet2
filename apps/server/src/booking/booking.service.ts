@@ -1,0 +1,457 @@
+import { randomUUID } from "node:crypto";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  type OnModuleDestroy,
+  type OnModuleInit,
+} from "@nestjs/common";
+import type { PoolClient } from "pg";
+import { audit } from "../database/audit";
+import { Database } from "../database/database";
+
+export type CreateBookingInput = {
+  customer?: string;
+  picCustomer?: string;
+  picPresales?: string;
+  segmentId?: string;
+  cores?: number;
+};
+
+@Injectable()
+export class BookingService implements OnModuleInit, OnModuleDestroy {
+  private expiryTimer?: NodeJS.Timeout;
+  constructor(@Inject(Database) private readonly db: Database) {}
+
+  onModuleInit() {
+    this.expiryTimer = setInterval(
+      () =>
+        void this.expireBookings().catch((error) =>
+          console.error("Booking expiry failed", error)
+        ),
+      60_000
+    );
+    this.expiryTimer.unref();
+  }
+
+  onModuleDestroy() {
+    if (this.expiryTimer) {
+      clearInterval(this.expiryTimer);
+    }
+  }
+
+  async listBookableSegments() {
+    const { rows } =
+      await this.db.query(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.total_cores AS "totalCores",
+      count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores"
+      FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+      WHERE a.asset_type='segment' AND a.total_cores>0
+      GROUP BY a.id ORDER BY a.name,a.id`);
+    return rows;
+  }
+
+  async listBookings() {
+    const { rows } =
+      await this.db.query(`SELECT b.id,b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",
+      b.segment_id AS "segmentId",b.cores,b.status,b.requested_at AS "requestedAt",b.expires_at AS "expiresAt",
+      b.approved_at AS "approvedAt",b.rejected_at AS "rejectedAt",a.name AS "segmentName",a.area
+      FROM bookings b JOIN network_assets a ON a.id=b.segment_id ORDER BY b.requested_at DESC,b.id DESC`);
+    return rows;
+  }
+
+  async getBookingDuration() {
+    const { rows } = await this.db.query(
+      "SELECT value FROM app_settings WHERE key='booking_duration_days'"
+    );
+    return { days: Number(rows[0]?.value ?? 30) };
+  }
+
+  async setBookingDuration(days: number, userId: string) {
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      throw new BadRequestException({
+        message: "Durasi booking harus 1–365 hari.",
+      });
+    }
+    await this.db.query(
+      "INSERT INTO app_settings(key,value) VALUES('booking_duration_days',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
+      [JSON.stringify(days)]
+    );
+    await this.db.query(
+      "INSERT INTO audit_logs(actor_id,action,entity_type,entity_id,details) VALUES($1,'BOOKING_DURATION_UPDATED','SETTING','booking_duration_days',$2::jsonb)",
+      [userId, JSON.stringify({ days })]
+    );
+    return { days };
+  }
+
+  async createBooking(input: CreateBookingInput, userId: string) {
+    const customer = input.customer?.trim(),
+      picCustomer = input.picCustomer?.trim(),
+      picPresales = input.picPresales?.trim();
+    const cores = Number(input.cores),
+      segmentId = input.segmentId;
+    if (
+      !(
+        customer &&
+        picCustomer &&
+        picPresales &&
+        segmentId &&
+        Number.isInteger(cores)
+      ) ||
+      cores < 1
+    ) {
+      throw new BadRequestException({
+        message: "Pelanggan, PIC, segmen, dan jumlah core wajib diisi.",
+      });
+    }
+    return this.db.transaction(async (client) => {
+      const { rows: assets } = await client.query(
+        "SELECT total_cores FROM network_assets WHERE id=$1 AND asset_type='segment' FOR UPDATE",
+        [segmentId]
+      );
+      if (!assets.length) {
+        throw new NotFoundException({ message: "Segmen tidak ditemukan." });
+      }
+      if (!assets[0].total_cores) {
+        throw new BadRequestException({
+          message:
+            "Kapasitas belum diisi. Minta ADMIN melengkapi jumlah core segmen.",
+        });
+      }
+      if (cores > assets[0].total_cores) {
+        throw new BadRequestException({
+          message: "Jumlah booking melebihi kapasitas total segmen.",
+        });
+      }
+      const id = `BKG-${randomUUID().toUpperCase()}`;
+      await client.query(
+        `INSERT INTO bookings(id,customer,pic_customer,pic_presales,segment_id,cores,status,requested_by,requested_at)
+        VALUES($1,$2,$3,$4,$5,$6,'Pending Approval',$7,clock_timestamp())`,
+        [id, customer, picCustomer, picPresales, segmentId, cores, userId]
+      );
+      await notifyAdmins(
+        client,
+        "Persetujuan booking core diperlukan",
+        `${customer} meminta ${cores} core pada segmen ${segmentId}.`,
+        id
+      );
+      await audit(client, userId, "BOOKING_CREATED", "BOOKING", id, {
+        cores,
+        segmentId,
+        status: "Pending Approval",
+      });
+      return {
+        cores,
+        customer,
+        id,
+        picCustomer,
+        picPresales,
+        segmentId,
+        status: "Pending Approval",
+      };
+    });
+  }
+
+  async approveBooking(id: string, userId: string) {
+    return this.db.transaction(async (client) => {
+      const { rows: targets } = await client.query(
+        "SELECT segment_id FROM bookings WHERE id=$1",
+        [id]
+      );
+      if (!targets.length) {
+        throw new NotFoundException({ message: "Booking tidak ditemukan." });
+      }
+      await client.query(
+        "SELECT id FROM network_assets WHERE id=$1 FOR UPDATE",
+        [targets[0].segment_id]
+      );
+      const { rows } = await client.query(
+        "SELECT * FROM bookings WHERE id=$1 FOR UPDATE",
+        [id]
+      );
+      const booking = rows[0];
+      if (booking.status !== "Pending Approval") {
+        throw new ConflictException({
+          message:
+            "Hanya booking yang menunggu persetujuan yang dapat disetujui.",
+        });
+      }
+      await client.query(
+        "UPDATE bookings SET status='Waiting List',approved_by=$2,approved_at=clock_timestamp() WHERE id=$1",
+        [id, userId]
+      );
+      const allocatedBookingIds = await allocateWaiting(
+        client,
+        booking.segment_id,
+        userId
+      );
+      const { rows: result } = await client.query(
+        "SELECT status FROM bookings WHERE id=$1",
+        [id]
+      );
+      const status = result[0].status as string;
+      await audit(client, userId, "BOOKING_APPROVED", "BOOKING", id, {
+        allocatedBookingIds,
+        cores: booking.cores,
+        segmentId: booking.segment_id,
+        status,
+      });
+      const message =
+        status === "Booked"
+          ? `Booking ${id} disetujui dan ${booking.cores} core telah dialokasikan.`
+          : `Booking ${id} disetujui dan masuk waiting list karena kapasitas belum mencukupi.`;
+      await notifyPresales(
+        client,
+        "Booking core disetujui",
+        message,
+        booking.requested_by,
+        id
+      );
+      return { allocatedBookingIds, id, status };
+    });
+  }
+
+  async rejectBooking(id: string, userId: string) {
+    return this.db.transaction(async (client) => {
+      const { rows: targets } = await client.query(
+        "SELECT segment_id FROM bookings WHERE id=$1",
+        [id]
+      );
+      if (!targets.length) {
+        throw new NotFoundException({ message: "Booking tidak ditemukan." });
+      }
+      await client.query(
+        "SELECT id FROM network_assets WHERE id=$1 FOR UPDATE",
+        [targets[0].segment_id]
+      );
+      const { rows } = await client.query(
+        "SELECT * FROM bookings WHERE id=$1 FOR UPDATE",
+        [id]
+      );
+      const booking = rows[0];
+      if (booking.status !== "Pending Approval") {
+        throw new ConflictException({
+          message:
+            "Hanya booking yang menunggu persetujuan yang dapat ditolak.",
+        });
+      }
+      await client.query(
+        "UPDATE bookings SET status='Rejected',rejected_by=$2,rejected_at=clock_timestamp() WHERE id=$1",
+        [id, userId]
+      );
+      await audit(client, userId, "BOOKING_REJECTED", "BOOKING", id, {
+        cores: booking.cores,
+        segmentId: booking.segment_id,
+      });
+      await notifyPresales(
+        client,
+        "Booking core ditolak",
+        `Permintaan booking ${id} untuk ${booking.customer} ditolak oleh ADMIN.`,
+        booking.requested_by,
+        id
+      );
+      return { id, status: "Rejected" };
+    });
+  }
+
+  async releaseBooking(id: string, userId: string) {
+    return this.db.transaction(async (client) => {
+      const { rows: targets } = await client.query(
+        "SELECT segment_id FROM bookings WHERE id=$1",
+        [id]
+      );
+      if (!targets.length) {
+        throw new NotFoundException({ message: "Booking tidak ditemukan." });
+      }
+      await client.query(
+        "SELECT id FROM network_assets WHERE id=$1 FOR UPDATE",
+        [targets[0].segment_id]
+      );
+      const { rows } = await client.query(
+        "SELECT * FROM bookings WHERE id=$1 FOR UPDATE",
+        [id]
+      );
+      const booking = rows[0];
+      if (booking.status !== "Booked") {
+        throw new ConflictException({
+          message: "Hanya booking aktif yang dapat dilepas.",
+        });
+      }
+      await client.query(
+        "UPDATE network_cores SET status='Available' WHERE id IN (SELECT core_id FROM booking_cores WHERE booking_id=$1)",
+        [id]
+      );
+      await client.query("DELETE FROM booking_cores WHERE booking_id=$1", [id]);
+      await client.query(
+        "UPDATE bookings SET status='Released',released_at=now() WHERE id=$1",
+        [id]
+      );
+      const allocatedBookingIds = await allocateWaiting(
+        client,
+        booking.segment_id,
+        userId
+      );
+      await audit(client, userId, "BOOKING_RELEASED", "BOOKING", id, {
+        allocatedBookingIds,
+        cores: booking.cores,
+        segmentId: booking.segment_id,
+      });
+      await notifyPresales(
+        client,
+        "Booking core dilepas",
+        `${booking.customer}: ${booking.cores} core dilepas. ${allocatedBookingIds.length} permintaan waiting list dialokasikan.`,
+        booking.requested_by ?? userId,
+        id
+      );
+      return {
+        allocated: allocatedBookingIds[0] ?? null,
+        allocatedBookingIds,
+        released: id,
+      };
+    });
+  }
+
+  async expireBookings() {
+    const { rows } = await this.db.query(
+      "SELECT id,segment_id FROM bookings WHERE status='Booked' AND expires_at <= now() ORDER BY expires_at LIMIT 50"
+    );
+    for (const { id, segment_id } of rows) {
+      await this.db.transaction(async (client) => {
+        await client.query(
+          "SELECT id FROM network_assets WHERE id=$1 FOR UPDATE",
+          [segment_id]
+        );
+        const { rows: locked } = await client.query(
+          "SELECT * FROM bookings WHERE id=$1 AND status='Booked' AND expires_at <= now() FOR UPDATE",
+          [id]
+        );
+        if (!locked.length) {
+          return;
+        }
+        const booking = locked[0];
+        await client.query(
+          "UPDATE network_cores SET status='Available' WHERE id IN (SELECT core_id FROM booking_cores WHERE booking_id=$1)",
+          [id]
+        );
+        await client.query("DELETE FROM booking_cores WHERE booking_id=$1", [
+          id,
+        ]);
+        await client.query(
+          "UPDATE bookings SET status='Expired',released_at=now() WHERE id=$1",
+          [id]
+        );
+        await notifyPresales(
+          client,
+          "Booking core kedaluwarsa",
+          `${booking.customer}: masa booking ${booking.id} berakhir dan ${booking.cores} core dilepas.`,
+          booking.requested_by,
+          id
+        );
+        const allocatedBookingIds = await allocateWaiting(
+          client,
+          booking.segment_id
+        );
+        await audit(client, null, "BOOKING_EXPIRED", "BOOKING", id, {
+          allocatedBookingIds,
+          cores: booking.cores,
+          segmentId: booking.segment_id,
+        });
+      });
+    }
+  }
+}
+
+export async function allocateWaiting(
+  client: PoolClient,
+  segmentId: string,
+  actorId: string | null = null
+) {
+  const { rows: queue } = await client.query(
+    "SELECT * FROM bookings WHERE segment_id=$1 AND status='Waiting List' ORDER BY COALESCE(approved_at,requested_at),requested_at,id FOR UPDATE",
+    [segmentId]
+  );
+  const { rows: settings } = await client.query(
+    "SELECT value FROM app_settings WHERE key='booking_duration_days'"
+  );
+  const days = Number(settings[0]?.value ?? 30);
+  const allocated: string[] = [];
+  for (const booking of queue) {
+    const { rows: available } = await client.query(
+      "SELECT id FROM network_cores WHERE asset_id=$1 AND status='Available' ORDER BY core_number LIMIT $2 FOR UPDATE",
+      [segmentId, booking.cores]
+    );
+    if (available.length !== booking.cores) {
+      break;
+    }
+    await assignCores(
+      client,
+      booking.id,
+      available.map((row) => row.id)
+    );
+    await client.query(
+      "UPDATE bookings SET status='Booked',expires_at=now()+($2||' days')::interval WHERE id=$1",
+      [booking.id, days]
+    );
+    await audit(
+      client,
+      actorId,
+      "WAITING_LIST_ALLOCATED",
+      "BOOKING",
+      booking.id,
+      { cores: booking.cores, segmentId }
+    );
+    await notifyPresales(
+      client,
+      "Waiting list dialokasikan",
+      `${booking.customer}: ${booking.cores} core tersedia dan booking ${booking.id} aktif.`,
+      booking.requested_by,
+      booking.id
+    );
+    allocated.push(booking.id);
+  }
+  return allocated;
+}
+
+async function assignCores(
+  client: PoolClient,
+  bookingId: string,
+  coreIds: number[]
+) {
+  for (const coreId of coreIds) {
+    await client.query("UPDATE network_cores SET status='Booked' WHERE id=$1", [
+      coreId,
+    ]);
+    await client.query(
+      "INSERT INTO booking_cores(booking_id,core_id) VALUES($1,$2)",
+      [bookingId, coreId]
+    );
+  }
+}
+
+async function notifyPresales(
+  client: PoolClient,
+  title: string,
+  message: string,
+  requestorId?: string,
+  bookingId?: string
+) {
+  await client.query(
+    `INSERT INTO notifications(user_id,title,message,booking_id)
+      SELECT id,$1,$2,$4 FROM "user" WHERE role='PRESALES' OR id=$3`,
+    [title, message, requestorId ?? "", bookingId ?? null]
+  );
+}
+
+async function notifyAdmins(
+  client: PoolClient,
+  title: string,
+  message: string,
+  bookingId?: string
+) {
+  await client.query(
+    `INSERT INTO notifications(user_id,title,message,booking_id)
+      SELECT id,$1,$2,$3 FROM "user" WHERE role='ADMIN'`,
+    [title, message, bookingId ?? null]
+  );
+}
