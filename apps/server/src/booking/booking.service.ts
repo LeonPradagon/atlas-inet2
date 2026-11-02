@@ -8,13 +8,15 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
 import type { PoolClient } from "pg";
 import { audit } from "../database/audit";
 import { Database } from "../database/database";
 import {
   appSettings,
   auditLogs,
+  bookingCores,
   bookings,
   networkAssets,
   networkCores,
@@ -146,30 +148,43 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       });
     }
     return this.db.transaction(async (client) => {
-      const { rows: assets } = await client.query(
-        "SELECT total_cores FROM network_assets WHERE id=$1 AND asset_type='segment' FOR UPDATE",
-        [segmentId]
-      );
+      const tx = drizzle({ client });
+      const assets = await tx
+        .select({ totalCores: networkAssets.totalCores })
+        .from(networkAssets)
+        .where(
+          and(
+            eq(networkAssets.id, segmentId),
+            eq(networkAssets.assetType, "segment")
+          )
+        )
+        .for("update");
       if (!assets.length) {
         throw new NotFoundException({ message: "Segmen tidak ditemukan." });
       }
-      if (!assets[0].total_cores) {
+      if (!assets[0].totalCores) {
         throw new BadRequestException({
           message:
             "Kapasitas belum diisi. Minta ADMIN melengkapi jumlah core segmen.",
         });
       }
-      if (cores > assets[0].total_cores) {
+      if (cores > assets[0].totalCores) {
         throw new BadRequestException({
           message: "Jumlah booking melebihi kapasitas total segmen.",
         });
       }
       const id = `BKG-${randomUUID().toUpperCase()}`;
-      await client.query(
-        `INSERT INTO bookings(id,customer,pic_customer,pic_presales,segment_id,cores,status,requested_by,requested_at)
-        VALUES($1,$2,$3,$4,$5,$6,'Pending Approval',$7,clock_timestamp())`,
-        [id, customer, picCustomer, picPresales, segmentId, cores, userId]
-      );
+      await tx.insert(bookings).values({
+        cores,
+        customer,
+        id,
+        picCustomer,
+        picPresales,
+        requestedAt: sql`clock_timestamp()`,
+        requestedBy: userId,
+        segmentId,
+        status: "Pending Approval",
+      });
       await notifyAdmins(
         client,
         "Persetujuan booking core diperlukan",
@@ -195,46 +210,51 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
 
   async approveBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
-      const { rows: targets } = await client.query(
-        "SELECT segment_id FROM bookings WHERE id=$1",
-        [id]
-      );
+      const tx = drizzle({ client });
+      const targets = await tx
+        .select({ segmentId: bookings.segmentId })
+        .from(bookings)
+        .where(eq(bookings.id, id));
       if (!targets.length) {
         throw new NotFoundException({ message: "Booking tidak ditemukan." });
       }
-      await client.query(
-        "SELECT id FROM network_assets WHERE id=$1 FOR UPDATE",
-        [targets[0].segment_id]
-      );
-      const { rows } = await client.query(
-        "SELECT * FROM bookings WHERE id=$1 FOR UPDATE",
-        [id]
-      );
-      const booking = rows[0];
+      await tx
+        .select({ id: networkAssets.id })
+        .from(networkAssets)
+        .where(eq(networkAssets.id, targets[0].segmentId))
+        .for("update");
+      const [booking] = await tx
+        .select()
+        .from(bookings)
+        .where(eq(bookings.id, id))
+        .for("update");
       if (booking.status !== "Pending Approval") {
         throw new ConflictException({
           message:
             "Hanya booking yang menunggu persetujuan yang dapat disetujui.",
         });
       }
-      await client.query(
-        "UPDATE bookings SET status='Waiting List',approved_by=$2,approved_at=clock_timestamp() WHERE id=$1",
-        [id, userId]
-      );
+      await tx
+        .update(bookings)
+        .set({
+          approvedAt: sql`clock_timestamp()`,
+          approvedBy: userId,
+          status: "Waiting List",
+        })
+        .where(eq(bookings.id, id));
       const allocatedBookingIds = await allocateWaiting(
         client,
-        booking.segment_id,
+        booking.segmentId,
         userId
       );
-      const { rows: result } = await client.query(
-        "SELECT status FROM bookings WHERE id=$1",
-        [id]
-      );
-      const status = result[0].status as string;
+      const [{ status }] = await tx
+        .select({ status: bookings.status })
+        .from(bookings)
+        .where(eq(bookings.id, id));
       await audit(client, userId, "BOOKING_APPROVED", "BOOKING", id, {
         allocatedBookingIds,
         cores: booking.cores,
-        segmentId: booking.segment_id,
+        segmentId: booking.segmentId,
         status,
       });
       const message =
@@ -245,7 +265,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         client,
         "Booking core disetujui",
         message,
-        booking.requested_by,
+        booking.requestedBy,
         id
       );
       return { allocatedBookingIds, id, status };
@@ -254,41 +274,47 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
 
   async rejectBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
-      const { rows: targets } = await client.query(
-        "SELECT segment_id FROM bookings WHERE id=$1",
-        [id]
-      );
+      const tx = drizzle({ client });
+      const targets = await tx
+        .select({ segmentId: bookings.segmentId })
+        .from(bookings)
+        .where(eq(bookings.id, id));
       if (!targets.length) {
         throw new NotFoundException({ message: "Booking tidak ditemukan." });
       }
-      await client.query(
-        "SELECT id FROM network_assets WHERE id=$1 FOR UPDATE",
-        [targets[0].segment_id]
-      );
-      const { rows } = await client.query(
-        "SELECT * FROM bookings WHERE id=$1 FOR UPDATE",
-        [id]
-      );
-      const booking = rows[0];
+      await tx
+        .select({ id: networkAssets.id })
+        .from(networkAssets)
+        .where(eq(networkAssets.id, targets[0].segmentId))
+        .for("update");
+      const [booking] = await tx
+        .select()
+        .from(bookings)
+        .where(eq(bookings.id, id))
+        .for("update");
       if (booking.status !== "Pending Approval") {
         throw new ConflictException({
           message:
             "Hanya booking yang menunggu persetujuan yang dapat ditolak.",
         });
       }
-      await client.query(
-        "UPDATE bookings SET status='Rejected',rejected_by=$2,rejected_at=clock_timestamp() WHERE id=$1",
-        [id, userId]
-      );
+      await tx
+        .update(bookings)
+        .set({
+          rejectedAt: sql`clock_timestamp()`,
+          rejectedBy: userId,
+          status: "Rejected",
+        })
+        .where(eq(bookings.id, id));
       await audit(client, userId, "BOOKING_REJECTED", "BOOKING", id, {
         cores: booking.cores,
-        segmentId: booking.segment_id,
+        segmentId: booking.segmentId,
       });
       await notifyPresales(
         client,
         "Booking core ditolak",
         `Permintaan booking ${id} untuk ${booking.customer} ditolak oleh ADMIN.`,
-        booking.requested_by,
+        booking.requestedBy,
         id
       );
       return { id, status: "Rejected" };
@@ -297,51 +323,61 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
 
   async releaseBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
-      const { rows: targets } = await client.query(
-        "SELECT segment_id FROM bookings WHERE id=$1",
-        [id]
-      );
+      const tx = drizzle({ client });
+      const targets = await tx
+        .select({ segmentId: bookings.segmentId })
+        .from(bookings)
+        .where(eq(bookings.id, id));
       if (!targets.length) {
         throw new NotFoundException({ message: "Booking tidak ditemukan." });
       }
-      await client.query(
-        "SELECT id FROM network_assets WHERE id=$1 FOR UPDATE",
-        [targets[0].segment_id]
-      );
-      const { rows } = await client.query(
-        "SELECT * FROM bookings WHERE id=$1 FOR UPDATE",
-        [id]
-      );
-      const booking = rows[0];
+      await tx
+        .select({ id: networkAssets.id })
+        .from(networkAssets)
+        .where(eq(networkAssets.id, targets[0].segmentId))
+        .for("update");
+      const [booking] = await tx
+        .select()
+        .from(bookings)
+        .where(eq(bookings.id, id))
+        .for("update");
       if (booking.status !== "Booked") {
         throw new ConflictException({
           message: "Hanya booking aktif yang dapat dilepas.",
         });
       }
-      await client.query(
-        "UPDATE network_cores SET status='Available' WHERE id IN (SELECT core_id FROM booking_cores WHERE booking_id=$1)",
-        [id]
-      );
-      await client.query("DELETE FROM booking_cores WHERE booking_id=$1", [id]);
-      await client.query(
-        "UPDATE bookings SET status='Released',released_at=now() WHERE id=$1",
-        [id]
-      );
+      await tx
+        .update(networkCores)
+        .set({ status: "Available" })
+        .where(
+          inArray(
+            networkCores.id,
+            tx
+              .select({ id: bookingCores.coreId })
+              .from(bookingCores)
+              .where(eq(bookingCores.bookingId, id))
+          )
+        );
+      await tx.delete(bookingCores).where(eq(bookingCores.bookingId, id));
+      await tx
+        .update(bookings)
+        .set({ releasedAt: sql`now()`, status: "Released" })
+        .where(eq(bookings.id, id));
       const allocatedBookingIds = await allocateWaiting(
         client,
-        booking.segment_id,
+        booking.segmentId,
         userId
       );
       await audit(client, userId, "BOOKING_RELEASED", "BOOKING", id, {
         allocatedBookingIds,
         cores: booking.cores,
-        segmentId: booking.segment_id,
+        segmentId: booking.segmentId,
       });
       await notifyPresales(
         client,
         "Booking core dilepas",
         `${booking.customer}: ${booking.cores} core dilepas. ${allocatedBookingIds.length} permintaan waiting list dialokasikan.`,
-        booking.requested_by ?? userId,
+        booking.requestedBy ?? userId,
         id
       );
       return {
@@ -353,49 +389,69 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async expireBookings() {
-    const { rows } = await this.db.query(
-      "SELECT id,segment_id FROM bookings WHERE status='Booked' AND expires_at <= now() ORDER BY expires_at LIMIT 50"
-    );
-    for (const { id, segment_id } of rows) {
+    const rows = await this.db.orm
+      .select({ id: bookings.id, segmentId: bookings.segmentId })
+      .from(bookings)
+      .where(
+        and(eq(bookings.status, "Booked"), lte(bookings.expiresAt, sql`now()`))
+      )
+      .orderBy(bookings.expiresAt)
+      .limit(50);
+    for (const { id, segmentId } of rows) {
       await this.db.transaction(async (client) => {
-        await client.query(
-          "SELECT id FROM network_assets WHERE id=$1 FOR UPDATE",
-          [segment_id]
-        );
-        const { rows: locked } = await client.query(
-          "SELECT * FROM bookings WHERE id=$1 AND status='Booked' AND expires_at <= now() FOR UPDATE",
-          [id]
-        );
+        const tx = drizzle({ client });
+        await tx
+          .select({ id: networkAssets.id })
+          .from(networkAssets)
+          .where(eq(networkAssets.id, segmentId))
+          .for("update");
+        const locked = await tx
+          .select()
+          .from(bookings)
+          .where(
+            and(
+              eq(bookings.id, id),
+              eq(bookings.status, "Booked"),
+              lte(bookings.expiresAt, sql`now()`)
+            )
+          )
+          .for("update");
         if (!locked.length) {
           return;
         }
         const booking = locked[0];
-        await client.query(
-          "UPDATE network_cores SET status='Available' WHERE id IN (SELECT core_id FROM booking_cores WHERE booking_id=$1)",
-          [id]
-        );
-        await client.query("DELETE FROM booking_cores WHERE booking_id=$1", [
-          id,
-        ]);
-        await client.query(
-          "UPDATE bookings SET status='Expired',released_at=now() WHERE id=$1",
-          [id]
-        );
+        await tx
+          .update(networkCores)
+          .set({ status: "Available" })
+          .where(
+            inArray(
+              networkCores.id,
+              tx
+                .select({ id: bookingCores.coreId })
+                .from(bookingCores)
+                .where(eq(bookingCores.bookingId, id))
+            )
+          );
+        await tx.delete(bookingCores).where(eq(bookingCores.bookingId, id));
+        await tx
+          .update(bookings)
+          .set({ releasedAt: sql`now()`, status: "Expired" })
+          .where(eq(bookings.id, id));
         await notifyPresales(
           client,
           "Booking core kedaluwarsa",
           `${booking.customer}: masa booking ${booking.id} berakhir dan ${booking.cores} core dilepas.`,
-          booking.requested_by,
+          booking.requestedBy,
           id
         );
         const allocatedBookingIds = await allocateWaiting(
           client,
-          booking.segment_id
+          booking.segmentId
         );
         await audit(client, null, "BOOKING_EXPIRED", "BOOKING", id, {
           allocatedBookingIds,
           cores: booking.cores,
-          segmentId: booking.segment_id,
+          segmentId: booking.segmentId,
         });
       });
     }
@@ -473,7 +529,7 @@ async function notifyPresales(
   client: PoolClient,
   title: string,
   message: string,
-  requestorId?: string,
+  requestorId: string | null,
   bookingId?: string
 ) {
   await client.query(
