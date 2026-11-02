@@ -1,5 +1,5 @@
 import { api, type NetworkAsset } from '../../lib/api'
-import { assetFeatures, addAtlasMapIcons, loadNetworkMapIcons, cableLengthMeters } from '../map/MapPage'
+import { assetFeatures, addAtlasMapIcons, loadNetworkMapIcons, cableLengthMeters } from '../map/networkMap'
 import { kmzLegend } from '../map/kmzLegend'
 import type { NetworkCapacity } from './NetworkCapacityDetail'
 import { useEffect, useRef, useState } from 'react'
