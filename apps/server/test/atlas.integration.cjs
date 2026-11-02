@@ -110,13 +110,13 @@ async function main() {
       atlas.approveBooking(await requestBooking(segmentId, cores), "admin");
     const status = async (id) =>
       (await q("SELECT status FROM bookings WHERE id=$1", [id])).rows[0].status;
-    async function segment(id, count) {
+    const segment = async (id, count) => {
       await q(
         `INSERT INTO network_assets(id,name,asset_type,source,area,geometry,source_geometry,attributes) VALUES($1,$1,'segment','kml','Original area',ST_GeomFromText('LINESTRING(106.8 -6.2,106.81 -6.21)',4326),'{"type":"LineString","coordinates":[[106.8,-6.2,12],[106.81,-6.21,13]]}','{"__kmlStyle":{"lineColor":"#ff0000"},"name":"Original KML"}')`,
         [id]
       );
       await atlas.updateAsset(id, { totalCores: count }, "admin");
-    }
+    };
     await segment("multi", 6);
     const hold = await booking("multi", 6);
     const queue = await Promise.all([
