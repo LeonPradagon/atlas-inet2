@@ -6,12 +6,20 @@ import { useEffect, useRef, useState } from 'react'
 import { LngLatBounds, Map, NavigationControl, Popup, setWorkerUrl } from 'maplibre-gl'
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import type { Feature, Geometry } from 'geojson'
-import { offsetCoordinate } from './ftthDraft'
 
 export type NetworkSearchResult = {
   latitude: number; longitude: number; searchRadiusMeters?: number; expansionAvailable?: boolean;
   network: { capacity?: NetworkCapacity; id?: string; name: string; area?: string; cableType?: string; searchRadiusMeters?: number; straightDistanceMeters?: number; nearestPoint?: { coordinates: [number, number] }; geometry?: Geometry } | null;
   routeGeometry?: Geometry; distanceMeters: number | null;
+}
+
+function offsetCoordinate([longitude, latitude]: [number, number], meters: number, bearing: number): [number, number] {
+  const distance = meters / 6371008.8
+  const lat1 = latitude * Math.PI / 180
+  const lon1 = longitude * Math.PI / 180
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distance) + Math.cos(lat1) * Math.sin(distance) * Math.cos(bearing))
+  const lon2 = lon1 + Math.atan2(Math.sin(bearing) * Math.sin(distance) * Math.cos(lat1), Math.cos(distance) - Math.sin(lat1) * Math.sin(lat2))
+  return [lon2 * 180 / Math.PI, lat2 * 180 / Math.PI]
 }
 
 export function NetworkLocationsMap({ points, onSelect }: { points: { row: number; latitude: number; longitude: number }[]; onSelect: (row: number) => void }) {
