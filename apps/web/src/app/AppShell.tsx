@@ -90,6 +90,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
   const previousPathname = useRef(pathname);
   const analysisPath =
     pathname.startsWith("/analisis") || pathname === "/riwayat-analisis";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname is the trigger: close the mobile menu on navigation
   useEffect(() => {
     mobileAnalysisMenu.current?.removeAttribute("open");
   }, [pathname]);
@@ -195,6 +196,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
                       className={`notification-item ${item.readAt ? "" : "unread"}`}
                       key={item.id}
                       onClick={() => openNotification(item)}
+                      type="button"
                     >
                       <strong>{item.title}</strong>
                       <span>{item.message}</span>

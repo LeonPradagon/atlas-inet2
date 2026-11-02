@@ -314,6 +314,7 @@ export function BulkAnalysisPage() {
           <button
             className="btn btn-outline-primary"
             onClick={downloadTemplate}
+            type="button"
           >
             Unduh template
           </button>
@@ -336,6 +337,7 @@ export function BulkAnalysisPage() {
             <button
               className="btn btn-outline-secondary"
               onClick={clearCurrentJob}
+              type="button"
             >
               Bersihkan tampilan
             </button>
@@ -361,6 +363,7 @@ export function BulkAnalysisPage() {
                   )
                   .catch((e) => setError(e.message))
               }
+              type="button"
             >
               Batalkan pekerjaan
             </button>
@@ -369,6 +372,7 @@ export function BulkAnalysisPage() {
             <button
               className="btn btn-success ms-auto"
               onClick={() => void download().catch((e) => setError(e.message))}
+              type="button"
             >
               Unduh hasil Excel
             </button>
@@ -456,6 +460,7 @@ export function BulkAnalysisPage() {
                         <button
                           className="btn btn-link p-0 text-start"
                           onClick={() => setSelectedRowNumber(row.row)}
+                          type="button"
                         >
                           {row.address}
                         </button>
@@ -493,6 +498,7 @@ export function BulkAnalysisPage() {
                             className="btn btn-outline-primary btn-sm"
                             disabled={expanding !== null}
                             onClick={() => void expand(row)}
+                            type="button"
                           >
                             {expanding === row.row
                               ? "Mencari…"
@@ -514,6 +520,7 @@ export function BulkAnalysisPage() {
                   className="btn btn-outline-secondary"
                   disabled={page === 1}
                   onClick={() => setPage((p) => p - 1)}
+                  type="button"
                 >
                   Sebelumnya
                 </button>
@@ -521,6 +528,7 @@ export function BulkAnalysisPage() {
                   className="btn btn-outline-secondary"
                   disabled={page * 50 >= (pageQuery.data?.total ?? 0)}
                   onClick={() => setPage((p) => p + 1)}
+                  type="button"
                 >
                   Berikutnya
                 </button>

@@ -62,6 +62,7 @@ export function AccountMenu({
           className="account-menu-item account-logout"
           disabled={logout.isPending}
           onClick={() => logout.mutate()}
+          type="button"
         >
           <i className="bi bi-box-arrow-right" />
           <span>{logout.isPending ? "Keluar..." : "Logout"}</span>

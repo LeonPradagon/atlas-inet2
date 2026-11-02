@@ -154,6 +154,7 @@ export function DashboardPage() {
               className="btn btn-outline-primary"
               disabled={exportReport.isPending}
               onClick={() => exportReport.mutate()}
+              type="button"
             >
               <i className="bi bi-file-earmark-excel me-2" />
               {exportReport.isPending ? "Menyiapkan..." : "Ekspor laporan"}

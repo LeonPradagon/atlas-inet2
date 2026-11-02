@@ -20,6 +20,7 @@ export function SubmitSurveyButton({
         className="btn btn-outline-primary"
         disabled={submit.isPending || submit.isSuccess}
         onClick={() => submit.mutate()}
+        type="button"
       >
         {submit.isSuccess
           ? "Survei sudah diajukan"

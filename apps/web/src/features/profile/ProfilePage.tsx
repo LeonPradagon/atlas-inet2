@@ -132,6 +132,7 @@ export function ProfilePage() {
                   <button
                     className="btn btn-primary"
                     disabled={change.isPending}
+                    type="submit"
                   >
                     {change.isPending ? "Menyimpan..." : "Simpan password"}
                   </button>

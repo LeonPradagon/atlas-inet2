@@ -6,5 +6,14 @@
     "ultracite/biome/react",
     "ultracite/biome/tanstack"
   ],
-  "root": false
+  "root": false,
+  "linter": {
+    "rules": {
+      "suspicious": {
+        // Not type-aware: flags plain booleans too. All 58 hits were false positives
+        // (no numeric left operand that could render a stray 0).
+        "noLeakedRender": "off"
+      }
+    }
+  }
 }

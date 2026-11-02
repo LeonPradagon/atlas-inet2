@@ -211,7 +211,11 @@ export function SettingsPage() {
                 value={pattern}
               />
               <div className="d-flex align-items-center mt-3 gap-3">
-                <button className="btn btn-primary" disabled={save.isPending}>
+                <button
+                  className="btn btn-primary"
+                  disabled={save.isPending}
+                  type="submit"
+                >
                   {save.isPending ? "Menyimpan..." : "Simpan pola"}
                 </button>
                 {save.isSuccess && (

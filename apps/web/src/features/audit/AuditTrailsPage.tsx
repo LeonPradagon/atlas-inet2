@@ -131,6 +131,7 @@ export function AuditTrailsPage() {
               className="btn btn-sm btn-outline-primary ms-auto flex-shrink-0"
               disabled={audit.isFetching}
               onClick={() => void audit.refetch()}
+              type="button"
             >
               <i
                 className={`bi bi-arrow-clockwise me-1${audit.isFetching ? "spin" : ""}`}

@@ -265,7 +265,8 @@ function SavedAnalysisMap({
   const container = useRef<HTMLDivElement>(null);
   const pointsKey = points
     .map(
-      ({ longitude, latitude, label }) => `${longitude},${latitude},${label}`
+      ({ longitude, latitude, label, kind }) =>
+        `${longitude},${latitude},${label},${kind ?? ""}`
     )
     .join("|");
   const routesKey = routes
@@ -281,10 +282,10 @@ function SavedAnalysisMap({
     )
     .join("|");
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: content keys stand in for the array props so the map is rebuilt only when the data changes
   useEffect(() => {
     if (
-      !container.current ||
-      !(points.length || routes.length || radii.length)
+      !(container.current && (points.length || routes.length || radii.length))
     ) {
       return;
     }
@@ -605,6 +606,7 @@ function BulkHistoryDetail({
                   <button
                     className="btn btn-sm btn-outline-primary"
                     onClick={() => onOpenDraft(draft.id)}
+                    type="button"
                   >
                     Buka detail draft
                   </button>
@@ -1200,6 +1202,7 @@ export function AnalysisHistoryPage() {
                 disabled={page <= 1 || history.isFetching}
                 onClick={() => setPage((current) => Math.max(1, current - 1))}
                 title="Sebelumnya"
+                type="button"
               >
                 <i aria-hidden="true" className="bi bi-chevron-left" />
               </button>
@@ -1214,6 +1217,7 @@ export function AnalysisHistoryPage() {
                 }
                 onClick={() => setPage((current) => current + 1)}
                 title="Berikutnya"
+                type="button"
               >
                 <i aria-hidden="true" className="bi bi-chevron-right" />
               </button>
@@ -1249,6 +1253,7 @@ export function AnalysisHistoryPage() {
                 <button
                   className="btn btn-sm btn-outline-secondary ms-auto flex-shrink-0"
                   onClick={() => setSelectedId("")}
+                  type="button"
                 >
                   Tutup
                 </button>
@@ -1382,6 +1387,7 @@ export function AnalysisHistoryPage() {
                           onClick={() => {
                             window.location.href = `/analisis-massal?jobId=${detail.data.bulkJobId}`;
                           }}
+                          type="button"
                         >
                           Buka pekerjaan dan hasil
                         </button>

@@ -913,6 +913,7 @@ export function MapPage() {
       return invalidateNetwork();
     },
   });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedSegment?.id is the trigger: clear mutation state when the selection changes
   useEffect(() => {
     updateCore.reset();
     updateAsset.reset();
@@ -974,6 +975,7 @@ export function MapPage() {
     setRoutePoints(value);
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: create the map once; data reaches its sources through the setData effects below
   useEffect(() => {
     if (!mapElement.current || map.current) {
       return;
@@ -1468,6 +1470,7 @@ export function MapPage() {
       map.current?.getSource("network-points-data") as GeoJSONSource | undefined
     )?.setData(pointFeatures);
   }, [shapeFeatures, pointFeatures]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mapReady is the trigger: push a boundary set before the map finished loading
   useEffect(() => {
     (
       map.current?.getSource("selected-ftth-boundary") as
@@ -2235,6 +2238,7 @@ export function MapPage() {
               <button
                 className="btn btn-sm btn-outline-danger ms-2"
                 onClick={() => void mapAssetsQuery.refetch()}
+                type="button"
               >
                 Coba lagi
               </button>
@@ -2248,6 +2252,7 @@ export function MapPage() {
                   className="btn btn-light"
                   disabled={importing}
                   onClick={() => setFileModal("import")}
+                  type="button"
                 >
                   {importing ? (
                     <>
@@ -2268,6 +2273,7 @@ export function MapPage() {
                 <button
                   className="btn btn-light"
                   onClick={() => setFileModal("download")}
+                  type="button"
                 >
                   <i className="bi bi-download me-1" />
                   Unduh
@@ -2640,6 +2646,7 @@ export function MapPage() {
                       setRouteDistance(null);
                       setRouteError("");
                     }}
+                    type="button"
                   >
                     Batal
                   </button>
@@ -2655,6 +2662,7 @@ export function MapPage() {
                     <button
                       className="btn btn-sm btn-light"
                       onClick={() => setSelectionMode("waypoint")}
+                      type="button"
                     >
                       <i className="bi bi-plus-circle me-1" />
                       Waypoint
@@ -2664,6 +2672,7 @@ export function MapPage() {
                     <button
                       className="btn btn-sm btn-light"
                       onClick={() => setSelectionMode("end")}
+                      type="button"
                     >
                       <i className="bi bi-geo-alt me-1" />
                       Pilih titik akhir
@@ -2674,6 +2683,7 @@ export function MapPage() {
                       className="btn btn-sm btn-primary"
                       disabled={routeLoading}
                       onClick={() => void previewRoute()}
+                      type="button"
                     >
                       {routeLoading ? (
                         <>
@@ -2689,6 +2699,7 @@ export function MapPage() {
                     <button
                       className="btn btn-sm btn-success"
                       onClick={confirmRoute}
+                      type="button"
                     >
                       Tambahkan ke peta
                     </button>
@@ -2722,6 +2733,7 @@ export function MapPage() {
                 className={`segment-item ${selectedId === segment.id ? "selected" : ""}`}
                 key={segment.id}
                 onClick={() => focusAsset(segment)}
+                type="button"
               >
                 <span className="segment-dot" />
                 <span className="segment-meta">
@@ -2759,6 +2771,7 @@ export function MapPage() {
                       className={`segment-item ${selectedId === segment.id ? "selected" : ""}`}
                       key={segment.id}
                       onClick={() => focusAsset(segment)}
+                      type="button"
                     >
                       <span
                         className="segment-dot"
@@ -2790,6 +2803,7 @@ export function MapPage() {
                 className={`segment-item imported-item ${selectedId === line.id ? "selected" : ""}`}
                 key={line.id}
                 onClick={() => focusAsset(line)}
+                type="button"
               >
                 <span className="segment-dot" />
                 <span className="segment-meta">
@@ -2840,6 +2854,7 @@ export function MapPage() {
                       setAssetPage((page) => Math.max(1, page - 1))
                     }
                     title="Sebelumnya"
+                    type="button"
                   >
                     <i aria-hidden="true" className="bi bi-chevron-left" />
                   </button>
@@ -2856,6 +2871,7 @@ export function MapPage() {
                       )
                     }
                     title="Berikutnya"
+                    type="button"
                   >
                     <i aria-hidden="true" className="bi bi-chevron-right" />
                   </button>
@@ -3020,6 +3036,7 @@ export function MapPage() {
                                 selectedSegment.totalCores
                             }
                             onClick={() => verifyCoreUsage.mutate()}
+                            type="button"
                           >
                             {verifyCoreUsage.isPending
                               ? "Menyimpan..."
@@ -3375,6 +3392,7 @@ export function MapPage() {
                       <button
                         className="btn btn-sm btn-outline-primary"
                         disabled={updateAsset.isPending}
+                        type="submit"
                       >
                         {updateAsset.isPending
                           ? "Menyimpan..."
@@ -3481,6 +3499,7 @@ export function MapPage() {
                 aria-label="Tutup"
                 className="btn-close"
                 onClick={() => setFileModal(null)}
+                type="button"
               />
             </header>
             <div className="file-modal-options">
@@ -3492,6 +3511,7 @@ export function MapPage() {
                       setFileModal(null);
                       importInput.current?.click();
                     }}
+                    type="button"
                   >
                     <span>
                       <i className="bi bi-globe2" />
@@ -3512,6 +3532,7 @@ export function MapPage() {
                     className="file-modal-option"
                     disabled={exporting}
                     onClick={() => void downloadNetworkFile("kml")}
+                    type="button"
                   >
                     <span>
                       <i className="bi bi-globe2" />
@@ -3528,6 +3549,7 @@ export function MapPage() {
                     className="file-modal-option"
                     disabled={exporting}
                     onClick={() => void downloadNetworkFile("kmz")}
+                    type="button"
                   >
                     <span>
                       <i className="bi bi-globe2" />
@@ -3544,6 +3566,7 @@ export function MapPage() {
                     className="file-modal-option"
                     disabled={exporting}
                     onClick={() => void downloadNetworkFile("xlsx")}
+                    type="button"
                   >
                     <span>
                       <i className="bi bi-file-earmark-spreadsheet" />
@@ -3563,6 +3586,7 @@ export function MapPage() {
               <button
                 className="btn btn-light"
                 onClick={() => setFileModal(null)}
+                type="button"
               >
                 Tutup
               </button>

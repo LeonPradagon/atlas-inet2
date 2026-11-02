@@ -76,7 +76,11 @@ function Login() {
             type="password"
           />
           {error && <div className="alert alert-danger">{error}</div>}
-          <button className="btn btn-primary w-100" disabled={loading}>
+          <button
+            className="btn btn-primary w-100"
+            disabled={loading}
+            type="submit"
+          >
             {loading ? "Memeriksa..." : "Masuk"}
           </button>
         </form>

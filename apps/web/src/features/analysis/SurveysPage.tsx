@@ -135,6 +135,7 @@ export function SurveysPage() {
                           setForm(s.findings);
                           update.reset();
                         }}
+                        type="button"
                       >
                         Buka pemeriksaan
                       </button>
@@ -173,6 +174,7 @@ export function SurveysPage() {
             <button
               className="btn btn-sm btn-outline-secondary ms-auto"
               onClick={() => setSelected(null)}
+              type="button"
             >
               Tutup
             </button>
@@ -221,6 +223,7 @@ export function SurveysPage() {
                   className="btn btn-primary"
                   disabled={update.isPending}
                   onClick={() => update.mutate("IN_PROGRESS")}
+                  type="button"
                 >
                   Mulai survei
                 </button>
@@ -230,6 +233,7 @@ export function SurveysPage() {
                   className="btn btn-primary"
                   disabled={update.isPending}
                   onClick={() => update.mutate("REVIEW")}
+                  type="button"
                 >
                   Kirim hasil untuk verifikasi
                 </button>
@@ -240,6 +244,7 @@ export function SurveysPage() {
                     className="btn btn-success"
                     disabled={update.isPending}
                     onClick={() => update.mutate("VERIFIED")}
+                    type="button"
                   >
                     Verifikasi hasil survei
                   </button>
@@ -247,6 +252,7 @@ export function SurveysPage() {
                     className="btn btn-outline-warning"
                     disabled={update.isPending}
                     onClick={() => update.mutate("REVISION")}
+                    type="button"
                   >
                     Minta revisi
                   </button>

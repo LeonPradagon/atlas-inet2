@@ -136,6 +136,7 @@ function AddressPinPicker({
   const pointRef = useRef(point);
   pointRef.current = point;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: create the map once; later point/viewport changes are applied by the effects below
   useEffect(() => {
     if (!container.current) {
       return;
@@ -188,6 +189,7 @@ function AddressPinPicker({
     };
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on coordinates so a new point object with the same position does not re-ease the map
   useEffect(() => {
     const map = mapRef.current;
     const marker = markerRef.current;
@@ -205,6 +207,7 @@ function AddressPinPicker({
     });
   }, [point?.longitude, point?.latitude]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on viewport values so a new regionView object with the same values does not re-ease the map
   useEffect(() => {
     const map = mapRef.current;
     if (!map || point || !regionView) {
@@ -647,6 +650,7 @@ export function AddressAnalysisPage() {
         : {}),
     }));
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resolveSuggestionRegions is recreated every render; listing it would re-run this lookup in a loop
   useEffect(() => {
     const normalizeStreet = (value: string) => {
       const romanToArabic: Record<string, string> = {
@@ -1244,6 +1248,7 @@ export function AddressAnalysisPage() {
                       !hasSearchArea ||
                       !selectedPoint?.confirmed
                     }
+                    type="submit"
                   >
                     {analyze.isPending ? (
                       <>

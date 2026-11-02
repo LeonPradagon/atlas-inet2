@@ -191,6 +191,7 @@ export function CoreBookingPage() {
       setPage(pageCount);
     }
   }, [page, pageCount]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bookings/page are triggers: re-scroll once the target row has rendered
   useEffect(() => {
     if (bookingId && filter === "Semua" && !isPending) {
       document
@@ -215,7 +216,11 @@ export function CoreBookingPage() {
     <>
       <PageHeader
         action={
-          <button className="btn btn-primary" onClick={() => setShowForm(true)}>
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowForm(true)}
+            type="button"
+          >
             <i className="bi bi-plus-lg me-2" />
             Buat booking
           </button>
@@ -227,7 +232,7 @@ export function CoreBookingPage() {
         <div className="toast-banner" role="status">
           <i className="bi bi-check-circle-fill" />
           {toast}
-          <button aria-label="Tutup" onClick={() => setToast("")}>
+          <button aria-label="Tutup" onClick={() => setToast("")} type="button">
             <i className="bi bi-x-lg" />
           </button>
         </div>
@@ -278,6 +283,7 @@ export function CoreBookingPage() {
                     className="btn btn-sm btn-primary py-1"
                     disabled={updateDuration.isPending}
                     onClick={() => updateDuration.mutate(newDuration)}
+                    type="button"
                   >
                     Simpan
                   </button>
@@ -294,6 +300,7 @@ export function CoreBookingPage() {
                         setEditDuration(true);
                       }}
                       title="Ubah durasi booking"
+                      type="button"
                     >
                       <i className="bi bi-pencil-square" />
                     </button>
@@ -346,6 +353,7 @@ export function CoreBookingPage() {
                     setFilter(value);
                     setPage(1);
                   }}
+                  type="button"
                 >
                   {value === "Semua" ? "Semua" : bookingStatusLabel(value)}
                   {value === "Pending Approval" && (
@@ -431,6 +439,7 @@ export function CoreBookingPage() {
                               className="btn btn-sm btn-success me-1"
                               disabled={approve.isPending || reject.isPending}
                               onClick={() => approve.mutate(booking)}
+                              type="button"
                             >
                               Setujui
                             </button>
@@ -446,6 +455,7 @@ export function CoreBookingPage() {
                                   reject.mutate(booking);
                                 }
                               }}
+                              type="button"
                             >
                               Tolak
                             </button>
@@ -456,6 +466,7 @@ export function CoreBookingPage() {
                           className="btn btn-sm btn-outline-secondary"
                           disabled={release.isPending}
                           onClick={() => release.mutate(booking)}
+                          type="button"
                         >
                           Release
                         </button>
@@ -503,6 +514,7 @@ export function CoreBookingPage() {
                 aria-label="Tutup"
                 className="btn-close"
                 onClick={() => setShowForm(false)}
+                type="button"
               />
             </div>
             <form onSubmit={addBooking}>
@@ -567,6 +579,7 @@ export function CoreBookingPage() {
                 <button
                   className="btn btn-primary"
                   disabled={create.isPending || !bookableSegments.length}
+                  type="submit"
                 >
                   <i className="bi bi-check2 me-2" />
                   Simpan booking

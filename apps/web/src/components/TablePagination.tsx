@@ -41,6 +41,7 @@ export function TablePagination({
             disabled={page <= 1 || busy}
             onClick={() => onPageChange(Math.max(1, page - 1))}
             title="Sebelumnya"
+            type="button"
           >
             <i aria-hidden="true" className="bi bi-chevron-left" />
           </button>
@@ -50,6 +51,7 @@ export function TablePagination({
             disabled={page >= pageCount || busy}
             onClick={() => onPageChange(Math.min(pageCount, page + 1))}
             title="Berikutnya"
+            type="button"
           >
             <i aria-hidden="true" className="bi bi-chevron-right" />
           </button>
