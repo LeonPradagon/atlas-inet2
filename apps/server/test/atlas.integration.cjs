@@ -88,8 +88,8 @@ async function main() {
     console.log(
       "PASS: FTTH design persists its selected anchor and coverage radius"
     );
-    const booking = (segmentId, cores) =>
-      atlas.createBooking(
+    const requestBooking = async (segmentId, cores) => {
+      const pending = await atlas.createBooking(
         {
           cores,
           customer: `Customer ${randomBytes(4).toString("hex")}`,
@@ -99,6 +99,15 @@ async function main() {
         },
         "presales"
       );
+      assert.equal(
+        pending.status,
+        "Pending Approval",
+        "a new booking waits for ADMIN approval"
+      );
+      return pending.id;
+    };
+    const booking = async (segmentId, cores) =>
+      atlas.approveBooking(await requestBooking(segmentId, cores), "admin");
     const status = async (id) =>
       (await q("SELECT status FROM bookings WHERE id=$1", [id])).rows[0].status;
     async function segment(id, count) {
@@ -146,10 +155,15 @@ async function main() {
     for (const n of [1, 2, 3]) {
       await atlas.setCoreStatus("fifo", n, "Used", "admin");
     }
+    const tailRequest = await requestBooking("fifo", 2);
     const head = await booking("fifo", 4),
-      tail = await booking("fifo", 2);
+      tail = await atlas.approveBooking(tailRequest, "admin");
     assert.equal(head.status, "Waiting List");
-    assert.equal(tail.status, "Waiting List");
+    assert.equal(
+      tail.status,
+      "Waiting List",
+      "an earlier request approved later queues behind the head"
+    );
     assert.equal(
       (await atlas.listCores("fifo")).filter((c) => c.status === "Available")
         .length,
@@ -164,7 +178,7 @@ async function main() {
     await atlas.setCoreStatus("fifo", 3, "Available", "admin");
     assert.equal(await status(tail.id), "Booked");
     console.log(
-      "PASS: strict FIFO, no new request bypass, Available status triggers allocation"
+      "PASS: strict FIFO by approval order, no later approval bypass, Available status triggers allocation"
     );
 
     await segment("capacity", 4);
