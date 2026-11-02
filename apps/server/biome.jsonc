@@ -1,0 +1,13 @@
+{
+  "$schema": "../../node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": ["ultracite/biome/core", "../../biome.jsonc", "ultracite/biome/nestjs"],
+  "root": false,
+  "files": {
+    // Generated Indonesia region dataset (~15 MB of JSON).
+    "includes": ["**", "!!src/database/regions"]
+  },
+  "javascript": {
+    // Nest DI: @Inject(), @Req(), @Body() etc. on constructor/method params.
+    "parser": { "unsafeParameterDecoratorsEnabled": true }
+  }
+}

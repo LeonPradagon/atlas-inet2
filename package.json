@@ -5,6 +5,12 @@
     "dev:server": "npm --prefix apps/server run start:dev:local",
     "dev:web": "npm --prefix apps/web run dev",
     "migrate:local": "npm --prefix apps/server run migrate:local",
-    "bootstrap-admin:local": "npm --prefix apps/server run bootstrap-admin:local"
+    "bootstrap-admin:local": "npm --prefix apps/server run bootstrap-admin:local",
+    "check": "ultracite check",
+    "fix": "ultracite fix"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.4",
+    "ultracite": "^8.1.1"
   }
 }
