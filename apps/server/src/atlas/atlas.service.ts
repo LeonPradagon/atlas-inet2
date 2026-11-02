@@ -33,17 +33,18 @@ type AssetRecord = {
   attributes: Record<string, unknown>;
   createdAt: string;
 };
-
 // Imports created before package IDs were stored share their transaction timestamp with the audit entry.
 const assetImportId = `COALESCE(a.attributes->>'__atlasImportId', (SELECT legacy.entity_id FROM audit_logs legacy
   WHERE legacy.action='NETWORK_IMPORTED' AND legacy.entity_type='NETWORK_IMPORT'
     AND legacy.details->>'source'='kml/kmz' AND legacy.created_at=a.created_at AND a.source='kml'
   ORDER BY legacy.id LIMIT 1))`;
-
 const provinceMatch = (provinceParam: number) =>
   `a.attributes->>'__atlasProvinceCode'=$${provinceParam}`;
-
-type RegionName = { provinceCode: string; name: string; level: number };
+type RegionName = {
+  provinceCode: string;
+  name: string;
+  level: number;
+};
 type KmzProvinceAsset = {
   id: string;
   name: string;
@@ -55,7 +56,6 @@ type KmzProvinceBoundary = {
   provinceName: string;
   geometry: unknown;
 };
-
 const normalizeRegionText = (value: string) =>
   value
     .normalize("NFD")
@@ -68,7 +68,6 @@ const normalizeRegionText = (value: string) =>
     .replace(/[^a-z0-9]+/gu, " ")
     .trim()
     .replace(/\s+/gu, " ");
-
 const kmzGroup = (path: string) => {
   const folders = path
     .split("/")
@@ -88,12 +87,13 @@ const kmzGroup = (path: string) => {
   }
   return folders[1] ?? folders[0] ?? "";
 };
-
 @Injectable()
 export class AtlasService implements OnModuleInit, OnModuleDestroy {
   private expiryTimer?: NodeJS.Timeout;
-  constructor(@Inject(Database) private readonly db: Database) {}
-
+  constructor(
+    @Inject(Database)
+    private readonly db: Database
+  ) {}
   private async audit(
     client: PoolClient,
     actorId: string | null,
@@ -107,7 +107,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       [actorId, action, entityType, entityId, JSON.stringify(details)]
     );
   }
-
   async recordAudit(
     actorId: string | null,
     action: string,
@@ -117,7 +116,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       this.audit(client, actorId, action, "PROCESS", null, details)
     );
   }
-
   async surveyCandidates(userId: string) {
     const { rows } = await this.db.query(
       `WITH candidates AS (
@@ -132,7 +130,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     );
     return rows;
   }
-
   async listSurveys(userId: string, admin: boolean) {
     return (
       await this.db.query(
@@ -141,7 +138,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       )
     ).rows;
   }
-
   async createSurvey(userId: string, historyId: string, rowNumber: number) {
     if (
       !(/^[0-9a-f-]{36}$/iu.test(historyId) && Number.isInteger(rowNumber)) ||
@@ -219,7 +215,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       return rows[0];
     });
   }
-
   async updateSurvey(
     userId: string,
     admin: boolean,
@@ -298,7 +293,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       return { id, status };
     });
   }
-
   async recordApiRequest(
     actorId: string | null,
     method: string,
@@ -316,7 +310,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       })
     );
   }
-
   async saveAnalysisHistory(
     userId: string,
     type: "ADDRESS" | "BULK",
@@ -340,7 +333,12 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       const id = rows[0].id as string;
       const payload =
         result && typeof result === "object"
-          ? (result as { status?: string; rows?: { status?: string }[] })
+          ? (result as {
+              status?: string;
+              rows?: {
+                status?: string;
+              }[];
+            })
           : {};
       const statusCounts = (payload.rows ?? []).reduce<Record<string, number>>(
         (counts, row) => {
@@ -367,7 +365,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       return id;
     });
   }
-
   async listAnalysisHistory(
     userId: string,
     type?: "ADDRESS" | "BULK" | "FTTH_DESIGN",
@@ -413,7 +410,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       total: rows[0]?.total ?? 0,
     };
   }
-
   async getAnalysisHistory(userId: string, id: string) {
     const { rows } = await this.db.query(
       `SELECT h.id,h.analysis_type AS "analysisType",h.title,h.input,h.result,h.created_at AS "createdAt",
@@ -451,7 +447,9 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         (feature: {
           kind?: string;
           routeType?: string;
-          geometry?: { coordinates?: unknown };
+          geometry?: {
+            coordinates?: unknown;
+          };
         }) => {
           if (
             feature.kind !== "OLT" &&
@@ -484,7 +482,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     });
     return { ...rows[0], relatedDrafts };
   }
-
   async deleteAnalysisHistory(userId: string, id: string) {
     await this.db.transaction(async (client) => {
       const { rows } = await client.query(
@@ -510,7 +507,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       );
     });
   }
-
   async listAuditTrails(search = "", limit = 100) {
     const { rows } = await this.db.query(
       `SELECT l.id,l.action,l.entity_type AS "entityType",l.entity_id AS "entityId",l.details,
@@ -522,7 +518,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     );
     return rows;
   }
-
   onModuleInit() {
     this.expiryTimer = setInterval(
       () =>
@@ -538,7 +533,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       clearInterval(this.expiryTimer);
     }
   }
-
   async listAssets(search = "") {
     const { rows } = await this.db.query<AssetRecord>(
       `SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
@@ -558,7 +552,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       nameValid: pattern.test(asset.name),
     }));
   }
-
   async listAssetImports() {
     const { rows } = await this.db.query(`SELECT l.entity_id AS id,
         COALESCE(l.details->>'fileName', 'Map Package') AS name,
@@ -585,7 +578,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       ORDER BY l.created_at DESC LIMIT 50`);
     return rows;
   }
-
   async listAssetPage(
     search = "",
     page = 1,
@@ -604,7 +596,9 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       AND ($4::text IS NULL OR ${provinceCondition})
       AND ($5::text IS NULL OR ${assetImportId}=ANY(string_to_array($5, ',')))`;
     const [{ rows: countRows }, { rows }] = await Promise.all([
-      this.db.query<{ total: number }>(
+      this.db.query<{
+        total: number;
+      }>(
         `SELECT count(*)::int AS total FROM network_assets a
         WHERE ${conditions}`,
         [filter, match, coreFilter, provinceCode ?? null, importId ?? null]
@@ -645,7 +639,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       total: countRows[0].total,
     };
   }
-
   async listDashboardSegments() {
     const { rows } =
       await this.db.query<AssetRecord>(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
@@ -662,7 +655,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       nameValid: pattern.test(asset.name),
     }));
   }
-
   async listBookableSegments() {
     const { rows } =
       await this.db.query(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.total_cores AS "totalCores",
@@ -672,7 +664,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       GROUP BY a.id ORDER BY a.name,a.id`);
     return rows;
   }
-
   async mapBounds(provinceCode?: string, importId?: string) {
     const provinceCondition = provinceMatch(1);
     const { rows } = await this.db.query(
@@ -684,7 +675,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     const { west, south, east, north } = rows[0];
     return { bounds: west === null ? null : [west, south, east, north] };
   }
-
   async listKmzProvinces() {
     const { rows: assets } =
       await this.db.query<KmzProvinceAsset>(`SELECT id,name,COALESCE(area,'') AS area,
@@ -696,7 +686,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       UNION ALL SELECT c.province_code,btrim(d.name),2 FROM indonesia_districts d JOIN indonesia_cities c ON c.code=d.city_code
       UNION ALL SELECT c.province_code,btrim(s.name),1 FROM indonesia_subdistricts s
         JOIN indonesia_districts d ON d.code=s.district_code JOIN indonesia_cities c ON c.code=d.city_code`);
-
     const assetGroups = new Map<string, KmzProvinceAsset[]>();
     const folderNamesByGroup = new Map<string, Set<string>>();
     for (const asset of assets) {
@@ -712,7 +701,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       folders.add(asset.folderPath);
       folderNamesByGroup.set(key, folders);
     }
-
     const { rows: boundaries } = await this.db.query<{
       folderPath: string;
       village: string;
@@ -731,7 +719,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       villages.add(village);
       villagesByGroup.set(group, villages);
     }
-
     const regionsByName = new Map<string, RegionName[]>();
     for (const region of regions) {
       const normalized = normalizeRegionText(region.name);
@@ -748,7 +735,13 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         matches.filter((region) => region.level === 1),
       ])
     );
-    const provinceByGroup = new Map<string, { code: string; source: string }>();
+    const provinceByGroup = new Map<
+      string,
+      {
+        code: string;
+        source: string;
+      }
+    >();
     for (const [group, groupAssets] of assetGroups) {
       const areaNames = [
         ...new Set(
@@ -784,7 +777,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         });
         continue;
       }
-
       const areaCandidates = areaNames.flatMap(
         (area) => regionsByName.get(area) ?? []
       );
@@ -798,7 +790,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         });
         continue;
       }
-
       const exactFolderNames = new Set<string>([group]);
       for (const folderPath of folderNamesByGroup.get(group) ?? []) {
         for (const folder of folderPath.split("/")) {
@@ -831,10 +822,13 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
-
     const updatesByValue = new Map<
       string,
-      { code: string; source: string; ids: string[] }
+      {
+        code: string;
+        source: string;
+        ids: string[];
+      }
     >();
     const unresolvedIds: string[] = [];
     for (const [group, groupAssets] of assetGroups) {
@@ -862,7 +856,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         [unresolvedIds]
       );
     }
-
     // Coordinates are authoritative when folder names do not identify a province.
     const provinceNames = regions.filter((region) => region.level === 4);
     const spatialProvinces = provinceBoundaries.features.flatMap((feature) => {
@@ -895,7 +888,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       FROM assigned WHERE a.id=assigned.id AND (a.attributes->>'__atlasProvinceCode' IS DISTINCT FROM assigned.code OR a.attributes->>'__atlasProvinceSource' IS DISTINCT FROM 'geometry-boundary')`,
       [JSON.stringify(spatialProvinces)]
     );
-
     const { rows: spatialGroups } = await this.db.query<{
       id: string;
       folderPath: string;
@@ -928,7 +920,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         [asset.id, [...codes][0]]
       );
     }
-
     const { rows } =
       await this.db.query(`SELECT p.code,btrim(p.name) AS name,count(DISTINCT a.id)::int AS "assetCount",
         count(DISTINCT a.attributes->>'folderPath')::int AS "folderCount",
@@ -947,7 +938,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       unassigned: unresolved[0] ?? { assetCount: 0, folderCount: 0 },
     };
   }
-
   async listKmzProvinceBoundaries() {
     const { rows } =
       await this.db.query<KmzProvinceBoundary>(`SELECT a.attributes->>'__atlasProvinceCode' AS "provinceCode",btrim(p.name) AS "provinceName",
@@ -965,9 +955,11 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       type: "FeatureCollection",
     };
   }
-
   async getKmzIcon(id: string) {
-    const { rows } = await this.db.query<{ mimeType: string; content: Buffer }>(
+    const { rows } = await this.db.query<{
+      mimeType: string;
+      content: Buffer;
+    }>(
       'SELECT mime_type AS "mimeType",content FROM network_kml_icons WHERE id=$1',
       [id]
     );
@@ -977,7 +969,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     }
     return { data: icon.content.toString("base64"), mimeType: icon.mimeType };
   }
-
   async listMapAssets(
     bounds: [number, number, number, number],
     zoom = 16,
@@ -1008,7 +999,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       nameValid: pattern.test(asset.name),
     }));
   }
-
   async createPointAsset(
     body: {
       name?: unknown;
@@ -1094,12 +1084,14 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     });
     return { area, id, kind, latitude, longitude, name, poleHeight };
   }
-
   async saveFtthDesign(
     input: unknown,
     userId: string,
     areaInput: unknown,
-    sourceInput?: { analysisId?: unknown; row?: unknown }
+    sourceInput?: {
+      analysisId?: unknown;
+      row?: unknown;
+    }
   ) {
     if (!Array.isArray(input) || input.length < 1 || input.length > 500) {
       throw new BadRequestException({
@@ -1153,7 +1145,10 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
           ? feature.poleHeight
           : null;
       const geometry = feature.geometry as
-        | { type?: unknown; coordinates?: unknown }
+        | {
+            type?: unknown;
+            coordinates?: unknown;
+          }
         | undefined;
       if (
         !(kinds.includes(kind) && name) ||
@@ -1378,7 +1373,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     });
     return { designId, historyId, savedCount: features.length };
   }
-
   async assetGeometry(id: string) {
     const { rows } = await this.db.query(
       `SELECT COALESCE(source_geometry,ST_AsGeoJSON(geometry)::jsonb) AS geometry,
@@ -1390,7 +1384,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     }
     return rows[0];
   }
-
   async updateAsset(id: string, body: Record<string, unknown>, userId: string) {
     const validInstallation = ["Aerial", "Burial"].includes(
       String(body.installation)
@@ -1480,7 +1473,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     });
     return (await this.listAssets()).find((asset) => asset.id === id);
   }
-
   async listRelations(segmentId: string) {
     const { rows: segment } = await this.db.query(
       "SELECT id FROM network_assets WHERE id=$1 AND asset_type='segment'",
@@ -1497,7 +1489,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     );
     return rows;
   }
-
   async saveRelations(segmentId: string, input: unknown, userId: string) {
     if (!Array.isArray(input) || input.length > 1000) {
       throw new BadRequestException({
@@ -1568,7 +1559,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     });
     return this.listRelations(segmentId);
   }
-
   async listCores(assetId: string) {
     const { rows: segment } = await this.db.query(
       "SELECT id FROM network_assets WHERE id=$1 AND asset_type='segment'",
@@ -1585,7 +1575,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     );
     return rows;
   }
-
   async verifyCoreUsage(
     assetId: string,
     source: string | undefined,
@@ -1600,10 +1589,8 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     const cleanNote = String(note ?? "")
       .trim()
       .slice(0, 500);
-    if (!(allowedSources.includes(String(source)) && cleanNote)) {
-      throw new BadRequestException({
-        message: "Pilih sumber verifikasi dan isi catatan pemeriksaan.",
-      });
+    if (!allowedSources.includes(String(source))) {
+      throw new BadRequestException({ message: "Pilih sumber verifikasi." });
     }
     return this.db.transaction(async (client) => {
       const { rows: assets } = await client.query(
@@ -1654,7 +1641,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       return { assetId, ...verification };
     });
   }
-
   private async setCoreCount(
     client: PoolClient,
     assetId: string,
@@ -1686,7 +1672,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       [assetId, total]
     );
   }
-
   async setCoreStatus(
     assetId: string,
     coreNumber: number,
@@ -1748,7 +1733,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       return { assetId, coreNumber, status: current[0].status };
     });
   }
-
   async dashboard() {
     const [assets, bookings, topSegments] = await Promise.all([
       this.db.query(`SELECT (SELECT count(*)::int FROM network_assets WHERE asset_type='segment') AS segments,
@@ -1766,7 +1750,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         .length,
     };
   }
-
   async networkUsageReport() {
     const { rows } =
       await this.db.query(`SELECT a.id,a.name,a.area,a.cable_type AS "cableType",a.total_cores AS "totalCores",
@@ -1781,7 +1764,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       WHERE a.asset_type='segment' GROUP BY a.id ORDER BY a.area,a.name`);
     return rows;
   }
-
   async listBookings() {
     const { rows } =
       await this.db.query(`SELECT b.id,b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",
@@ -1790,7 +1772,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       FROM bookings b JOIN network_assets a ON a.id=b.segment_id ORDER BY b.requested_at DESC,b.id DESC`);
     return rows;
   }
-
   async getBookingDuration() {
     const { rows } = await this.db.query(
       "SELECT value FROM app_settings WHERE key='booking_duration_days'"
@@ -1813,7 +1794,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     );
     return { days };
   }
-
   async getCableNamePattern() {
     const { rows } = await this.db.query(
       "SELECT value FROM app_settings WHERE key='cable_name_pattern'"
@@ -1846,7 +1826,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     );
     return { pattern };
   }
-
   async createBooking(
     input: {
       customer?: string;
@@ -1923,7 +1902,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       };
     });
   }
-
   async approveBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
       const { rows: targets } = await client.query(
@@ -1982,7 +1960,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       return { allocatedBookingIds, id, status };
     });
   }
-
   async rejectBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
       const { rows: targets } = await client.query(
@@ -2025,7 +2002,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       return { id, status: "Rejected" };
     });
   }
-
   private async assignCores(
     client: PoolClient,
     bookingId: string,
@@ -2042,7 +2018,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       );
     }
   }
-
   async releaseBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
       const { rows: targets } = await client.query(
@@ -2099,7 +2074,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       };
     });
   }
-
   // All callers hold the segment lock; the first unfulfilled request blocks later requests.
   private async allocateWaiting(
     client: PoolClient,
@@ -2151,7 +2125,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     }
     return allocated;
   }
-
   private async notifyPresales(
     client: PoolClient,
     title: string,
@@ -2165,7 +2138,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       [title, message, requestorId ?? "", bookingId ?? null]
     );
   }
-
   private async notifyAdmins(
     client: PoolClient,
     title: string,
@@ -2178,7 +2150,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       [title, message, bookingId ?? null]
     );
   }
-
   async expireBookings() {
     const { rows } = await this.db.query(
       "SELECT id,segment_id FROM bookings WHERE status='Booked' AND expires_at <= now() ORDER BY expires_at LIMIT 50"
@@ -2227,7 +2198,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       });
     }
   }
-
   async nearestNetwork(
     longitude: number,
     latitude: number,
@@ -2243,7 +2213,9 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         totalCores: number;
         attributes: Record<string, unknown>;
         source: string;
-        nearestPoint: { coordinates: [number, number] };
+        nearestPoint: {
+          coordinates: [number, number];
+        };
         straightDistanceMeters: number;
         searchRadiusMeters: number;
         geometry: unknown;
@@ -2343,7 +2315,6 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     }
     return null;
   }
-
   async notifications(userId: string) {
     const { rows } = await this.db.query(
       'SELECT id,title,message,booking_id AS "bookingId",read_at AS "readAt",created_at AS "createdAt" FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100',

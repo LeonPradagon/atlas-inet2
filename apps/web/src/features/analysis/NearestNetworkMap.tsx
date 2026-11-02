@@ -18,6 +18,30 @@ import {
 } from "../map/networkMap";
 import type { NetworkCapacity } from "./NetworkCapacityDetail";
 
+function cableDisplayDetails(name: string) {
+  const parts = name
+    .split(" · ")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const category = parts[0]?.toUpperCase() ?? "";
+  const type = category.includes("SUB-DISTRIBUSI")
+    ? "Sub-distribusi"
+    : category.includes("DISTRIBUSI")
+      ? "Distribusi"
+      : category.includes("FEEDER")
+        ? "Feeder"
+        : category.includes("BACKBONE")
+          ? "Backbone"
+          : "Kabel jaringan";
+  const variant = parts[1] ?? "";
+  const coreMatch =
+    variant.match(/(?:_|-)(\d+)C\b/i) ?? name.match(/\b(\d+)\s*core\b/i);
+  return {
+    type,
+    capacity: coreMatch ? `${coreMatch[1]} Core` : "Belum diketahui",
+    code: parts[2] ?? parts[1] ?? name,
+  };
+}
 export type NetworkSearchResult = {
   latitude: number;
   longitude: number;
@@ -31,13 +55,14 @@ export type NetworkSearchResult = {
     cableType?: string;
     searchRadiusMeters?: number;
     straightDistanceMeters?: number;
-    nearestPoint?: { coordinates: [number, number] };
+    nearestPoint?: {
+      coordinates: [number, number];
+    };
     geometry?: Geometry;
   } | null;
   routeGeometry?: Geometry;
   distanceMeters: number | null;
 };
-
 function offsetCoordinate(
   [longitude, latitude]: [number, number],
   meters: number,
@@ -58,12 +83,15 @@ function offsetCoordinate(
     );
   return [(lon2 * 180) / Math.PI, (lat2 * 180) / Math.PI];
 }
-
 export function NetworkLocationsMap({
   points,
   onSelect,
 }: {
-  points: { row: number; latitude: number; longitude: number }[];
+  points: {
+    row: number;
+    latitude: number;
+    longitude: number;
+  }[];
   onSelect: (row: number) => void;
 }) {
   const element = useRef<HTMLElement>(null);
@@ -138,7 +166,6 @@ export function NetworkLocationsMap({
     />
   );
 }
-
 export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
   const [assetError, setAssetError] = useState("");
   const [assetCount, setAssetCount] = useState(0);
@@ -228,7 +255,6 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
           "line-dasharray": [3, 2],
         },
       });
-
       map.addLayer({
         id: "cable-route",
         type: "line",
@@ -584,16 +610,68 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
                 ["Latitude", event.lngLat.lat],
                 ["Longitude", event.lngLat.lng],
               ];
-
-        for (const [label, value] of rows) {
+        const appendTableRow = (
+          label: string,
+          value: unknown,
+          valueClass = ""
+        ) => {
           const tr = document.createElement("tr");
           const th = document.createElement("th");
           const td = document.createElement("td");
           th.scope = "row";
           th.textContent = label;
+          td.className = `text-break ${valueClass}`.trim();
           td.textContent = String(value ?? "");
           tr.append(th, td);
           body.append(tr);
+        };
+        for (const [label, value] of rows) {
+          appendTableRow(label, value);
+        }
+        if (feature.layer.id === "cable-route" && result.network?.name) {
+          const display = cableDisplayDetails(result.network.name);
+          const capacity = result.network.capacity;
+          const recommendationHeading = document.createElement("tr");
+          const recommendationCell = document.createElement("th");
+          recommendationCell.colSpan = 2;
+          recommendationCell.textContent = "Rekomendasi kabel";
+          recommendationHeading.append(recommendationCell);
+          body.append(recommendationHeading);
+          appendTableRow("Jenis kabel", display.type);
+          appendTableRow("Kapasitas", display.capacity);
+          appendTableRow("Kode aset", display.code);
+          if (
+            !capacity ||
+            capacity.totalCores === null ||
+            !capacity.usageVerified
+          ) {
+            appendTableRow("Ketersediaan", "Belum diketahui", "text-secondary");
+            appendTableRow(
+              "Status",
+              capacity?.totalCores === null || !capacity
+                ? "Perlu verifikasi kapasitas"
+                : "Belum terverifikasi",
+              "text-warning"
+            );
+          } else {
+            const available = `${capacity.availableCores.toLocaleString("id-ID")} dari ${capacity.totalCores.toLocaleString("id-ID")} core tercatat tersedia`;
+            const status =
+              capacity.availableCores > 0
+                ? capacity.usageVerified
+                  ? "Tersedia"
+                  : "Perlu verifikasi"
+                : capacity.usageVerified
+                  ? "Penuh"
+                  : "Ketersediaan perlu diverifikasi";
+            const statusClass =
+              capacity.availableCores === 0 && capacity.usageVerified
+                ? "text-danger"
+                : capacity.availableCores > 0 && capacity.usageVerified
+                  ? "text-success"
+                  : "text-warning";
+            appendTableRow("Ketersediaan", available, statusClass);
+            appendTableRow("Status", status, statusClass);
+          }
         }
         table.append(body);
         content.append(table);
