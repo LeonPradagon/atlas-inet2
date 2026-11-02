@@ -8,9 +8,17 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import type { PoolClient } from "pg";
 import { audit } from "../database/audit";
 import { Database } from "../database/database";
+import {
+  appSettings,
+  auditLogs,
+  bookings,
+  networkAssets,
+  networkCores,
+} from "../database/schema";
 
 export type CreateBookingInput = {
   customer?: string;
@@ -43,28 +51,54 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async listBookableSegments() {
-    const { rows } =
-      await this.db.query(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.total_cores AS "totalCores",
-      count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores"
-      FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
-      WHERE a.asset_type='segment' AND a.total_cores>0
-      GROUP BY a.id ORDER BY a.name,a.id`);
-    return rows;
+    return this.db.orm
+      .select({
+        area: networkAssets.area,
+        assetType: networkAssets.assetType,
+        id: networkAssets.id,
+        idleCores: sql<number>`count(${networkCores.id}) FILTER (WHERE ${networkCores.status}='Available')::int`,
+        name: networkAssets.name,
+        totalCores: networkAssets.totalCores,
+      })
+      .from(networkAssets)
+      .leftJoin(networkCores, eq(networkCores.assetId, networkAssets.id))
+      .where(
+        and(
+          eq(networkAssets.assetType, "segment"),
+          gt(networkAssets.totalCores, 0)
+        )
+      )
+      .groupBy(networkAssets.id)
+      .orderBy(networkAssets.name, networkAssets.id);
   }
 
   async listBookings() {
-    const { rows } =
-      await this.db.query(`SELECT b.id,b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",
-      b.segment_id AS "segmentId",b.cores,b.status,b.requested_at AS "requestedAt",b.expires_at AS "expiresAt",
-      b.approved_at AS "approvedAt",b.rejected_at AS "rejectedAt",a.name AS "segmentName",a.area
-      FROM bookings b JOIN network_assets a ON a.id=b.segment_id ORDER BY b.requested_at DESC,b.id DESC`);
-    return rows;
+    return this.db.orm
+      .select({
+        approvedAt: bookings.approvedAt,
+        area: networkAssets.area,
+        cores: bookings.cores,
+        customer: bookings.customer,
+        expiresAt: bookings.expiresAt,
+        id: bookings.id,
+        picCustomer: bookings.picCustomer,
+        picPresales: bookings.picPresales,
+        rejectedAt: bookings.rejectedAt,
+        requestedAt: bookings.requestedAt,
+        segmentId: bookings.segmentId,
+        segmentName: networkAssets.name,
+        status: bookings.status,
+      })
+      .from(bookings)
+      .innerJoin(networkAssets, eq(networkAssets.id, bookings.segmentId))
+      .orderBy(desc(bookings.requestedAt), desc(bookings.id));
   }
 
   async getBookingDuration() {
-    const { rows } = await this.db.query(
-      "SELECT value FROM app_settings WHERE key='booking_duration_days'"
-    );
+    const rows = await this.db.orm
+      .select({ value: appSettings.value })
+      .from(appSettings)
+      .where(eq(appSettings.key, "booking_duration_days"));
     return { days: Number(rows[0]?.value ?? 30) };
   }
 
@@ -74,14 +108,20 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         message: "Durasi booking harus 1–365 hari.",
       });
     }
-    await this.db.query(
-      "INSERT INTO app_settings(key,value) VALUES('booking_duration_days',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
-      [JSON.stringify(days)]
-    );
-    await this.db.query(
-      "INSERT INTO audit_logs(actor_id,action,entity_type,entity_id,details) VALUES($1,'BOOKING_DURATION_UPDATED','SETTING','booking_duration_days',$2::jsonb)",
-      [userId, JSON.stringify({ days })]
-    );
+    await this.db.orm
+      .insert(appSettings)
+      .values({ key: "booking_duration_days", value: days })
+      .onConflictDoUpdate({
+        set: { value: sql`EXCLUDED.value` },
+        target: appSettings.key,
+      });
+    await this.db.orm.insert(auditLogs).values({
+      action: "BOOKING_DURATION_UPDATED",
+      actorId: userId,
+      details: { days },
+      entityId: "booking_duration_days",
+      entityType: "SETTING",
+    });
     return { days };
   }
 
