@@ -9,6 +9,7 @@ import {
   type OnModuleInit,
 } from "@nestjs/common";
 import type { PoolClient } from "pg";
+import { audit } from "../database/audit";
 import { Database } from "../database/database";
 import provinceBoundaries from "../database/regions/province-boundaries.json";
 
@@ -94,26 +95,13 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     @Inject(Database)
     private readonly db: Database
   ) {}
-  private async audit(
-    client: PoolClient,
-    actorId: string | null,
-    action: string,
-    entityType: string,
-    entityId: string | null,
-    details: Record<string, unknown>
-  ) {
-    await client.query(
-      "INSERT INTO audit_logs(actor_id,action,entity_type,entity_id,details) VALUES($1,$2,$3,$4,$5::jsonb)",
-      [actorId, action, entityType, entityId, JSON.stringify(details)]
-    );
-  }
   async recordAudit(
     actorId: string | null,
     action: string,
     details: Record<string, unknown>
   ) {
     await this.db.transaction((client) =>
-      this.audit(client, actorId, action, "PROCESS", null, details)
+      audit(client, actorId, action, "PROCESS", null, details)
     );
   }
   async surveyCandidates(userId: string) {
@@ -204,14 +192,10 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       if (!rows.length) {
         throw new ConflictException({ message: "Survei sudah diajukan." });
       }
-      await this.audit(
-        client,
-        userId,
-        "SURVEY_REQUESTED",
-        "SURVEY",
-        rows[0].id,
-        { historyId, rowNumber }
-      );
+      await audit(client, userId, "SURVEY_REQUESTED", "SURVEY", rows[0].id, {
+        historyId,
+        rowNumber,
+      });
       return rows[0];
     });
   }
@@ -285,7 +269,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         `UPDATE network_surveys SET status=$2,findings=$3::jsonb,verified_by=CASE WHEN $2='VERIFIED' THEN $4 ELSE NULL END,verified_at=CASE WHEN $2='VERIFIED' THEN now() ELSE NULL END,updated_at=now() WHERE id=$1`,
         [id, status, JSON.stringify(findings), userId]
       );
-      await this.audit(client, userId, "SURVEY_STATUS_CHANGED", "SURVEY", id, {
+      await audit(client, userId, "SURVEY_STATUS_CHANGED", "SURVEY", id, {
         findings,
         from: survey.status,
         to: status,
@@ -302,7 +286,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
   ) {
     const action = statusCode >= 400 ? "API_REQUEST_FAILED" : "API_REQUEST";
     await this.db.transaction((client) =>
-      this.audit(client, actorId, action, "API", `${method} ${path}`, {
+      audit(client, actorId, action, "API", `${method} ${path}`, {
         durationMs,
         method,
         path,
@@ -352,7 +336,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         type === "BULK"
           ? { rowCount: payload.rows?.length ?? 0, statusCounts }
           : { status: payload.status ?? "COMPLETED" };
-      await this.audit(
+      await audit(
         client,
         userId,
         type === "BULK"
@@ -497,7 +481,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         "DELETE FROM analysis_history WHERE user_id=$1 AND id=$2",
         [userId, id]
       );
-      await this.audit(
+      await audit(
         client,
         userId,
         "ANALYSIS_HISTORY_DELETED",
@@ -1074,7 +1058,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
           JSON.stringify({ coordinates: [longitude, latitude], type: "Point" }),
         ]
       );
-      await this.audit(client, userId, "FTTH_ASSET_CREATED", "ASSET", id, {
+      await audit(client, userId, "FTTH_ASSET_CREATED", "ASSET", id, {
         area,
         kind,
         latitude,
@@ -1358,7 +1342,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
           JSON.stringify(historyResult),
         ]
       );
-      await this.audit(
+      await audit(
         client,
         userId,
         "FTTH_DESIGN_CREATED",
@@ -1467,7 +1451,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         await this.setCoreCount(client, id, total);
         await this.allocateWaiting(client, id, userId);
       }
-      await this.audit(client, userId, "ASSET_UPDATED", "ASSET", id, {
+      await audit(client, userId, "ASSET_UPDATED", "ASSET", id, {
         fields: Object.keys(body),
       });
     });
@@ -1548,7 +1532,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
           [segmentId, entry.assetId, entry.kind]
         );
       }
-      await this.audit(
+      await audit(
         client,
         userId,
         "ASSET_RELATIONS_UPDATED",
@@ -1630,7 +1614,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         `UPDATE network_assets SET attributes=jsonb_set(COALESCE(attributes,'{}'::jsonb),'{__coreUsageVerification}',$2::jsonb,true),updated_at=now() WHERE id=$1`,
         [assetId, JSON.stringify(verification)]
       );
-      await this.audit(
+      await audit(
         client,
         userId,
         "CORE_USAGE_VERIFIED",
@@ -1715,7 +1699,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         `UPDATE network_assets SET attributes=attributes-'__coreUsageVerified' || jsonb_build_object('__coreUsageVerification',COALESCE(attributes->'__coreUsageVerification','{}'::jsonb) || '{"verified":false}'::jsonb),updated_at=now() WHERE id=$1`,
         [assetId]
       );
-      await this.audit(
+      await audit(
         client,
         userId,
         "CORE_STATUS_CHANGED",
@@ -1886,7 +1870,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         `${customer} meminta ${cores} core pada segmen ${segmentId}.`,
         id
       );
-      await this.audit(client, userId, "BOOKING_CREATED", "BOOKING", id, {
+      await audit(client, userId, "BOOKING_CREATED", "BOOKING", id, {
         cores,
         segmentId,
         status: "Pending Approval",
@@ -1940,7 +1924,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         [id]
       );
       const status = result[0].status as string;
-      await this.audit(client, userId, "BOOKING_APPROVED", "BOOKING", id, {
+      await audit(client, userId, "BOOKING_APPROVED", "BOOKING", id, {
         allocatedBookingIds,
         cores: booking.cores,
         segmentId: booking.segment_id,
@@ -1988,7 +1972,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         "UPDATE bookings SET status='Rejected',rejected_by=$2,rejected_at=clock_timestamp() WHERE id=$1",
         [id, userId]
       );
-      await this.audit(client, userId, "BOOKING_REJECTED", "BOOKING", id, {
+      await audit(client, userId, "BOOKING_REJECTED", "BOOKING", id, {
         cores: booking.cores,
         segmentId: booking.segment_id,
       });
@@ -2055,7 +2039,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         booking.segment_id,
         userId
       );
-      await this.audit(client, userId, "BOOKING_RELEASED", "BOOKING", id, {
+      await audit(client, userId, "BOOKING_RELEASED", "BOOKING", id, {
         allocatedBookingIds,
         cores: booking.cores,
         segmentId: booking.segment_id,
@@ -2106,7 +2090,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
         "UPDATE bookings SET status='Booked',expires_at=now()+($2||' days')::interval WHERE id=$1",
         [booking.id, days]
       );
-      await this.audit(
+      await audit(
         client,
         actorId,
         "WAITING_LIST_ALLOCATED",
@@ -2190,7 +2174,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
           client,
           booking.segment_id
         );
-        await this.audit(client, null, "BOOKING_EXPIRED", "BOOKING", id, {
+        await audit(client, null, "BOOKING_EXPIRED", "BOOKING", id, {
           allocatedBookingIds,
           cores: booking.cores,
           segmentId: booking.segment_id,
@@ -2331,14 +2315,9 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       if (!rowCount) {
         throw new NotFoundException({ message: "Notifikasi tidak ditemukan." });
       }
-      await this.audit(
-        client,
-        userId,
-        "NOTIFICATION_READ",
-        "NOTIFICATION",
-        id,
-        { read: true }
-      );
+      await audit(client, userId, "NOTIFICATION_READ", "NOTIFICATION", id, {
+        read: true,
+      });
     });
     return { id, read: true };
   }
