@@ -426,12 +426,24 @@ function matchesAssetSearch(asset: NetworkAsset, query: string) {
 function SegmentCoreSummary({ asset }: { asset: NetworkAsset }) {
   if (asset.assetType !== "segment") return null;
   if (!asset.totalCores) return <small className="segment-core-empty">Core belum diisi</small>;
+  const verified = isCoreUsageVerified(asset);
   return <span className="segment-core-summary">
     <span>{asset.totalCores.toLocaleString("id-ID")} total</span>
     <span className="core-used">{asset.usedCores.toLocaleString("id-ID")} terpakai</span>
     <span className="core-booked">{asset.bookedCores.toLocaleString("id-ID")} dibooking</span>
-    <span className="core-available">{asset.idleCores.toLocaleString("id-ID")} tersedia</span>
+    {verified && <span className="core-available">{asset.idleCores.toLocaleString("id-ID")} tersedia</span>}
   </span>;
+}
+
+function isCoreUsageVerified(asset: NetworkAsset) {
+  const verification = asset.attributes?.__coreUsageVerification;
+  return asset.source === "managed" || (verification && typeof verification === "object" && (verification as Record<string, unknown>).verified === true) || asset.attributes?.__coreUsageVerified === true;
+}
+
+function VerificationStatus({ asset }: { asset: NetworkAsset }) {
+  if (asset.assetType !== "segment") return null;
+  const verified = isCoreUsageVerified(asset);
+  return <small className={`ms-2 ${verified ? "text-success" : "text-warning"}`}>{verified ? "Terverifikasi" : "Belum terverifikasi"}</small>;
 }
 
 export function loadNetworkMapIcons(instance: MapLibreMap, features: Feature<Geometry, Record<string, unknown>>[]) {
@@ -1390,7 +1402,7 @@ export function MapPage() {
               <button key={segment.id} className={`segment-item ${selectedId === segment.id ? "selected" : ""}`} onClick={() => focusAsset(segment)}>
                 <span className="segment-dot" />
                 <span className="segment-meta">
-                  <b>{segment.name}</b>
+                  <b>{segment.name}<VerificationStatus asset={segment} /></b>
                   <small>
                     {segment.area || "Segmen jaringan"}
                   </small>
@@ -1405,7 +1417,7 @@ export function MapPage() {
                 <div>{segments.map((segment) => (
                   <button key={segment.id} className={`segment-item ${selectedId === segment.id ? "selected" : ""}`} onClick={() => focusAsset(segment)}>
                     <span className="segment-dot" style={{ background: segment.attributes?.routeType === "FEEDER" ? "#ff0000" : "#a000ff" }} />
-                    <span className="segment-meta"><b>{segment.name}</b><small>{segment.attributes?.routeType === "FEEDER" ? "Kabel feeder" : "Kabel distribusi"} · {segment.area}</small><SegmentCoreSummary asset={segment} /></span>
+                    <span className="segment-meta"><b>{segment.name}<VerificationStatus asset={segment} /></b><small>{segment.attributes?.routeType === "FEEDER" ? "Kabel feeder" : "Kabel distribusi"} · {segment.area}</small><SegmentCoreSummary asset={segment} /></span>
                     <i className="bi bi-chevron-right" />
                   </button>
                 ))}</div>
@@ -1415,7 +1427,7 @@ export function MapPage() {
               <button key={line.id} className={`segment-item imported-item ${selectedId === line.id ? "selected" : ""}`} onClick={() => focusAsset(line)}>
                 <span className="segment-dot" />
                 <span className="segment-meta">
-                  <b>{line.name}</b>
+                  <b>{line.name}<VerificationStatus asset={line} /></b>
                   <small>{line.source === "kml" ? "KML/KMZ" : "Excel"} · {line.assetType === "segment" ? "Segmen kabel" : "Aset jaringan"}</small>
                   <SegmentCoreSummary asset={line} />
                 </span>
@@ -1460,8 +1472,8 @@ export function MapPage() {
                   {[
                     ["Terpakai (Used)", selectedSegment.usedCores, "used"],
                     ["Booked", selectedSegment.bookedCores, "booked"],
-                    ["Idle / tersedia", selectedSegment.idleCores, "available"],
                     ["Waiting list", bookings.filter((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List").length, "booked"],
+                  ...(isCoreUsageVerified(selectedSegment) ? [["Idle / tersedia", selectedSegment.idleCores, "available"]] : []),
                   ].map(([label, value, tone]) => (
                     <div key={String(label)}>
                       <span>
@@ -1478,13 +1490,13 @@ export function MapPage() {
                     <b>{selectedSegment.attributes?.__coreUsageVerification && typeof selectedSegment.attributes.__coreUsageVerification === "object" && (selectedSegment.attributes.__coreUsageVerification as Record<string, unknown>).verified === true ? "Kapasitas terverifikasi" : "Verifikasi pemakaian KMZ"}</b>
                     {selectedSegment.attributes?.__coreUsageVerification && typeof selectedSegment.attributes.__coreUsageVerification === "object" && (selectedSegment.attributes.__coreUsageVerification as Record<string, unknown>).verified === true ? <small className="d-block text-secondary">Sumber: {String((selectedSegment.attributes.__coreUsageVerification as Record<string, unknown>).source ?? "—")} · {String((selectedSegment.attributes.__coreUsageVerification as Record<string, unknown>).verifiedAt ?? "")}</small> : <small className="d-block text-secondary">Periksa status setiap core dari catatan lapangan atau inventaris, lalu isi sumber dan catatan pemeriksaan.</small>}
                     {user?.role === "ADMIN" && <div className="mt-2">
-                      <div className="row g-2"><div className="col-sm-5"><select className="form-select form-select-sm" aria-label="Sumber verifikasi" value={coreVerificationSource} onChange={(event) => setCoreVerificationSource(event.target.value)}><option>Survei lapangan</option><option>Data operasional</option><option>Dokumen inventaris</option></select></div><div className="col-sm-7"><input className="form-control form-control-sm" aria-label="Catatan verifikasi" placeholder="Catatan / referensi pemeriksaan" value={coreVerificationNote} onChange={(event) => setCoreVerificationNote(event.target.value)} maxLength={500} /></div></div>
-                      <button className="btn btn-sm btn-outline-primary mt-2" disabled={verifyCoreUsage.isPending || !coreVerificationNote.trim() || coresQuery.data?.length !== selectedSegment.totalCores} onClick={() => verifyCoreUsage.mutate()}>{verifyCoreUsage.isPending ? "Menyimpan..." : "Simpan dan verifikasi kapasitas"}</button>
+                      <div className="row g-2"><div className="col-sm-5"><select className="form-select form-select-sm" aria-label="Sumber verifikasi" value={coreVerificationSource} onChange={(event) => setCoreVerificationSource(event.target.value)}><option>Survei lapangan</option><option>Data operasional</option><option>Dokumen inventaris</option></select></div><div className="col-sm-7"><input className="form-control form-control-sm" aria-label="Catatan verifikasi" placeholder="Catatan / referensi pemeriksaan (opsional)" value={coreVerificationNote} onChange={(event) => setCoreVerificationNote(event.target.value)} maxLength={500} /></div></div>
+                      <button className="btn btn-sm btn-outline-primary mt-2" disabled={verifyCoreUsage.isPending || coresQuery.data?.length !== selectedSegment.totalCores} onClick={() => verifyCoreUsage.mutate()}>{verifyCoreUsage.isPending ? "Menyimpan..." : "Simpan dan verifikasi kapasitas"}</button>
                       {coresQuery.data?.length !== selectedSegment.totalCores && <small className="d-block text-warning mt-1">Jumlah core tercatat ({coresQuery.data?.length ?? 0}) belum sama dengan total KMZ ({selectedSegment.totalCores}).</small>}
                       {verifyCoreUsage.error && <small className="d-block text-danger mt-1">{verifyCoreUsage.error instanceof Error ? verifyCoreUsage.error.message : "Verifikasi gagal disimpan."}</small>}
                     </div>}
                   </div>}
-                  {coresQuery.isPending ? (
+                  {!isCoreUsageVerified(selectedSegment) ? <small className="d-block text-warning">Daftar status core dikunci sampai kapasitas kabel diverifikasi.</small> : coresQuery.isPending ? (
                     <small>Memuat status core...</small>
                   ) : coresQuery.isError ? <small className="text-danger">Status core tidak dapat dimuat.</small> : !coresQuery.data?.length ? <small className="text-secondary">Belum ada core terpasang.</small> : (
                     <div className="core-status-list">

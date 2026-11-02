@@ -690,7 +690,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
   async verifyCoreUsage(assetId: string, source: string | undefined, note: string | undefined, userId: string) {
     const allowedSources = ['Survei lapangan', 'Data operasional', 'Dokumen inventaris']
     const cleanNote = String(note ?? '').trim().slice(0, 500)
-    if (!allowedSources.includes(String(source)) || !cleanNote) throw new BadRequestException({ message: 'Pilih sumber verifikasi dan isi catatan pemeriksaan.' })
+    if (!allowedSources.includes(String(source))) throw new BadRequestException({ message: 'Pilih sumber verifikasi.' })
     return this.db.transaction(async (client) => {
       const { rows: assets } = await client.query("SELECT id,total_cores FROM network_assets WHERE id=$1 AND asset_type='segment' FOR UPDATE", [assetId])
       if (!assets.length) throw new NotFoundException({ message: 'Segmen tidak ditemukan.' })
