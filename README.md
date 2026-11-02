@@ -39,15 +39,15 @@ Untuk profile `deploy`, isi `BETTER_AUTH_SECRET` di `.env` dengan secret acak mi
 
 ### Image produksi
 
-Gunakan `docker-compose.production.yaml` untuk menjalankan image statis Nginx, backend Node produksi, dan PostGIS dengan volume database terpisah. Isi `ATLAS_DATABASE_NAME`, `ATLAS_DATABASE_URL`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, dan `TRUSTED_ORIGINS` di `.env`. Frontend melayani HTTP port 80 hanya untuk ACME challenge dan mengalihkan trafik lain ke HTTPS port 443; sertifikat dipasang dari `LETSENCRYPT_DIR` (default `/etc/letsencrypt`).
+Gunakan `compose.prod.yaml` untuk menjalankan image statis Nginx, backend Node produksi, dan PostGIS dengan volume database terpisah. Isi `ATLAS_DATABASE_NAME`, `ATLAS_DATABASE_URL`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, dan `TRUSTED_ORIGINS` di `.env`. Frontend melayani HTTP port 80 hanya untuk ACME challenge dan mengalihkan trafik lain ke HTTPS port 443; sertifikat dipasang dari `LETSENCRYPT_DIR` (default `/etc/letsencrypt`).
 
 Untuk deployment langsung menggunakan IP publik, pasang Certbot 5.4 atau lebih baru, siapkan webroot challenge di `./var/certbot`, lalu terbitkan sertifikat IP Let’s Encrypt dengan profil `shortlived` dan metode `webroot` sebelum menjalankan Compose. Sertifikat IP berlaku sekitar enam hari, jadi renewal otomatis harus aktif dan memakai deploy hook untuk me-reload Nginx setelah sertifikat diperbarui. Tetapkan `BETTER_AUTH_URL` dan `TRUSTED_ORIGINS` ke origin HTTPS yang sama.
 
 Jalankan:
 
 ```sh
-docker compose -f docker-compose.production.yaml up --build -d
-docker compose -f docker-compose.production.yaml --profile bootstrap run --rm bootstrap-admin
+docker compose -f compose.prod.yaml up --build -d
+docker compose -f compose.prod.yaml --profile bootstrap run --rm bootstrap-admin
 ```
 
 Setelah akun ADMIN pertama dibuat, hapus `BOOTSTRAP_ADMIN_EMAIL` dan `BOOTSTRAP_ADMIN_PASSWORD` dari `.env`. Port HTTP frontend dapat diatur dengan `WEB_PORT` (default 80). Data PostGIS memakai volume `atlas_phase2_postgis_data` dan tidak ikut terhapus oleh `docker compose down` tanpa `-v`.
@@ -65,6 +65,6 @@ ADMIN juga dapat mengimpor data jaringan melalui template Excel di halaman peta;
 
 - `apps/web` — `app`, `components`, `features`, dan `lib` untuk React/TanStack
 - `apps/server` — `auth`, `atlas`, `network`, `geospatial`, `database`, dan `health` untuk NestJS
-- `docker-compose.yaml` — PostGIS lokal; profile `deploy` menambahkan frontend dan backend
+- `compose.yaml` — PostGIS lokal; profile `deploy` menambahkan frontend dan backend
 
 Endpoint utama: `GET /api/health`, `GET /api/me`, `GET /api/dashboard`, `GET /api/assets`, `POST /api/assets/import`, `GET/POST /api/bookings`, `POST /api/bookings/:id/release`, `POST /api/analysis/address`, `POST /api/analysis/bulk`, dan `POST /api/routes/preview`. Semua kecuali health dan auth memerlukan sesi.
