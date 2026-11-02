@@ -85,6 +85,10 @@ build: ## Typecheck and build server and web
 test: ## Run server unit tests
 	npm --prefix $(SERVER) test
 
+.PHONY: test-integration
+test-integration: env-check ## Run the backend integration test against local PostGIS
+	npm --prefix $(SERVER) run test:integration:local
+
 # Production (compose.prod.yaml)
 
 .PHONY: prod-up
