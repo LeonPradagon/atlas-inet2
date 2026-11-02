@@ -10,6 +10,12 @@ type AssetRecord = {
   geometry: unknown; attributes: Record<string, unknown>; createdAt: string
 }
 
+// Imports created before package IDs were stored share their transaction timestamp with the audit entry.
+const assetImportId = `COALESCE(a.attributes->>'__atlasImportId', (SELECT legacy.entity_id FROM audit_logs legacy
+  WHERE legacy.action='NETWORK_IMPORTED' AND legacy.entity_type='NETWORK_IMPORT'
+    AND legacy.details->>'source'='kml/kmz' AND legacy.created_at=a.created_at AND a.source='kml'
+  ORDER BY legacy.id LIMIT 1))`
+
 const provinceMatch = (provinceParam: number) => `a.attributes->>'__atlasProvinceCode'=$${provinceParam}`
 
 type RegionName = { provinceCode: string; name: string; level: number }
@@ -222,7 +228,34 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
   }
 
-  async listAssetPage(search = '', page = 1, pageSize = 50, coreFilter = 'all', provinceCode?: string) {
+  async listAssetImports() {
+    const { rows } = await this.db.query(`SELECT l.entity_id AS id,
+        COALESCE(l.details->>'fileName', 'Map Package') AS name,
+        COALESCE((l.details->>'importedCount')::int, 0) AS "importedCount",
+        COALESCE((l.details->>'segmentCount')::int, 0) AS "segmentCount",
+        COALESCE((l.details->>'ftthFolderCount')::int, (
+          SELECT count(DISTINCT array_to_string((string_to_array(a.attributes->>'folderPath', '/'))[1:p.ordinality], ' / '))::int
+          FROM network_assets a
+          CROSS JOIN LATERAL unnest(string_to_array(a.attributes->>'folderPath', '/')) WITH ORDINALITY AS p(folder, ordinality)
+          WHERE ${assetImportId}=l.entity_id AND p.folder ILIKE '%ftth%'
+        ), 0) AS "ftthFolderCount",
+        COALESCE(l.details->'folderPaths', (
+          SELECT COALESCE(jsonb_agg(folders.path ORDER BY folders.path), '[]'::jsonb)
+          FROM (
+            SELECT DISTINCT array_to_string((string_to_array(a.attributes->>'folderPath', '/'))[1:p.ordinality], ' / ') AS path
+            FROM network_assets a
+            CROSS JOIN LATERAL unnest(string_to_array(a.attributes->>'folderPath', '/')) WITH ORDINALITY AS p(folder, ordinality)
+            WHERE ${assetImportId}=l.entity_id AND COALESCE(a.attributes->>'folderPath','')<>''
+          ) folders
+        )) AS "folderPaths",
+        l.created_at AS "createdAt",u.name AS "actorName",u.email AS "actorEmail"
+      FROM audit_logs l LEFT JOIN "user" u ON u.id=l.actor_id
+      WHERE l.action='NETWORK_IMPORTED' AND l.entity_type='NETWORK_IMPORT' AND l.entity_id IS NOT NULL
+      ORDER BY l.created_at DESC LIMIT 50`)
+    return rows
+  }
+
+  async listAssetPage(search = '', page = 1, pageSize = 50, coreFilter = 'all', provinceCode?: string, importId?: string) {
     const filter = search.trim()
     const match = `%${filter}%`
     const provinceCondition = provinceMatch(4)
@@ -230,14 +263,15 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       AND ($3='all' OR a.asset_type='segment')
       AND ($3<>'filled' OR a.total_cores>0)
       AND ($3<>'empty' OR a.total_cores=0)
-      AND ($4::text IS NULL OR ${provinceCondition})`
+      AND ($4::text IS NULL OR ${provinceCondition})
+      AND ($5::text IS NULL OR ${assetImportId}=ANY(string_to_array($5, ',')))`
     const [{ rows: countRows }, { rows }] = await Promise.all([
       this.db.query<{ total: number }>(`SELECT count(*)::int AS total FROM network_assets a
-        WHERE ${conditions}`, [filter, match, coreFilter, provinceCode ?? null]),
+        WHERE ${conditions}`, [filter, match, coreFilter, provinceCode ?? null, importId ?? null]),
       this.db.query<AssetRecord>(`WITH page AS (
           SELECT a.id,a.name FROM network_assets a
           WHERE ${conditions}
-          ORDER BY a.name,a.id LIMIT $5 OFFSET $6
+          ORDER BY a.name,a.id LIMIT $6 OFFSET $7
         )
         SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
           a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
@@ -246,7 +280,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
           count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
           GeometryType(a.geometry) AS "geometryType",NULL::jsonb AS geometry,a.attributes,a.created_at AS "createdAt"
         FROM page p JOIN network_assets a ON a.id=p.id LEFT JOIN network_cores c ON c.asset_id=a.id
-        GROUP BY a.id ORDER BY a.name,a.id`, [filter, match, coreFilter, provinceCode ?? null, pageSize, (page - 1) * pageSize]),
+        GROUP BY a.id ORDER BY a.name,a.id`, [filter, match, coreFilter, provinceCode ?? null, importId ?? null, pageSize, (page - 1) * pageSize]),
     ])
     const pattern = new RegExp((await this.getCableNamePattern()).pattern)
     return { items: rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) })), total: countRows[0].total, page, pageSize }
@@ -274,10 +308,11 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return rows
   }
 
-  async mapBounds(provinceCode?: string) {
+  async mapBounds(provinceCode?: string, importId?: string) {
     const provinceCondition = provinceMatch(1)
     const { rows } = await this.db.query(`SELECT ST_XMin(extent) AS west,ST_YMin(extent) AS south,ST_XMax(extent) AS east,ST_YMax(extent) AS north
-      FROM (SELECT ST_Extent(geometry) AS extent FROM network_assets a WHERE ($1::text IS NULL OR ${provinceCondition})) bounds`, [provinceCode ?? null])
+      FROM (SELECT ST_Extent(geometry) AS extent FROM network_assets a WHERE ($1::text IS NULL OR ${provinceCondition})
+        AND ($2::text IS NULL OR ${assetImportId}=ANY(string_to_array($2, ',')))) bounds`, [provinceCode ?? null, importId ?? null])
     const { west, south, east, north } = rows[0]
     return { bounds: west === null ? null : [west, south, east, north] }
   }
@@ -458,7 +493,7 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
     return { mimeType: icon.mimeType, data: icon.content.toString('base64') }
   }
 
-  async listMapAssets(bounds: [number, number, number, number], zoom = 16, provinceCode?: string) {
+  async listMapAssets(bounds: [number, number, number, number], zoom = 16, provinceCode?: string, importId?: string) {
     // Display geometry only; original geometry stays available for editing and exports.
     const tolerance = zoom >= 16 ? 0 : 360 / (512 * 2 ** zoom)
     const { rows } = await this.db.query<AssetRecord>(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
@@ -472,7 +507,8 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
       WHERE a.geometry && ST_MakeEnvelope($1,$2,$3,$4,4326)
         AND ST_Intersects(a.geometry,ST_MakeEnvelope($1,$2,$3,$4,4326))
         AND ($6::text IS NULL OR ${provinceMatch(6)})
-      GROUP BY a.id ORDER BY a.name`, [...bounds, tolerance, provinceCode ?? null])
+        AND ($7::text IS NULL OR ${assetImportId}=ANY(string_to_array($7, ',')))
+      GROUP BY a.id ORDER BY a.name`, [...bounds, tolerance, provinceCode ?? null, importId ?? null])
     const pattern = new RegExp((await this.getCableNamePattern()).pattern)
     return rows.map((asset) => ({ ...asset, nameValid: pattern.test(asset.name) }))
   }
@@ -575,7 +611,8 @@ export class AtlasService implements OnModuleInit, OnModuleDestroy {
   }
 
   async assetGeometry(id: string) {
-    const { rows } = await this.db.query(`SELECT COALESCE(source_geometry,ST_AsGeoJSON(geometry)::jsonb) AS geometry FROM network_assets WHERE id=$1`, [id])
+    const { rows } = await this.db.query(`SELECT COALESCE(source_geometry,ST_AsGeoJSON(geometry)::jsonb) AS geometry,
+        attributes->>'__atlasProvinceCode' AS "provinceCode" FROM network_assets WHERE id=$1`, [id])
     if (!rows.length) throw new NotFoundException({ message: 'Aset tidak ditemukan.' })
     return rows[0]
   }
