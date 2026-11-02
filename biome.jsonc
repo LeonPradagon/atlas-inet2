@@ -1,4 +1,53 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-  "extends": ["ultracite/biome/core"]
+  "extends": ["ultracite/biome/core"],
+  "linter": {
+    "rules": {
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "off",
+        "noFlatMapIdentity": "off",
+        "noForEach": "off",
+        "noUselessFragments": "off",
+        "noVoid": "off",
+        "useOptionalChain": "off",
+        "useSimplifiedLogicExpression": "off"
+      },
+      "performance": {
+        "noAwaitInLoops": "off",
+        "noJsxPropsBind": "off",
+        "useTopLevelRegex": "off"
+      },
+      "style": {
+        "noDescendingSpecificity": "off",
+        "noIncrementDecrement": "off",
+        "noMultiAssign": "off",
+        "noNestedTernary": "off",
+        "noNonNullAssertion": "off",
+        "noParameterProperties": "off",
+        "useAtIndex": "off",
+        "useConsistentArrayType": "off",
+        "useConsistentBuiltinInstantiation": "off",
+        "useConsistentMethodSignatures": "off",
+        "useConsistentTypeDefinitions": "off",
+        "useDefaultParameterLast": "off",
+        "useDefaultSwitchClause": "off",
+        "useDestructuring": "off",
+        "useDomQuerySelector": "off",
+        "useErrorCause": "off",
+        "useFilenamingConvention": "off",
+        "useImportsFirst": "off",
+        "useNamedCaptureGroup": "off",
+        "useTemplate": "off",
+        "useThisInClassMethods": "off",
+        "useUnicodeRegex": "off"
+      },
+      "suspicious": {
+        "noDuplicateSelectors": "off",
+        "noEqualsToNull": "off",
+        "noUnnecessaryConditions": "off",
+        "useAwait": "off",
+        "useBaseline": "off"
+      }
+    }
+  }
 }
