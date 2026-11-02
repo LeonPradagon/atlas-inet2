@@ -525,18 +525,18 @@ export function MapPage() {
   const [coreVerificationNote, setCoreVerificationNote] = useState("");
   const catalogQuery = useQuery({
     queryKey: ["segment-catalog", assetPage, catalogSearch, coreFilter, provinceCode, selectedImportIds],
-    queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${coreFilter}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : `&provinceCode=${provinceCode}`}`),
-    enabled: Boolean(provinceCode || selectedImportIds.length),
+    queryFn: () => api<NetworkAssetPage>(`/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${coreFilter}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : ""}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`),
+    enabled: Boolean(provinceCode && selectedImportIds.length),
     refetchInterval: 30_000,
   });
-  const networkSegments = catalogQuery.data?.items ?? [];
+  const networkSegments = provinceCode && selectedImportIds.length ? catalogQuery.data?.items ?? [] : [];
   const [mapBounds, setMapBounds] = useState<[number, number, number, number] | null>(null);
   const [mapZoom, setMapZoom] = useState(4);
   const mapAssetsQuery = useQuery({
     queryKey: ["map-assets", mapBounds, mapZoom, provinceCode, selectedImportIds],
-    queryFn: ({ signal }) => api<NetworkAsset[]>(`/assets/map?bbox=${mapBounds!.join(",")}&zoom=${mapZoom}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : `&provinceCode=${provinceCode}`}`, { signal, timeout: 30_000 }),
+    queryFn: ({ signal }) => api<NetworkAsset[]>(`/assets/map?bbox=${mapBounds!.join(",")}&zoom=${mapZoom}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : ""}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`, { signal, timeout: 30_000 }),
     retry: 0,
-    enabled: Boolean(mapBounds && (provinceCode || selectedImportIds.length)),
+    enabled: Boolean(mapBounds && provinceCode && selectedImportIds.length),
     staleTime: 20_000,
     placeholderData: (previousData, previousQuery) => previousQuery?.queryKey[3] === provinceCode && JSON.stringify(previousQuery?.queryKey[4]) === JSON.stringify(selectedImportIds) ? previousData : undefined,
   });
@@ -618,7 +618,7 @@ export function MapPage() {
   const knownAssetsRef = useRef(knownAssets);
   knownAssetsRef.current = knownAssets;
 
-  const allNetworkFeatures = useMemo(() => assetFeatures(mapAssetsQuery.data ?? []), [mapAssetsQuery.data]);
+  const allNetworkFeatures = useMemo(() => assetFeatures(provinceCode && selectedImportIds.length ? mapAssetsQuery.data ?? [] : []), [mapAssetsQuery.data, selectedImportIds.length, provinceCode]);
   const iconCategoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const asset of mapAssetsQuery.data ?? [])
@@ -843,15 +843,13 @@ export function MapPage() {
           if (!province) { setProvincePickMessage("Belum ada aset KMZ yang terpetakan ke provinsi ini. Silakan pilih provinsi lain."); return; }
           setProvincePickMessage("");
           if (province.code === selectedProvinceCodeRef.current) {
-            setSelectedImportIds([]);
-            setActiveImportId("");
             setMapBounds(province.bounds);
             return;
           }
-          setSelectedImportIds([]);
-          setActiveImportId("");
           setSelectedIconCategories(null);
           setMapBounds(province.bounds);
+          setSelectedImportIds([]);
+          setActiveImportId("");
           setProvinceCode(province.code);
           instance.setPaintProperty("province-selection-fill", "fill-opacity", ["case", ["==", ["get", "Propinsi"], event.features?.[0]?.properties?.Propinsi], 0, 0.3]);
         });
@@ -1007,13 +1005,12 @@ export function MapPage() {
       const packageIds = [...new Set([...selectedImportIds, response.importId])];
       setSelectedImportIds(packageIds);
       setActiveImportId(response.importId);
-      setProvinceCode("");
       await queryClient.invalidateQueries({ queryKey: ["network-map-imports"] });
       await queryClient.invalidateQueries({ queryKey: ["network-map-provinces"] });
       await invalidateNetwork();
       setSelectedId(response.firstId ?? "");
       if (response.firstId) {
-        const { bounds } = await api<{ bounds: [number, number, number, number] | null }>(`/assets/bounds?importIds=${packageIds.join(",")}`);
+        const { bounds } = await api<{ bounds: [number, number, number, number] | null }>(`/assets/bounds?importIds=${packageIds.join(",")}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`);
         if (bounds && map.current) { setMapBounds(bounds); map.current.fitBounds(bounds, { padding: 64, maxZoom: 12, duration: 500 }); }
         else await focusGeometry(response.firstId);
       }
@@ -1027,7 +1024,6 @@ export function MapPage() {
     const isSelected = selectedImportIds.includes(id);
     const next = isSelected ? selectedImportIds.filter((item) => item !== id) : [...selectedImportIds, id];
     setSelectedImportIds(next);
-    setProvinceCode("");
     setSelectedId("");
     setAssetPopup(null);
     setSelectedIconCategories(null);
@@ -1036,7 +1032,7 @@ export function MapPage() {
       if (activeImportId === id) setActiveImportId(next[next.length - 1] ?? "");
     } else setActiveImportId(id);
     if (!next.length) { setMapBounds(null); return; }
-    void api<{ bounds: [number, number, number, number] | null }>(`/assets/bounds?importIds=${next.join(",")}`)
+    void api<{ bounds: [number, number, number, number] | null }>(`/assets/bounds?importIds=${next.join(",")}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`)
       .then(({ bounds }) => { if (request === packageBoundsRequest.current && bounds && map.current) { setMapBounds(bounds); map.current.fitBounds(bounds, { padding: 64, maxZoom: 12, duration: 500 }); } })
       .catch(() => { if (request === packageBoundsRequest.current) setFileError("Batas paket peta gagal dimuat."); });
   }
@@ -1159,10 +1155,10 @@ export function MapPage() {
               const nextProvince = provinces.find((province) => province.code === event.target.value);
               packageBoundsRequest.current += 1;
               setProvincePickMessage("");
-              setSelectedImportIds([]);
-              setActiveImportId("");
               setSelectedIconCategories(null);
               setMapBounds(nextProvince?.bounds ?? null);
+              setSelectedImportIds([]);
+              setActiveImportId("");
               setProvinceCode(event.target.value);
               if (!nextProvince) map.current?.flyTo({ center: [118, -2.5], zoom: 5.3 });
               const instance = map.current;
@@ -1173,14 +1169,14 @@ export function MapPage() {
               <option value="">{mapProvincesQuery.isPending ? "Memuat provinsi…" : "Pilih provinsi untuk melihat aset"}</option>
               {provinces.map((province) => <option key={province.code} value={province.code}>{province.name} · {province.assetCount.toLocaleString("id-ID")} aset</option>)}
             </select>
-            <small className="d-block">Klik langsung wilayah provinsi untuk menampilkan aset KMZ.</small>
+            <small className="d-block">Pilih provinsi terlebih dahulu, lalu pilih Map Package untuk menampilkan aset.</small>
             {provincePickMessage && <small className="text-warning d-block mt-1" role="status">{provincePickMessage}</small>}
             {selectedProvince && !selectedImportIds.length && <small className="text-muted d-block mt-1">{selectedProvince.assetCount.toLocaleString("id-ID")} aset · {selectedProvince.folderCount.toLocaleString("id-ID")} folder KMZ</small>}
             {!provinceCode && !selectedImportIds.length && provinces.length > 0 && <small className="text-muted d-block mt-1">Aset jaringan dimuat setelah wilayah provinsi diklik.</small>}
             {!mapProvincesQuery.isPending && !mapProvincesQuery.isError && !provinces.length && <small className="text-warning d-block mt-1">Belum ada provinsi yang cocok dengan data KMZ.</small>}
             {mapProvincesQuery.isError && <small className="text-danger d-block mt-1">Daftar provinsi KMZ gagal dimuat.</small>}
           </div>
-          <section className="map-package-picker" aria-label="Map Package">
+          {provinceCode && <section className="map-package-picker" aria-label="Map Package">
             <header><b>Map Package</b><button type="button" className="map-package-history" aria-label="Riwayat proses impor" title="Riwayat proses impor" onClick={() => { setShowImportHistory(true); void mapImportsQuery.refetch(); }}><i className="bi bi-clock-history" aria-hidden="true" /></button></header>
             <p>Tampilkan beberapa paket bersama. Pilihan terakhir aktif untuk edit dan ekspor.</p>
             <details>
@@ -1207,7 +1203,7 @@ export function MapPage() {
               </div>
             </details>
             {selectedImportPackages.length > 0 && <small className="map-package-summary">{selectedImportPackages.length} paket ditampilkan bersama</small>}
-          </section>
+          </section>}
           {showImportHistory && <div className="map-import-history-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowImportHistory(false); }}>
             <section className="map-import-history" role="dialog" aria-modal="true" aria-labelledby="map-import-history-title">
               <header><div><h2 id="map-import-history-title">Riwayat proses impor</h2><p>Hasil dan akun yang mengimpor paket KML/KMZ.</p></div><button type="button" className="btn-close" aria-label="Tutup" onClick={() => setShowImportHistory(false)} /></header>
@@ -1395,7 +1391,7 @@ export function MapPage() {
             )}
           </div>
           <div className="segment-list">
-            {!provinceCode && !selectedImportIds.length && <div className="map-empty-list">Pilih provinsi di peta atau Map Package untuk menampilkan aset.</div>}
+            {!provinceCode && !selectedImportIds.length && <div className="map-empty-list">Pilih provinsi, lalu pilih Map Package untuk menampilkan aset.</div>}
             {Boolean(provinceCode || selectedImportIds.length) && catalogQuery.isPending && <div className="map-empty-list">Memuat daftar aset…</div>}
             {catalogQuery.isError && <div className="map-empty-list">Daftar aset tidak dapat dimuat.</div>}
             {standaloneSegments.map((segment) => (
