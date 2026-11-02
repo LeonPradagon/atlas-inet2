@@ -3,13 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
+    "dev": "vite --host 0.0.0.0",
     "preview": "vite preview --host 0.0.0.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.0",
@@ -33,7 +33,7 @@
     "typescript": "~5.8.3",
     "vite": "^6.3.5"
   },
-  "overrides": {
-    "uuid": "^11.1.1"
+  "engines": {
+    "node": ">=22"
   }
 }

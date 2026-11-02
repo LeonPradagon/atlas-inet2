@@ -1,21 +1,32 @@
 <!doctype html>
 <html lang="id">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f4f6f9" />
+    <meta charset="UTF-8">
+    <meta content="width=device-width, initial-scale=1.0" name="viewport">
+    <meta content="#f4f6f9" name="theme-color">
     <script>
-      let theme;
-      try { theme = localStorage.getItem('atlas-theme'); } catch {}
-      if (theme !== 'light' && theme !== 'dark') theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      document.documentElement.dataset.bsTheme = theme;
-      document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#101827' : '#f4f6f9';
+    "use strict";
+    let theme;
+    try {
+      theme = localStorage.getItem("atlas-theme");
+    } catch {}
+    if (theme !== "light" && theme !== "dark") {
+      theme = matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    }
+    document.documentElement.dataset.bsTheme = theme;
+    document.querySelector('meta[name="theme-color"]').content =
+      theme === "dark" ? "#101827" : "#f4f6f9";
     </script>
-    <meta name="description" content="ATLAS - Asset Tracking, Location Analytics & Sales Intelligence Tools" />
+    <meta
+      content="ATLAS - Asset Tracking, Location Analytics & Sales Intelligence Tools"
+      name="description"
+    >
     <title>ATLAS | Network Intelligence</title>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script src="/src/main.tsx" type="module"></script>
   </body>
 </html>

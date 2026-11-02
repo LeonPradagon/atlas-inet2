@@ -3,18 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
-  "engines": {
-    "node": ">=20.9"
-  },
   "scripts": {
-    "start:dev": "tsx watch src/main.ts",
-    "start:dev:local": "set -a; . ../../.env; set +a; tsx watch src/main.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/main.js",
-    "migrate": "node --import tsx src/database/migrate.ts",
-    "migrate:local": "node --env-file=../../.env --import tsx src/database/migrate.ts",
     "bootstrap-admin": "node --import tsx src/auth/bootstrap-admin.ts",
     "bootstrap-admin:local": "node --env-file=../../.env --import tsx src/auth/bootstrap-admin.ts",
+    "build": "tsc -p tsconfig.json",
+    "migrate": "node --import tsx src/database/migrate.ts",
+    "migrate:local": "node --env-file=../../.env --import tsx src/database/migrate.ts",
+    "start": "node dist/main.js",
+    "start:dev": "tsx watch src/main.ts",
+    "start:dev:local": "set -a; . ../../.env; set +a; tsx watch src/main.ts",
     "test": "node --import tsx --test test/*.test.cjs",
     "test:integration:local": "npm run build && node --env-file=../../.env test/atlas.integration.cjs"
   },
@@ -37,5 +34,8 @@
     "@types/pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20.9"
   }
 }

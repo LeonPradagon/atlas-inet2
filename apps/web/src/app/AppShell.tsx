@@ -1,32 +1,70 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import type { MouseEventHandler, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AuthGate } from "../components/AuthGate";
 import { AccountMenu } from "../components/AccountMenu";
+import { AuthGate } from "../components/AuthGate";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { api } from "../lib/api";
 
 type User = { id: string; name: string; email: string; role: string };
-type Notification = { id: number; title: string; message: string; readAt: string | null; bookingId: string | null };
+type Notification = {
+  id: number;
+  title: string;
+  message: string;
+  readAt: string | null;
+  bookingId: string | null;
+};
 
 const navSections = [
-  { label: "UTAMA", items: [{ to: "/", label: "Dashboard", icon: "bi-grid-1x2-fill" }] },
-  { label: "JARINGAN", items: [{ to: "/peta-jaringan", label: "Peta Jaringan", icon: "bi-map" }] },
+  {
+    label: "UTAMA",
+    items: [{ to: "/", label: "Dashboard", icon: "bi-grid-1x2-fill" }],
+  },
+  {
+    label: "JARINGAN",
+    items: [{ to: "/peta-jaringan", label: "Peta Jaringan", icon: "bi-map" }],
+  },
   {
     label: "ANALISIS",
     items: [
       { to: "/analisis-alamat", label: "Analisis Alamat", icon: "bi-geo-alt" },
-      { to: "/analisis-massal", label: "Analisis Massal", icon: "bi-file-earmark-spreadsheet" },
-      { to: "/riwayat-analisis", label: "Riwayat Analisis", icon: "bi-clock-history" },
-      { to: "/survei-verifikasi", label: "Survei & Verifikasi", icon: "bi-clipboard-check" },
+      {
+        to: "/analisis-massal",
+        label: "Analisis Massal",
+        icon: "bi-file-earmark-spreadsheet",
+      },
+      {
+        to: "/riwayat-analisis",
+        label: "Riwayat Analisis",
+        icon: "bi-clock-history",
+      },
+      {
+        to: "/survei-verifikasi",
+        label: "Survei & Verifikasi",
+        icon: "bi-clipboard-check",
+      },
     ],
   },
-  { label: "KAPASITAS", items: [{ to: "/booking-core", label: "Booking Core", icon: "bi-diagram-3" }] },
+  {
+    label: "KAPASITAS",
+    items: [
+      { to: "/booking-core", label: "Booking Core", icon: "bi-diagram-3" },
+    ],
+  },
 ] as const;
 
-const navLink = (item: { to: string; label: string; icon: string }, pathname: string, onClick?: MouseEventHandler<HTMLAnchorElement>) => (
-  <Link key={item.to} to={item.to} onClick={onClick} className={`nav-link ${pathname === item.to ? "active" : ""}`}>
+const navLink = (
+  item: { to: string; label: string; icon: string },
+  pathname: string,
+  onClick?: MouseEventHandler<HTMLAnchorElement>
+) => (
+  <Link
+    className={`nav-link ${pathname === item.to ? "active" : ""}`}
+    key={item.to}
+    onClick={onClick}
+    to={item.to}
+  >
     <i className={`nav-icon bi ${item.icon}`} />
     <span>{item.label}</span>
   </Link>
@@ -46,60 +84,118 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
   const notificationMenu = useRef<HTMLDetailsElement>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
   const previousPathname = useRef(pathname);
-  const analysisPath = pathname.startsWith("/analisis") || pathname === "/riwayat-analisis";
+  const analysisPath =
+    pathname.startsWith("/analisis") || pathname === "/riwayat-analisis";
   useEffect(() => {
     mobileAnalysisMenu.current?.removeAttribute("open");
   }, [pathname]);
   useEffect(() => {
-    if (previousPathname.current === "/analisis-massal" && pathname !== "/analisis-massal") {
+    if (
+      previousPathname.current === "/analisis-massal" &&
+      pathname !== "/analisis-massal"
+    ) {
       localStorage.removeItem("atlas-bulk-job");
     }
     previousPathname.current = pathname;
   }, [pathname]);
   useEffect(() => {
     const closeOnOutsideClick = (event: PointerEvent) => {
-      if (event.target instanceof Node && !notificationMenu.current?.contains(event.target)) notificationMenu.current?.removeAttribute("open");
+      if (
+        event.target instanceof Node &&
+        !notificationMenu.current?.contains(event.target)
+      ) {
+        notificationMenu.current?.removeAttribute("open");
+      }
     };
     document.addEventListener("pointerdown", closeOnOutsideClick, true);
-    return () => document.removeEventListener("pointerdown", closeOnOutsideClick, true);
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsideClick, true);
   }, []);
-  const { data: user } = useQuery({ queryKey: ["me"], queryFn: () => api<User>("/me") });
+  const { data: user } = useQuery({
+    queryKey: ["me"],
+    queryFn: () => api<User>("/me"),
+  });
   const isAdmin = user?.role === "ADMIN";
-  const { data: notifications = [] } = useQuery({ queryKey: ["notifications"], queryFn: () => api<Notification[]>("/notifications"), refetchInterval: 60_000 });
-  const markRead = useMutation({ mutationFn: (id: number) => api(`/notifications/${id}/read`, { method: "PATCH" }), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifications"] }) });
+  const { data: notifications = [] } = useQuery({
+    queryKey: ["notifications"],
+    queryFn: () => api<Notification[]>("/notifications"),
+    refetchInterval: 60_000,
+  });
+  const markRead = useMutation({
+    mutationFn: (id: number) =>
+      api(`/notifications/${id}/read`, { method: "PATCH" }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["notifications"] }),
+  });
   const openNotification = (item: Notification) => {
-    if (!item.readAt) markRead.mutate(item.id);
+    if (!item.readAt) {
+      markRead.mutate(item.id);
+    }
     notificationMenu.current?.removeAttribute("open");
-    void navigate({ to: "/booking-core", search: { bookingId: item.bookingId ?? undefined } });
+    void navigate({
+      to: "/booking-core",
+      search: { bookingId: item.bookingId ?? undefined },
+    });
   };
   const unread = notifications.filter((item) => !item.readAt);
   return (
-    <div className={`app-wrapper ${sidebarHidden ? "atlas-sidebar-hidden" : ""}`}>
-      <nav className="app-header navbar navbar-expand bg-white border-bottom">
+    <div
+      className={`app-wrapper ${sidebarHidden ? "atlas-sidebar-hidden" : ""}`}
+    >
+      <nav className="app-header navbar navbar-expand border-bottom bg-white">
         <div className="container-fluid px-4">
-          <button type="button" className="btn btn-light sidebar-toggle" aria-label={sidebarHidden ? "Tampilkan sidebar" : "Sembunyikan sidebar"} aria-expanded={!sidebarHidden} aria-controls="atlas-sidebar" onClick={() => setSidebarHidden((hidden) => !hidden)}>
-            <i className="bi bi-list" aria-hidden="true" />
+          <button
+            aria-controls="atlas-sidebar"
+            aria-expanded={!sidebarHidden}
+            aria-label={
+              sidebarHidden ? "Tampilkan sidebar" : "Sembunyikan sidebar"
+            }
+            className="btn btn-light sidebar-toggle"
+            onClick={() => setSidebarHidden((hidden) => !hidden)}
+            type="button"
+          >
+            <i aria-hidden="true" className="bi bi-list" />
           </button>
-          <Link to="/" className="navbar-brand header-brand d-flex align-items-center gap-2 mb-0">
-            <img className="corporate-logo" src="/sinergy-networks-brd.png" alt="Sinergy Networks" width="160" height="42" />
+          <Link
+            className="navbar-brand header-brand d-flex align-items-center mb-0 gap-2"
+            to="/"
+          >
+            <img
+              alt="Sinergy Networks"
+              className="corporate-logo"
+              height="42"
+              src="/sinergy-networks-brd.png"
+              width="160"
+            />
             <span>
               ATLAS <small>NETWORK INTELLIGENCE</small>
             </span>
           </Link>
           <div className="d-flex align-items-center gap-3">
             <ThemeToggle />
-            <details ref={notificationMenu} className="notification-menu">
-              <summary className="btn btn-light position-relative" aria-label="Notifikasi">
+            <details className="notification-menu" ref={notificationMenu}>
+              <summary
+                aria-label="Notifikasi"
+                className="btn btn-light position-relative"
+              >
                 <i className="bi bi-bell" />
-                {unread.length > 0 && <span className="notification-count">{unread.length}</span>}
+                {unread.length > 0 && (
+                  <span className="notification-count">{unread.length}</span>
+                )}
               </summary>
               <div className="notification-popover">
                 <b>Notifikasi</b>
                 {notifications.length ? (
                   notifications.slice(0, 8).map((item) => (
-                    <button key={item.id} className={`notification-item ${item.readAt ? "" : "unread"}`} onClick={() => openNotification(item)}>
+                    <button
+                      className={`notification-item ${item.readAt ? "" : "unread"}`}
+                      key={item.id}
+                      onClick={() => openNotification(item)}
+                    >
                       <strong>{item.title}</strong>
                       <span>{item.message}</span>
                     </button>
@@ -113,15 +209,30 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
           </div>
         </div>
       </nav>
-      <aside id="atlas-sidebar" className="app-sidebar">
-        <Link to="/" className="atlas-sidebar-brand">
+      <aside className="app-sidebar" id="atlas-sidebar">
+        <Link className="atlas-sidebar-brand" to="/">
           <span className="sidebar-corporate-logo">
-            <img className="corporate-logo" src="/sinergy-networks-brd.png" alt="Sinergy Networks — Borderless Connectivity" width="190" height="50" />
-            <img className="sidebar-logo-wordmark" src="/sinergy-networks-brd.png" alt="" aria-hidden="true" width="190" height="50" />
+            <img
+              alt="Sinergy Networks — Borderless Connectivity"
+              className="corporate-logo"
+              height="50"
+              src="/sinergy-networks-brd.png"
+              width="190"
+            />
+            <img
+              alt=""
+              aria-hidden="true"
+              className="sidebar-logo-wordmark"
+              height="50"
+              src="/sinergy-networks-brd.png"
+              width="190"
+            />
           </span>
-          <span className="corporate-product-name">ATLAS · NETWORK INTELLIGENCE</span>
+          <span className="corporate-product-name">
+            ATLAS · NETWORK INTELLIGENCE
+          </span>
         </Link>
-        <nav className="sidebar-menu-groups" aria-label="Navigasi utama">
+        <nav aria-label="Navigasi utama" className="sidebar-menu-groups">
           <div className="sidebar-menu-group-label">MAIN MENU</div>
           <ul className="nav-sidebar">
             <li>{navLink(navSections[0].items[0], pathname)}</li>
@@ -141,27 +252,74 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
               </details>
             </li>
             <li>{navLink(navSections[3].items[0], pathname)}</li>
-            {isAdmin && <li>{navLink({ to: "/audit-trails", label: "Audit Trails", icon: "bi-journal-text" }, pathname)}</li>}
-            {isAdmin && <li>{navLink({ to: "/pengaturan", label: "Pengaturan", icon: "bi-gear" }, pathname)}</li>}
+            {isAdmin && (
+              <li>
+                {navLink(
+                  {
+                    to: "/audit-trails",
+                    label: "Audit Trails",
+                    icon: "bi-journal-text",
+                  },
+                  pathname
+                )}
+              </li>
+            )}
+            {isAdmin && (
+              <li>
+                {navLink(
+                  { to: "/pengaturan", label: "Pengaturan", icon: "bi-gear" },
+                  pathname
+                )}
+              </li>
+            )}
           </ul>
         </nav>
-        <nav className="mobile-nav" aria-label="Navigasi utama">
+        <nav aria-label="Navigasi utama" className="mobile-nav">
           <ul className="nav-sidebar">
             <li>{navLink(navSections[0].items[0], pathname)}</li>
             <li>{navLink(navSections[1].items[0], pathname)}</li>
             <li className="mobile-analysis-menu">
-              <details ref={mobileAnalysisMenu} className={analysisPath ? "active" : ""}>
+              <details
+                className={analysisPath ? "active" : ""}
+                ref={mobileAnalysisMenu}
+              >
                 <summary className={`nav-link ${analysisPath ? "active" : ""}`}>
                   <i className="nav-icon bi bi-graph-up-arrow" />
                   <span>Analisis</span>
                   <i className="bi bi-chevron-down mobile-menu-chevron" />
                 </summary>
-                <div className="mobile-analysis-popover">{navSections[2].items.map((item) => navLink(item, pathname, (event) => event.currentTarget.closest("details")?.removeAttribute("open")))}</div>
+                <div className="mobile-analysis-popover">
+                  {navSections[2].items.map((item) =>
+                    navLink(item, pathname, (event) =>
+                      event.currentTarget
+                        .closest("details")
+                        ?.removeAttribute("open")
+                    )
+                  )}
+                </div>
               </details>
             </li>
             <li>{navLink(navSections[3].items[0], pathname)}</li>
-            {isAdmin && <li>{navLink({ to: "/audit-trails", label: "Audit Trails", icon: "bi-journal-text" }, pathname)}</li>}
-            {isAdmin && <li>{navLink({ to: "/pengaturan", label: "Pengaturan", icon: "bi-gear" }, pathname)}</li>}
+            {isAdmin && (
+              <li>
+                {navLink(
+                  {
+                    to: "/audit-trails",
+                    label: "Audit Trails",
+                    icon: "bi-journal-text",
+                  },
+                  pathname
+                )}
+              </li>
+            )}
+            {isAdmin && (
+              <li>
+                {navLink(
+                  { to: "/pengaturan", label: "Pengaturan", icon: "bi-gear" },
+                  pathname
+                )}
+              </li>
+            )}
           </ul>
         </nav>
         <div className="sidebar-footer">
@@ -173,7 +331,10 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
           <div className="content px-4 py-4">{children}</div>
         </div>
         <footer className="main-footer">
-          ATLAS <span>Asset Tracking, Location Analytics &amp; Sales Intelligence Tools</span>
+          ATLAS{" "}
+          <span>
+            Asset Tracking, Location Analytics &amp; Sales Intelligence Tools
+          </span>
           <span className="float-end">Phase 2 · v0.1.0</span>
         </footer>
       </main>

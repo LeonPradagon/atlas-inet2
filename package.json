@@ -2,12 +2,12 @@
   "name": "atlas-inet",
   "private": true,
   "scripts": {
-    "dev:server": "npm --prefix apps/server run start:dev:local",
-    "dev:web": "npm --prefix apps/web run dev",
-    "migrate:local": "npm --prefix apps/server run migrate:local",
     "bootstrap-admin:local": "npm --prefix apps/server run bootstrap-admin:local",
     "check": "ultracite check",
-    "fix": "ultracite fix"
+    "dev:server": "npm --prefix apps/server run start:dev:local",
+    "dev:web": "npm --prefix apps/web run dev",
+    "fix": "ultracite fix",
+    "migrate:local": "npm --prefix apps/server run migrate:local"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",

@@ -1,6 +1,6 @@
 services:
   frontend:
-    profiles: [deploy]
+    profiles: [ deploy ]
     build: ./apps/web
     ports:
       - "5176:5176"
@@ -12,7 +12,7 @@ services:
       API_PROXY_TARGET: http://backend:3000
 
   backend:
-    profiles: [deploy]
+    profiles: [ deploy ]
     build: ./apps/server
     ports:
       - "3000:3000"
@@ -44,7 +44,7 @@ services:
     volumes:
       - postgis_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      test: [ "CMD-SHELL", "pg_isready -U atlas -d atlas" ]
       interval: 5s
       timeout: 5s
       retries: 10
