@@ -1,9 +1,12 @@
 import { Injectable, type OnModuleDestroy } from "@nestjs/common";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 @Injectable()
 export class Database implements OnModuleDestroy {
   readonly pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  /** Typed queries with tables from ./schema; query()/transaction() stay for raw SQL. */
+  readonly orm = drizzle({ client: this.pool });
 
   query<T extends QueryResultRow = QueryResultRow>(
     sql: string,

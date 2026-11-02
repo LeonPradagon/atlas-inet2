@@ -1,10 +1,16 @@
-import { kyselyAdapter } from "@better-auth/kysely-adapter";
+import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { betterAuth } from "better-auth";
-import { Kysely, PostgresDialect } from "kysely";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import {
+  account,
+  session as sessionTable,
+  user,
+  verification,
+} from "../database/schema";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const database = new Kysely({ dialect: new PostgresDialect({ pool }) });
+const db = drizzle({ client: pool });
 const production = process.env.NODE_ENV === "production";
 const secret = process.env.BETTER_AUTH_SECRET;
 if (production && (!secret || secret.length < 32)) {
@@ -30,7 +36,10 @@ export const recordFailedLogin = (statusCode: number) =>
 export const createAuth = (disableSignUp: boolean) =>
   betterAuth({
     baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
-    database: kyselyAdapter(database, { type: "postgres" }),
+    database: drizzleAdapter(db, {
+      provider: "pg",
+      schema: { account, session: sessionTable, user, verification },
+    }),
     databaseHooks: {
       session: {
         create: {

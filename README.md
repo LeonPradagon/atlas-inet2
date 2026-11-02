@@ -1,6 +1,6 @@
 # ATLAS Phase 2
 
-Monorepo ATLAS dengan React/TanStack, NestJS, Better Auth, dan PostgreSQL/PostGIS.
+Monorepo ATLAS dengan React/TanStack, NestJS, Better Auth, Drizzle, dan PostgreSQL/PostGIS.
 
 ## Development lokal
 
@@ -27,6 +27,10 @@ npm run dev:web
 ```
 
 Buka <http://localhost:5176>. Backend menjalankan migrasi saat startup. Isi kredensial bootstrap admin di `.env`, lalu dari root jalankan `npm run bootstrap-admin:local`. ADMIN dapat membuat akun lewat `POST /api/users`; pendaftaran publik dinonaktifkan. PostGIS dipetakan ke port host `5434` agar tidak bentrok dengan PostgreSQL lokal; API dan frontend memakai port `3000` dan `5176`.
+
+## Skema database
+
+Skema Drizzle ada di `apps/server/src/database/schema.ts`. Untuk mengubah tabel, edit file itu lalu jalankan `npm run db:generate`; drizzle-kit menulis file SQL bertimestamp ke `apps/server/src/database/migrations`, dan backend menerapkannya saat startup (atau lewat `npm run migrate:local`). Jangan memakai `drizzle-kit push` atau `drizzle-kit migrate` karena keduanya melewati tabel `schema_migrations`. Query baru dapat memakai `Database.orm` (Drizzle); query SQL lama tetap berjalan lewat `Database.query`.
 
 ## Menjalankan stack Docker
 

@@ -4,6 +4,7 @@
   "scripts": {
     "bootstrap-admin:local": "npm --prefix apps/server run bootstrap-admin:local",
     "check": "ultracite check",
+    "db:generate": "npm --prefix apps/server run db:generate",
     "dev:server": "npm --prefix apps/server run start:dev:local",
     "dev:web": "npm --prefix apps/web run dev",
     "fix": "ultracite fix",

@@ -3,15 +3,31 @@
   "extends": [
     "ultracite/biome/core",
     "../../biome.jsonc",
-    "ultracite/biome/nestjs"
+    "ultracite/biome/nestjs",
+    "ultracite/biome/drizzle"
   ],
   "root": false,
   "files": {
-    // Generated Indonesia region dataset (~15 MB of JSON).
-    "includes": ["!!src/database/regions"]
+    // Generated Indonesia region dataset (~15 MB of JSON) and drizzle-kit snapshots.
+    "includes": ["!!src/database/regions", "!!src/database/migrations/meta"]
   },
   "javascript": {
     // Nest DI: @Inject(), @Req(), @Body() etc. on constructor/method params.
     "parser": { "unsafeParameterDecoratorsEnabled": true }
+  },
+  "linter": {
+    "rules": {
+      "suspicious": {
+        // Database.orm is the Drizzle instance (this.db.orm.delete(...)).
+        "noDrizzleDeleteWithoutWhere": {
+          "level": "error",
+          "options": { "drizzleObjectName": ["db", "tx", "orm"] }
+        },
+        "noDrizzleUpdateWithoutWhere": {
+          "level": "error",
+          "options": { "drizzleObjectName": ["db", "tx", "orm"] }
+        }
+      }
+    }
   }
 }
