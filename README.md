@@ -6,38 +6,38 @@ Monorepo ATLAS dengan React/TanStack, NestJS, Better Auth, Drizzle, dan PostgreS
 
 ```sh
 cp .env.example .env
-docker compose up -d postgis
-npm install
-npm --prefix apps/server install
-npm --prefix apps/web install
+make install
+make up
 ```
 
-Lint dan format memakai Ultracite (Biome): `npm run check` untuk memeriksa, `npm run fix` untuk memperbaiki otomatis.
+`make` tanpa argumen menampilkan semua perintah.
+
+Lint dan format memakai Ultracite (Biome): `make check` untuk memeriksa, `make fix` untuk memperbaiki otomatis.
 
 Di terminal pertama jalankan server:
 
 ```sh
-npm run dev:server
+make dev-server
 ```
 
 Di terminal kedua:
 
 ```sh
-npm run dev:web
+make dev-web
 ```
 
-Buka <http://localhost:5176>. Backend menjalankan migrasi saat startup. Isi kredensial bootstrap admin di `.env`, lalu dari root jalankan `npm run bootstrap-admin:local`. ADMIN dapat membuat akun lewat `POST /api/users`; pendaftaran publik dinonaktifkan. PostGIS dipetakan ke port host `5434` agar tidak bentrok dengan PostgreSQL lokal; API dan frontend memakai port `3000` dan `5176`.
+Buka <http://localhost:5176>. Backend menjalankan migrasi saat startup. Isi kredensial bootstrap admin di `.env`, lalu jalankan `make bootstrap-admin`. ADMIN dapat membuat akun lewat `POST /api/users`; pendaftaran publik dinonaktifkan. PostGIS dipetakan ke port host `5434` agar tidak bentrok dengan PostgreSQL lokal; API dan frontend memakai port `3000` dan `5176`.
 
 ## Skema database
 
-Skema Drizzle ada di `apps/server/src/database/schema.ts`. Untuk mengubah tabel, edit file itu lalu jalankan `npm run db:generate`; drizzle-kit menulis file SQL bertimestamp ke `apps/server/src/database/migrations`, dan backend menerapkannya saat startup (atau lewat `npm run migrate:local`). Jangan memakai `drizzle-kit push` atau `drizzle-kit migrate` karena keduanya melewati tabel `schema_migrations`. Query baru dapat memakai `Database.orm` (Drizzle); query SQL lama tetap berjalan lewat `Database.query`.
+Skema Drizzle ada di `apps/server/src/database/schema.ts`. Untuk mengubah tabel, edit file itu lalu jalankan `make db-generate`; drizzle-kit menulis file SQL bertimestamp ke `apps/server/src/database/migrations`, dan backend menerapkannya saat startup (atau lewat `make db-migrate`). Jangan memakai `drizzle-kit push` atau `drizzle-kit migrate` karena keduanya melewati tabel `schema_migrations`. Query baru dapat memakai `Database.orm` (Drizzle); query SQL lama tetap berjalan lewat `Database.query`.
 
 ## Menjalankan stack Docker
 
 Compose hanya menyalakan PostGIS secara default. Untuk menjalankan stack Compose lengkap (frontend, backend, PostGIS):
 
 ```sh
-docker compose --profile deploy up --build -d
+make up-stack
 docker compose --profile deploy exec backend npm run bootstrap-admin
 ```
 
@@ -53,8 +53,8 @@ Untuk deployment langsung menggunakan IP publik, pasang Certbot 5.4 atau lebih b
 Jalankan:
 
 ```sh
-docker compose -f compose.prod.yaml up --build -d
-docker compose -f compose.prod.yaml --profile bootstrap run --rm bootstrap-admin
+make prod-up
+make prod-bootstrap-admin
 ```
 
 Setelah akun ADMIN pertama dibuat, hapus `BOOTSTRAP_ADMIN_EMAIL` dan `BOOTSTRAP_ADMIN_PASSWORD` dari `.env`. Port HTTP frontend dapat diatur dengan `WEB_PORT` (default 80). Data PostGIS memakai volume `atlas_phase2_postgis_data` dan tidak ikut terhapus oleh `docker compose down` tanpa `-v`.
