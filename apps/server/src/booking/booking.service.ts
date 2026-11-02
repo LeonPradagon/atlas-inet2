@@ -463,20 +463,41 @@ export async function allocateWaiting(
   segmentId: string,
   actorId: string | null = null
 ) {
-  const { rows: queue } = await client.query(
-    "SELECT * FROM bookings WHERE segment_id=$1 AND status='Waiting List' ORDER BY COALESCE(approved_at,requested_at),requested_at,id FOR UPDATE",
-    [segmentId]
-  );
-  const { rows: settings } = await client.query(
-    "SELECT value FROM app_settings WHERE key='booking_duration_days'"
-  );
+  const tx = drizzle({ client });
+  const queue = await tx
+    .select()
+    .from(bookings)
+    .where(
+      and(
+        eq(bookings.segmentId, segmentId),
+        eq(bookings.status, "Waiting List")
+      )
+    )
+    .orderBy(
+      sql`COALESCE(${bookings.approvedAt},${bookings.requestedAt})`,
+      bookings.requestedAt,
+      bookings.id
+    )
+    .for("update");
+  const settings = await tx
+    .select({ value: appSettings.value })
+    .from(appSettings)
+    .where(eq(appSettings.key, "booking_duration_days"));
   const days = Number(settings[0]?.value ?? 30);
   const allocated: string[] = [];
   for (const booking of queue) {
-    const { rows: available } = await client.query(
-      "SELECT id FROM network_cores WHERE asset_id=$1 AND status='Available' ORDER BY core_number LIMIT $2 FOR UPDATE",
-      [segmentId, booking.cores]
-    );
+    const available = await tx
+      .select({ id: networkCores.id })
+      .from(networkCores)
+      .where(
+        and(
+          eq(networkCores.assetId, segmentId),
+          eq(networkCores.status, "Available")
+        )
+      )
+      .orderBy(networkCores.coreNumber)
+      .limit(booking.cores)
+      .for("update");
     if (available.length !== booking.cores) {
       break;
     }
@@ -485,10 +506,13 @@ export async function allocateWaiting(
       booking.id,
       available.map((row) => row.id)
     );
-    await client.query(
-      "UPDATE bookings SET status='Booked',expires_at=now()+($2||' days')::interval WHERE id=$1",
-      [booking.id, days]
-    );
+    await tx
+      .update(bookings)
+      .set({
+        expiresAt: sql`now()+(${days}||' days')::interval`,
+        status: "Booked",
+      })
+      .where(eq(bookings.id, booking.id));
     await audit(
       client,
       actorId,
@@ -501,7 +525,7 @@ export async function allocateWaiting(
       client,
       "Waiting list dialokasikan",
       `${booking.customer}: ${booking.cores} core tersedia dan booking ${booking.id} aktif.`,
-      booking.requested_by,
+      booking.requestedBy,
       booking.id
     );
     allocated.push(booking.id);
@@ -514,14 +538,13 @@ async function assignCores(
   bookingId: string,
   coreIds: number[]
 ) {
+  const tx = drizzle({ client });
   for (const coreId of coreIds) {
-    await client.query("UPDATE network_cores SET status='Booked' WHERE id=$1", [
-      coreId,
-    ]);
-    await client.query(
-      "INSERT INTO booking_cores(booking_id,core_id) VALUES($1,$2)",
-      [bookingId, coreId]
-    );
+    await tx
+      .update(networkCores)
+      .set({ status: "Booked" })
+      .where(eq(networkCores.id, coreId));
+    await tx.insert(bookingCores).values({ bookingId, coreId });
   }
 }
 
