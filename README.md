@@ -7,9 +7,12 @@ Monorepo ATLAS dengan React/TanStack, NestJS, Better Auth, dan PostgreSQL/PostGI
 ```sh
 cp .env.example .env
 docker compose up -d postgis
+npm install
 npm --prefix apps/server install
 npm --prefix apps/web install
 ```
+
+Lint dan format memakai Ultracite (Biome): `npm run check` untuk memeriksa, `npm run fix` untuk memperbaiki otomatis.
 
 Di terminal pertama jalankan server:
 
