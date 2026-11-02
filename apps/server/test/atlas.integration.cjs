@@ -35,22 +35,15 @@ async function main() {
     };
     const { Database } = require("../dist/database/database");
     const { AtlasService } = require("../dist/atlas/atlas.service");
+    const { migrateDatabase } = require("../dist/database/migration-runner");
     db = new Database();
-    await db.query(
-      await readFile("src/database/migrations/001-initial.sql", "utf8")
-    );
-    // Prove the new migration is idempotent.
-    await db.query(
-      await readFile("src/database/migrations/001-initial.sql", "utf8")
-    );
-    await db.query(
-      await readFile("src/database/migrations/003-analysis-history.sql", "utf8")
-    );
-    await db.query(
-      await readFile(
-        "src/database/migrations/007-bulk-analysis-jobs.sql",
-        "utf8"
-      )
+    await migrateDatabase(db.pool);
+    await assert.doesNotReject(
+      async () =>
+        db.query(
+          await readFile("src/database/migrations/001-initial.sql", "utf8")
+        ),
+      "001-initial.sql re-applies cleanly on a migrated database"
     );
     await db.query(
       `INSERT INTO "user"(id,name,email,role) VALUES('admin','Test Admin','admin@atlas.test','ADMIN'),('presales','Test Presales','presales@atlas.test','PRESALES')`
