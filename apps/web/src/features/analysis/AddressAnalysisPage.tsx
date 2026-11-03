@@ -68,7 +68,10 @@ type ResolvedRegion = {
   postalCode?: string | null;
 };
 
-async function resolveRegionParams(params: URLSearchParams) {
+async function resolveRegionParams(
+  params: URLSearchParams,
+  allowPostalFallback = false
+) {
   let result = await api<ResolvedRegion | null>(`/regions/resolve?${params}`);
   if (!result && params.has("province")) {
     const withoutProviderProvince = new URLSearchParams(params);
@@ -76,6 +79,18 @@ async function resolveRegionParams(params: URLSearchParams) {
     result = await api<ResolvedRegion | null>(
       `/regions/resolve?${withoutProviderProvince}`
     );
+  }
+  if (
+    !result &&
+    allowPostalFallback &&
+    /^\d{5}$/u.test(params.get("postalCode") ?? "") &&
+    (params.has("city") || params.has("cityCandidate"))
+  ) {
+    const postalParams = new URLSearchParams(params);
+    postalParams.delete("city");
+    postalParams.delete("cityCandidate");
+    postalParams.delete("province");
+    result = await api<ResolvedRegion | null>(`/regions/resolve?${postalParams}`);
   }
   return result;
 }
@@ -324,27 +339,17 @@ export function AddressAnalysisPage() {
     // A postal code may conflict with the street (or cover multiple kelurahan).
     // Prefer the street suggestion whenever one is being entered.
     enabled: Boolean(
-      province &&
-        city &&
-        !address.street.trim() &&
+      (selectedPoint || !address.street.trim()) &&
         /^\d{5}$/u.test(address.postalCode) &&
         !(district && subdistrict)
     ),
     staleTime: 60_000,
     retry: false,
     queryFn: () => {
-      const params = new URLSearchParams({
-        city: city!.name,
-        province: province!.name,
-        postalCode: address.postalCode,
-      });
-      return api<{
-        provinceCode: string;
-        cityCode: string;
-        districtCode: string | null;
-        subdistrictCode: string | null;
-        postalCode?: string | null;
-      } | null>(`/regions/resolve?${params}`);
+      const params = new URLSearchParams({ postalCode: address.postalCode });
+      if (city) params.set("city", city.name);
+      if (province) params.set("province", province.name);
+      return resolveRegionParams(params);
     },
   });
   useEffect(() => {
@@ -353,13 +358,20 @@ export function AddressAnalysisPage() {
       return;
     }
     setAddress((current) =>
-      current.cityCode === resolved.cityCode &&
+      (!current.provinceCode ||
+        current.provinceCode === resolved.provinceCode) &&
+      (!current.cityCode || current.cityCode === resolved.cityCode) &&
+      (!current.districtCode ||
+        !resolved.districtCode ||
+        current.districtCode === resolved.districtCode) &&
       current.postalCode === address.postalCode
         ? {
             ...current,
             provinceCode: resolved.provinceCode,
-            districtCode: resolved.districtCode ?? "",
-            subdistrictCode: resolved.subdistrictCode ?? "",
+            cityCode: resolved.cityCode,
+            districtCode: current.districtCode || resolved.districtCode || "",
+            subdistrictCode:
+              current.subdistrictCode || resolved.subdistrictCode || "",
           }
         : current
     );
@@ -523,10 +535,19 @@ export function AddressAnalysisPage() {
         postalCode: fields.postalCode ?? address.postalCode,
         street: fields.street ?? address.street,
       });
-      if (!(params.has("city") || params.has("cityCandidate"))) {
+      if (
+        !(
+          params.has("city") ||
+          params.has("cityCandidate") ||
+          /^\d{5}$/u.test(params.get("postalCode") ?? "")
+        )
+      ) {
         return Promise.resolve(null);
       }
-      return resolveRegionParams(params);
+      return resolveRegionParams(
+        params,
+        !address.provinceCode && !address.cityCode
+      );
     };
     let direct: ResolvedRegion | null = null;
     try {
@@ -592,11 +613,18 @@ export function AddressAnalysisPage() {
       const reverse = await api<Partial<AddressSuggestion> | null>(
         `/analysis/address/reverse?${new URLSearchParams({ longitude: String(longitude), latitude: String(latitude) })}`
       );
-      if (!(reverse?.city || reverse?.cityCandidates?.length)) {
+      if (
+        !reverse ||
+        !(
+          reverse.city ||
+          reverse.cityCandidates?.length ||
+          /^\d{5}$/u.test(reverse.postalCode ?? "")
+        )
+      ) {
         return;
       }
       const params = regionParams(reverse);
-      const resolved = await resolveRegionParams(params);
+      const resolved = await resolveRegionParams(params, true);
       if (!resolved || lookupId !== regionLookupId.current) {
         return;
       }
@@ -947,6 +975,7 @@ export function AddressAnalysisPage() {
                           className="form-select"
                           id="province"
                           onChange={(event) => {
+                            regionLookupId.current += 1;
                             setAddress((current) => ({
                               ...current,
                               provinceCode: event.target.value,
@@ -983,6 +1012,7 @@ export function AddressAnalysisPage() {
                           disabled={!province}
                           id="city"
                           onChange={(event) => {
+                            regionLookupId.current += 1;
                             setAddress((current) => ({
                               ...current,
                               cityCode: event.target.value,
@@ -1016,6 +1046,7 @@ export function AddressAnalysisPage() {
                           disabled={!city}
                           id="district"
                           onChange={(event) => {
+                            regionLookupId.current += 1;
                             setAddress((current) => ({
                               ...current,
                               districtCode: event.target.value,
@@ -1052,6 +1083,7 @@ export function AddressAnalysisPage() {
                           }
                           id="subdistrict"
                           onChange={(event) => {
+                            regionLookupId.current += 1;
                             const selected = subdistricts.find(
                               (item) => item.code === event.target.value
                             );

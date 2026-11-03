@@ -2034,7 +2034,8 @@ body {
   display: flex;
   gap: 6px;
 }
-.map-file-actions .btn {
+.map-file-actions .btn,
+.map-top-actions > .btn {
   padding: 8px 10px;
   font-size: 10px;
   white-space: nowrap;
@@ -2181,7 +2182,8 @@ body {
   .map-file-actions {
     gap: 4px;
   }
-  .map-file-actions .btn {
+  .map-file-actions .btn,
+  .map-top-actions > .btn {
     padding: 8px;
     font-size: 9px;
   }
@@ -3047,7 +3049,7 @@ body {
 .map-package-picker details {
   position: relative;
 }
-.map-package-picker details > summary {
+.map-package-picker > details > summary {
   display: flex;
   gap: 8px;
   align-items: center;
@@ -3056,13 +3058,19 @@ body {
   cursor: pointer;
   list-style: none;
   border: 1px solid #dce3ee;
-  border-radius: 24px;
+  border-radius: 10px;
   box-shadow: 0 2px 5px #17233b20;
 }
-.map-package-picker details > summary::-webkit-details-marker {
+.map-package-picker > details > summary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.map-package-picker > details > summary::-webkit-details-marker {
   display: none;
 }
-.map-package-picker details > summary i {
+.map-package-picker > details > summary i {
   flex: 0 0 auto;
   color: #8492a7;
 }

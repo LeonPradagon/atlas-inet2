@@ -95,10 +95,10 @@ export class RegionsController {
     );
     const provinceName =
       province?.trim().replace(/^(?:provinsi)\s+/iu, "") ?? "";
-    if (!cityNames.length) {
+    const postal = postalCode?.trim() ?? "";
+    if (!cityNames.length && !/^\d{5}$/u.test(postal)) {
       return null;
     }
-    const postal = postalCode?.trim() ?? "";
     const attempts = [
       [districtNames, subdistrictNames, postal],
       [districtNames, subdistrictNames, ""],
@@ -111,6 +111,9 @@ export class RegionsController {
     ] as const;
     const seen = new Set<string>();
     for (const [districtFilter, subdistrictFilter, postalFilter] of attempts) {
+      if (!cityNames.length && !postalFilter) {
+        continue;
+      }
       const key = [
         districtFilter.join(","),
         subdistrictFilter.join(","),
@@ -132,7 +135,7 @@ export class RegionsController {
          JOIN indonesia_cities c ON c.province_code=p.code
          JOIN indonesia_districts d ON d.city_code=c.code
          JOIN indonesia_subdistricts s ON s.district_code=d.code
-         WHERE btrim(regexp_replace(lower(c.name), '^(kota administrasi|kota|kabupaten administrasi|kabupaten|kab)\\s+', '')) = ANY($1::text[])
+         WHERE (cardinality($1::text[]) = 0 OR btrim(regexp_replace(lower(c.name), '^(kota administrasi|kota|kabupaten administrasi|kabupaten|kab)\\s+', '')) = ANY($1::text[]))
            AND (cardinality($2::text[]) = 0 OR btrim(lower(d.name)) = ANY($2::text[]))
            AND (cardinality($3::text[]) = 0 OR btrim(lower(s.name)) = ANY($3::text[]))
            AND ($4 = '' OR s.postal_code = $4)

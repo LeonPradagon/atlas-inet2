@@ -231,3 +231,27 @@ test("maps Indonesian autocomplete language to Photon default", async (t) => {
   assert.equal(requests[0].searchParams.get("lang"), "default");
   assert.equal(requests[0].searchParams.get("zoom"), "13");
 });
+
+test("reverse lookup supplements incomplete Photon regions with Nominatim", async (t) => {
+  const previous = { fetch: global.fetch, geocoder: process.env.GEOCODER_URL };
+  process.env.GEOCODER_URL = "http://photon.test/";
+  global.fetch = async (input) => {
+    const url = new URL(typeof input === "string" ? input : input.toString());
+    if (url.hostname === "photon.test") {
+      return response({ features: [{ properties: { locality: "Contoh", postcode: "12345" } }] });
+    }
+    if (url.hostname === "geoservices.big.go.id") {
+      return response({ features: [] });
+    }
+    return response({ address: { city: "Kota Contoh", district: "Contoh", village: "Desa Contoh", state: "Banten", country_code: "id" } });
+  };
+  t.after(() => {
+    global.fetch = previous.fetch;
+    if (previous.geocoder === undefined) delete process.env.GEOCODER_URL;
+    else process.env.GEOCODER_URL = previous.geocoder;
+  });
+  const result = await new GeocodingService().reverseAddress(106, -6);
+  assert.equal(result.city, "Kota Contoh");
+  assert.equal(result.district, "Contoh");
+  assert.equal(result.subdistrict, "Desa Contoh");
+});

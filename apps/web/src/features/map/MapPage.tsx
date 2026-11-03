@@ -39,8 +39,13 @@ import {
   loadNetworkMapIcons,
 } from "./networkMap";
 import { SegmentRelations } from "./SegmentRelations";
+import { registerSatelliteTiles } from "./satelliteTiles";
 
 type Coordinate = [number, number];
+const indonesiaBounds: [[number, number], [number, number]] = [
+  [94, -12],
+  [142, 7],
+];
 type MapProvinceOption = {
   code: string;
   name: string;
@@ -512,6 +517,15 @@ export function MapPage() {
   const [provinceCode, setProvinceCode] = useState("");
   const [selectedImportIds, setSelectedImportIds] = useState<string[]>([]);
   const [activeImportId, setActiveImportId] = useState("");
+  const [globeEnabled, setGlobeEnabled] = useState(true);
+  const [satelliteEnabled, setSatelliteEnabled] = useState(false);
+  const previousMapView = useRef<{
+    center: [number, number];
+    zoom: number;
+    bearing: number;
+    pitch: number;
+  } | null>({ center: [118, -2.5], zoom: 5.3, bearing: 0, pitch: 0 });
+  const packageMenuRef = useRef<HTMLDetailsElement>(null);
   const packageBoundsRequest = useRef(0);
   const selectedImportPackages = (mapImportsQuery.data ?? []).filter((item) =>
     selectedImportIds.includes(item.id)
@@ -1017,17 +1031,14 @@ export function MapPage() {
       return;
     }
     setWorkerUrl(workerUrl);
+    registerSatelliteTiles();
     localStorage.removeItem("atlas-map-focus");
     localStorage.removeItem("atlas-map-focus-design");
     const instance = new MapLibreMap({
       container: mapElement.current,
       style: "https://tiles.openfreemap.org/styles/liberty",
       center: [118, -2.5],
-      zoom: 5.3,
-      maxBounds: [
-        [94, -12],
-        [142, 7],
-      ],
+      zoom: 1.5,
     });
     map.current = instance;
     let boundsTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1036,6 +1047,7 @@ export function MapPage() {
     instance.addControl(new NavigationControl(), "top-right");
     instance.on("error", () => setMapError(true));
     instance.on("load", () => {
+      instance.setProjection({ type: "globe" });
       addAtlasMapIcons(instance);
       const updateBounds = () => {
         const bounds = instance.getBounds();
@@ -1082,6 +1094,22 @@ export function MapPage() {
         source: "selected-ftth-boundary",
         paint: { "fill-color": "#3454d8", "fill-opacity": 0.12 },
       });
+      instance.addSource("satellite-imagery", {
+        type: "raster",
+        tiles: ["atlas-satellite://{z}/{x}/{y}"],
+        tileSize: 256,
+        maxzoom: 23,
+        attribution: "Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+      });
+      instance.addLayer(
+        {
+          id: "satellite-imagery",
+          type: "raster",
+          source: "satellite-imagery",
+          layout: { visibility: "none" },
+        },
+        "selected-ftth-boundary-fill"
+      );
       instance.addLayer({
         id: "selected-ftth-boundary-line",
         type: "line",
@@ -1096,7 +1124,11 @@ export function MapPage() {
         id: "network-polygons",
         type: "fill",
         source: "network-shapes",
-        filter: ["!=", ["get", "fillEnabled"], false],
+        filter: [
+          "all",
+          ["==", ["geometry-type"], "Polygon"],
+          ["!=", ["get", "fillEnabled"], false],
+        ],
         paint: {
           "fill-color": ["coalesce", ["get", "fillColor"], "#3454d1"],
           "fill-opacity": ["coalesce", ["get", "fillOpacity"], 0.25],
@@ -1488,7 +1520,7 @@ export function MapPage() {
     map.current?.fitBounds(province.bounds, {
       padding: 48,
       maxZoom: 10,
-      duration: 0,
+      duration: 1200,
     });
     setAssetPage(1);
     setSelectedId("");
@@ -2058,9 +2090,11 @@ export function MapPage() {
                 Tampilkan beberapa paket bersama. Pilihan terakhir aktif untuk
                 edit dan ekspor.
               </p>
-              <details>
+              <details ref={packageMenuRef}>
                 <summary>
-                  {activeImportPackage?.name ?? "Pilih paket KMZ"}
+                  <span title={activeImportPackage?.name}>
+                    {activeImportPackage?.name ?? "Pilih paket KMZ"}
+                  </span>
                   <i aria-hidden="true" className="bi bi-chevron-down" />
                 </summary>
                 <div className="map-package-menu">
@@ -2090,7 +2124,12 @@ export function MapPage() {
                         <input
                           aria-label={`Tampilkan ${item.name}`}
                           checked={selected}
-                          onChange={() => toggleMapPackage(item.id)}
+                          onChange={() => {
+                            toggleMapPackage(item.id);
+                            if (packageMenuRef.current) {
+                              packageMenuRef.current.open = false;
+                            }
+                          }}
                           type="checkbox"
                         />
                         <button
@@ -2099,6 +2138,9 @@ export function MapPage() {
                               toggleMapPackage(item.id);
                             }
                             setActiveImportId(item.id);
+                            if (packageMenuRef.current) {
+                              packageMenuRef.current.open = false;
+                            }
                           }}
                           type="button"
                         >
@@ -2269,6 +2311,63 @@ export function MapPage() {
             </div>
           )}
           <div className="map-top-actions">
+            <button
+              aria-pressed={satelliteEnabled}
+              className={`btn ${satelliteEnabled ? "btn-primary" : "btn-light"}`}
+              disabled={!mapReady}
+              onClick={() => {
+                const next = !satelliteEnabled;
+                map.current?.setLayoutProperty(
+                  "satellite-imagery",
+                  "visibility",
+                  next ? "visible" : "none"
+                );
+                setSatelliteEnabled(next);
+              }}
+              type="button"
+            >
+              <i aria-hidden="true" className="bi bi-layers me-1" />
+              Satelit
+            </button>
+            <button
+              aria-pressed={globeEnabled}
+              className="btn btn-light"
+              disabled={!mapReady}
+              onClick={() => {
+                const instance = map.current;
+                if (!instance) {
+                  return;
+                }
+                if (!globeEnabled) {
+                  const center = instance.getCenter();
+                  previousMapView.current = {
+                    center: [center.lng, center.lat],
+                    zoom: instance.getZoom(),
+                    bearing: instance.getBearing(),
+                    pitch: instance.getPitch(),
+                  };
+                  instance.setMaxBounds(null);
+                  instance.setProjection({ type: "globe" });
+                  instance.flyTo({
+                    center: [118, -2.5],
+                    zoom: 1.5,
+                    pitch: 0,
+                    bearing: 0,
+                  });
+                } else {
+                  instance.setProjection({ type: "mercator" });
+                  instance.setMaxBounds(indonesiaBounds);
+                  if (previousMapView.current) {
+                    instance.flyTo(previousMapView.current);
+                  }
+                }
+                setGlobeEnabled(!globeEnabled);
+              }}
+              type="button"
+            >
+              <i aria-hidden="true" className="bi bi-globe2 me-1" />
+              {globeEnabled ? "Peta" : "Globe"}
+            </button>
             {user?.role === "ADMIN" && (
               <div className="map-file-actions">
                 <button

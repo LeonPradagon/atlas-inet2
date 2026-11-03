@@ -529,7 +529,7 @@ export class GeocodingService {
       // The administrative boundary lookup can still resolve coordinates when Photon is unavailable.
     }
     const properties = features[0]?.properties;
-    const photon: StructuredAddress | null = properties
+    let photon: StructuredAddress | null = properties
       ? {
           city: properties.city ?? properties.county,
           district: properties.district,
@@ -541,9 +541,14 @@ export class GeocodingService {
 
     const boundary = await this.reverseBigBoundary(longitude, latitude);
     if (boundary) {
-      return { ...photon, ...boundary };
+      photon = { ...photon, ...boundary };
     }
-    if (photon?.subdistrict && !/^(?:rt|rw)\s*\d/iu.test(photon.subdistrict)) {
+    if (
+      photon?.city &&
+      photon.district &&
+      photon.subdistrict &&
+      !/^(?:rt|rw)\s*\d/iu.test(photon.subdistrict)
+    ) {
       return photon;
     }
 
