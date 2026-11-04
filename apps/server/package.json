@@ -12,7 +12,7 @@
     "migrate:local": "node --env-file=../../.env --import tsx src/database/migrate.ts",
     "start": "node dist/main.js",
     "start:dev": "tsx watch src/main.ts",
-    "start:dev:local": "set -a; . ../../.env; set +a; tsx watch src/main.ts",
+    "start:dev:local": "node --env-file=../../.env node_modules/tsx/dist/cli.mjs watch src/main.ts",
     "test": "node --import tsx --test test/*.test.cjs",
     "test:integration:local": "npm run build && node --env-file=../../.env test/atlas.integration.cjs"
   },

@@ -198,7 +198,7 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
       {
         type: "Feature",
         geometry: { type: "Point", coordinates: center },
-        properties: { kind: "location", label: "Lokasi pelanggan" },
+        properties: { kind: "location", label: "Titik lokasi" },
       },
     ];
     if (result.network?.geometry) {

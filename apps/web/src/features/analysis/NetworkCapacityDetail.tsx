@@ -89,7 +89,7 @@ export function NetworkCapacityDetail({
         </>
       )}
       {capacity.fields.length > 0 && (
-        <table className="table-sm small mt-2 mb-0 table">
+        <table className="table atlas-data-table atlas-data-table-compact table-sm small mt-2 mb-0">
           <tbody>
             {capacity.fields.map(({ label, value }) => (
               <tr key={label}>
