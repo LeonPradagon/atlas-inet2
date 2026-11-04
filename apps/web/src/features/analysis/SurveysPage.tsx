@@ -34,7 +34,7 @@ const labels: Record<string, string> = {
 function SurveyStatusTag({ status }: { status: string }) {
   return (
     <span
-      className={`survey-status-tag${status === "VERIFIED" ? " is-verified" : ""}`}
+      className={`atlas-tag${status === "VERIFIED" ? " is-verified" : ""}`}
     >
       {labels[status] ?? status}
     </span>

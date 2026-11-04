@@ -1078,7 +1078,7 @@ export function AnalysisHistoryPage() {
                   >
                     <td className="text-nowrap">{dateTime(item.createdAt)}</td>
                     <td>
-                      <span className="badge text-bg-light border">
+                      <span className="atlas-tag">
                         {item.analysisType === "ADDRESS"
                           ? "Analisis alamat"
                           : item.analysisType === "BULK"

@@ -465,7 +465,7 @@ body {
   margin-top: 4px;
   font-size: 11px;
 }
-.survey-status-tag {
+.atlas-tag {
   display: inline-flex;
   width: fit-content;
   align-items: center;
@@ -479,7 +479,7 @@ body {
   line-height: 1.25;
   white-space: nowrap;
 }
-.survey-status-tag.is-verified {
+.atlas-tag.is-verified {
   color: #176b49;
   background: #e9f6ef;
   border-color: #bfdfcb;

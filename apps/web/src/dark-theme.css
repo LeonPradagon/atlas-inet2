@@ -343,12 +343,12 @@
   --bs-btn-color: #a2b5ff;
   --bs-btn-border-color: #7f99ff;
 }
-[data-bs-theme="dark"] .survey-status-tag {
+[data-bs-theme="dark"] .atlas-tag {
   color: #dce5f2;
   background: #243247;
   border-color: #42516a;
 }
-[data-bs-theme="dark"] .survey-status-tag.is-verified {
+[data-bs-theme="dark"] .atlas-tag.is-verified {
   color: #a4e3c0;
   background: #245341;
   border-color: #33785d;
