@@ -3409,6 +3409,11 @@ body {
 }
 
 /* Cable list and detail refinements */
+.segment-meta>b{display:flex;align-items:baseline;gap:10px;min-width:0}
+.segment-meta .segment-name{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.segment-meta>b>small{display:block;flex:0 0 auto;margin:0;font-size:10px;line-height:1.2;white-space:nowrap}
+.segment-item{gap:0}.segment-item>.segment-meta{width:100%}.segment-item>i{margin-left:10px}
+.ftth-design-group>summary{gap:0}.ftth-design-group>summary>.segment-meta{width:100%}
 .asset-list-tabs{display:flex;gap:4px;padding:3px;background:var(--bs-tertiary-bg,#f4f6fa);border-radius:7px}
 .asset-list-tabs button{flex:1;border:0;border-radius:5px;padding:7px 8px;background:transparent;color:var(--bs-secondary-color,#6d7890);font-size:10px;font-weight:650}
 .asset-list-tabs button.active{background:var(--bs-body-bg,#fff);color:var(--bs-primary,#344dc1);box-shadow:0 1px 3px #17233b18}
@@ -3425,6 +3430,11 @@ body {
 .segment-detail h3{font-size:15px;line-height:1.35;margin:17px 0 5px;overflow-wrap:anywhere}
 .segment-detail-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.segment-detail-heading h3{min-width:0}.segment-detail-heading>small{margin-top:20px;font-size:10px;font-weight:700;white-space:nowrap}
 .detail-section-heading{margin:0 0 10px;font-size:13px;font-weight:700;line-height:1.35}
+.core-verification-panel{background:var(--bs-tertiary-bg,#fafbfe);border-color:var(--bs-border-color,#e7ebf2)!important}
+.core-verification-panel>b{color:var(--bs-body-color,#34415a)}
+.core-summary{margin-bottom:11px}.core-summary small{font-size:9px}.core-summary b{font-size:16px;line-height:1.2}
+.core-breakdown>div{padding:7px 0;font-size:10px}.core-breakdown>div>b{font-size:10px}
+.segment-detail .admin-settings summary{font-size:11px}.segment-detail .admin-settings>small{font-size:10px;line-height:1.45}
 .core-list-details{margin:0 0 18px}.core-list-details summary{font-size:13px;line-height:1.4}
 .core-status-list{max-height:360px;margin-top:10px}.core-status-list>div{padding:8px 10px;font-size:11px}
 .core-pagination{display:grid;grid-template-columns:auto 74px;align-items:center;gap:7px;margin-top:10px}
