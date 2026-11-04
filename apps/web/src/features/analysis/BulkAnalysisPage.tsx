@@ -35,6 +35,19 @@ type BulkJob = {
   failed: number;
   cancelRequested: boolean;
 };
+function rowReviewReason(row: AnalysisRow) {
+  if (row.message) return row.message;
+  if (row.status === "NETWORK_NOT_FOUND") {
+    return "Jaringan tidak ditemukan dalam radius 1 km.";
+  }
+  if (row.status === "ROUTING_UNAVAILABLE") {
+    return "Jaringan ditemukan, tetapi rute jalan belum tersedia.";
+  }
+  if (["OK", "QUEUED", "PROCESSING", "CANCELLED"].includes(row.status)) {
+    return "";
+  }
+  return "Periksa kembali alamat atau koordinat pada file.";
+}
 function downloadWorkbook(workbook: ExcelJS.Workbook, name: string) {
   void workbook.xlsx.writeBuffer().then((buffer) => {
     const url = URL.createObjectURL(
@@ -51,6 +64,7 @@ function downloadWorkbook(workbook: ExcelJS.Workbook, name: string) {
 }
 export function BulkAnalysisPage() {
   const input = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLElement>(null);
   const [jobId, setJobId] = useState(
     () => new URLSearchParams(window.location.search).get("jobId") ?? ""
   );
@@ -61,6 +75,8 @@ export function BulkAnalysisPage() {
     null
   );
   const [loading, setLoading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [expanding, setExpanding] = useState<number | null>(null);
   const [error, setError] = useState("");
   const queryClient = useQueryClient();
@@ -132,6 +148,7 @@ export function BulkAnalysisPage() {
     setStatusFilter("");
     setSelectedRowNumber(null);
     setError("");
+    setSelectedFile(null);
     if (input.current) {
       input.current.value = "";
     }
@@ -143,8 +160,14 @@ export function BulkAnalysisPage() {
     setError("");
     setLoading(true);
     try {
-      if (!/\.xlsx$/iu.test(file.name) || file.size > 15 * 1024 * 1024) {
-        throw new Error("Pilih file .xlsx berukuran maksimal 15 MB.");
+      if (!/\.xlsx$/iu.test(file.name)) {
+        throw new Error("Format file belum didukung. Pilih file Excel .xlsx.");
+      }
+      if (file.size === 0) {
+        throw new Error("File kosong. Pilih file Excel yang berisi data lokasi.");
+      }
+      if (file.size > 15 * 1024 * 1024) {
+        throw new Error("Ukuran file melebihi 15 MB. Pilih file yang lebih kecil.");
       }
       const form = new FormData();
       form.append("file", file);
@@ -164,6 +187,28 @@ export function BulkAnalysisPage() {
     } finally {
       setLoading(false);
     }
+  };
+  const chooseFile = (file?: File) => {
+    if (!file) return;
+    setSelectedFile(file);
+    setError("");
+    if (input.current) input.current.value = "";
+    void processFile(file);
+  };
+  const fileSizeLabel = (size: number) =>
+    size < 1024
+      ? `${size} byte`
+      : size < 1024 * 1024
+      ? `${Math.max(1, Math.round(size / 1024))} KB`
+      : `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  const showRowsNeedingReview = () => {
+    setSearch("");
+    setStatusFilter("ERROR");
+    setPage(1);
+    setSelectedRowNumber(null);
+    requestAnimationFrame(() =>
+      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+    );
   };
   const expand = async (row: AnalysisRow) => {
     if (
@@ -323,59 +368,152 @@ export function BulkAnalysisPage() {
         title="Analisis massal"
       />
       <section className="card panel-card mb-4">
-        <div className="card-body d-flex align-items-center flex-wrap gap-3">
+        <div className="card-body">
           <input
-            accept=".xlsx"
-            aria-label="File lokasi analisis massal"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            aria-describedby="bulk-upload-help"
+            aria-label="Pilih file Excel untuk analisis massal"
+            className="bulk-upload-input"
             disabled={loading}
-            onChange={(e) => void processFile(e.target.files?.[0])}
+            onChange={(event) => chooseFile(event.target.files?.[0])}
             ref={input}
             type="file"
           />
-          {loading && <span role="status">Mengunggah…</span>}
-          {jobId && (
-            <button
-              className="btn btn-outline-secondary"
-              onClick={clearCurrentJob}
-              type="button"
-            >
-              Bersihkan tampilan
-            </button>
-          )}
-          {job && (
-            <span>
-              {job.fileName} · {bulkJobStatusLabel(job.status)} ·{" "}
-              {job.processed}/{job.total} lokasi
-            </span>
-          )}
-          {jobId && activeJob && (
-            <button
-              className="btn btn-outline-danger"
-              onClick={() =>
-                void api(
-                  "/analysis/bulk/jobs/" + jobId + "/cancel",
-                  postJson({})
-                )
-                  .then(() =>
-                    queryClient.invalidateQueries({
-                      queryKey: ["bulk-job", jobId],
-                    })
-                  )
-                  .catch((e) => setError(e.message))
+          <div
+            className={`bulk-upload-zone${isDraggingFile ? " is-dragging" : ""}${loading ? " is-uploading" : ""}`}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              if (!loading) setIsDraggingFile(true);
+            }}
+            onDragOver={(event) => event.preventDefault()}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                setIsDraggingFile(false);
               }
-              type="button"
-            >
-              Batalkan pekerjaan
-            </button>
-          )}
-          {job && (
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setIsDraggingFile(false);
+              if (loading) return;
+              if (event.dataTransfer.files.length > 1) {
+                setError("Pilih satu file Excel setiap kali mengunggah.");
+                return;
+              }
+              chooseFile(event.dataTransfer.files[0]);
+            }}
+          >
+            <div className="bulk-upload-icon" aria-hidden="true">
+              <i className="bi bi-file-earmark-spreadsheet" />
+            </div>
+            <div className="bulk-upload-copy">
+              <strong>{isDraggingFile ? "Lepaskan file untuk mulai" : "Unggah data lokasi"}</strong>
+              <span id="bulk-upload-help">
+                Pilih file Excel (.xlsx), maksimal 15 MB. Analisis langsung dimulai setelah file dipilih.
+              </span>
+              {selectedFile && (
+                <span className="bulk-upload-selected" title={selectedFile.name}>
+                  <i className="bi bi-file-earmark-check" aria-hidden="true" />
+                  <b>{selectedFile.name}</b>
+                  <span>{fileSizeLabel(selectedFile.size)}</span>
+                </span>
+              )}
+            </div>
             <button
-              className="btn btn-success ms-auto"
-              onClick={() => void download().catch((e) => setError(e.message))}
+              className="btn btn-outline-primary bulk-upload-button"
+              disabled={loading}
+              onClick={() => input.current?.click()}
               type="button"
             >
-              Unduh hasil Excel
+              {selectedFile ? "Pilih file lain" : "Pilih file Excel"}
             </button>
+            <span className="bulk-upload-drop-hint">atau seret file ke sini</span>
+          </div>
+          <div aria-live="polite" className="bulk-upload-feedback" role="status">
+            {loading && (
+              <>
+                <span
+                  aria-hidden="true"
+                  className="spinner-border spinner-border-sm"
+                />
+                <span>
+                  Mengunggah {selectedFile?.name ?? "file"} dan memulai analisis…
+                </span>
+              </>
+            )}
+          </div>
+          {jobId && (
+            <div className="bulk-job-footer">
+              <div className="bulk-job-summary">
+                {job ? (
+                  <>
+                    <div className="bulk-job-titleline">
+                      <strong title={job.fileName}>{job.fileName}</strong>
+                      <span
+                        className={`bulk-job-state${job.status === "COMPLETED" || job.status === "COMPLETED_WITH_ERRORS" ? " is-complete" : ""}`}
+                      >
+                        {job.status === "COMPLETED_WITH_ERRORS"
+                          ? "Selesai"
+                          : bulkJobStatusLabel(job.status)}
+                      </span>
+                    </div>
+                    {job.failed > 0 ? (
+                      <button
+                        className="bulk-job-review-link"
+                        onClick={showRowsNeedingReview}
+                        type="button"
+                      >
+                        {job.failed} dari {job.total} lokasi perlu diperiksa
+                        <i className="bi bi-arrow-right-short" aria-hidden="true" />
+                      </button>
+                    ) : (
+                      <span>{job.processed} dari {job.total} lokasi</span>
+                    )}
+                  </>
+                ) : (
+                  <span>Memuat hasil analisis…</span>
+                )}
+              </div>
+              <div className="bulk-job-actions">
+                <button
+                  className="btn btn-outline-secondary"
+                  onClick={clearCurrentJob}
+                  type="button"
+                >
+                  Bersihkan tampilan
+                </button>
+                {activeJob && (
+                  <button
+                    className="btn btn-outline-danger"
+                    onClick={() =>
+                      void api(
+                        "/analysis/bulk/jobs/" + jobId + "/cancel",
+                        postJson({})
+                      )
+                        .then(() =>
+                          queryClient.invalidateQueries({
+                            queryKey: ["bulk-job", jobId],
+                          })
+                        )
+                        .catch((e) => setError(e.message))
+                    }
+                    type="button"
+                  >
+                    Batalkan pekerjaan
+                  </button>
+                )}
+                {job && !activeJob && (
+                  <button
+                    className="btn btn-success"
+                    onClick={() =>
+                      void download().catch((e) => setError(e.message))
+                    }
+                    type="button"
+                  >
+                    Unduh hasil Excel
+                  </button>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </section>
@@ -385,7 +523,10 @@ export function BulkAnalysisPage() {
         </div>
       )}
       {jobId && (
-        <section className="card panel-card">
+        <section
+          className="card panel-card bulk-analysis-results"
+          ref={resultsRef}
+        >
           <div className="card-header">
             <h3>Hasil pencarian jaringan</h3>
           </div>
@@ -428,7 +569,7 @@ export function BulkAnalysisPage() {
                   <option value="ROUTING_UNAVAILABLE">
                     Rute belum tersedia
                   </option>
-                  <option value="ERROR">Gagal</option>
+                  <option value="ERROR">Perlu diperiksa</option>
                   <option value="PROCESSING">Diproses</option>
                   <option value="QUEUED">Menunggu</option>
                 </select>
@@ -448,13 +589,20 @@ export function BulkAnalysisPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => (
-                    <tr
-                      className={
-                        selectedRowNumber === row.row ? "table-primary" : ""
-                      }
-                      key={row.row}
-                    >
+                  {rows.map((row) => {
+                    const reason = rowReviewReason(row);
+                    const needsReview = Boolean(reason);
+                    return (
+                      <tr
+                        className={
+                          selectedRowNumber === row.row
+                            ? "table-primary"
+                            : needsReview
+                              ? "bulk-row-needs-review"
+                              : ""
+                        }
+                        key={row.row}
+                      >
                       <td>{row.row}</td>
                       <td>
                         <button
@@ -483,8 +631,18 @@ export function BulkAnalysisPage() {
                             : Math.round(row.distanceMeters) + " m"}
                       </td>
                       <td>
-                        {row.status}
-                        <small className="d-block">{row.message}</small>
+                        {needsReview ? (
+                          <span className="bulk-row-review-state">
+                            Perlu diperiksa
+                          </span>
+                        ) : (
+                          row.status
+                        )}
+                        {reason && (
+                          <small className="bulk-row-review-reason">
+                            {reason}
+                          </small>
+                        )}
                       </td>
                       <td>
                         {row.network && jobQuery.data?.historyId && (
@@ -506,8 +664,9 @@ export function BulkAnalysisPage() {
                           </button>
                         )}
                       </td>
-                    </tr>
-                  ))}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

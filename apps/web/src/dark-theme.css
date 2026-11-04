@@ -397,3 +397,75 @@
 [data-bs-theme="dark"] .maplibregl-popup-anchor-top .maplibregl-popup-tip {
   border-bottom-color: var(--atlas-surface);
 }
+[data-bs-theme="dark"] .bulk-upload-zone {
+  color: var(--bs-body-color);
+  background: var(--bs-tertiary-bg);
+  border-color: #536780;
+}
+[data-bs-theme="dark"] .bulk-upload-zone:focus-within,
+[data-bs-theme="dark"] .bulk-upload-input:focus-visible + .bulk-upload-zone {
+  background: #22314a;
+}
+[data-bs-theme="dark"] .bulk-upload-zone.is-dragging {
+  background: #263956;
+  border-color: #8299ed;
+}
+[data-bs-theme="dark"] .bulk-upload-zone.is-uploading {
+  background: #1a273a;
+}
+[data-bs-theme="dark"] .bulk-upload-icon {
+  color: #b2c1ff;
+  background: #293956;
+}
+[data-bs-theme="dark"] .bulk-upload-copy > strong,
+[data-bs-theme="dark"] .bulk-upload-selected b,
+[data-bs-theme="dark"] .bulk-job-summary strong {
+  color: var(--bs-heading-color);
+}
+[data-bs-theme="dark"] .bulk-upload-copy > span,
+[data-bs-theme="dark"] .bulk-upload-selected > span,
+[data-bs-theme="dark"] .bulk-upload-feedback,
+[data-bs-theme="dark"] .bulk-job-summary > span {
+  color: var(--atlas-muted);
+}
+[data-bs-theme="dark"] .bulk-upload-selected {
+  color: #b2c1ff !important;
+}
+[data-bs-theme="dark"] .bulk-job-footer {
+  border-color: var(--bs-border-color);
+}
+[data-bs-theme="dark"] .bulk-job-state {
+  color: #d1dbea;
+  background: #34445a;
+}
+[data-bs-theme="dark"] .bulk-job-state.is-complete {
+  color: #a4e3c0;
+  background: #245341;
+}
+[data-bs-theme="dark"] .bulk-job-review-link {
+  color: #f0ce78;
+  text-decoration-color: #b99a4d;
+}
+[data-bs-theme="dark"] .bulk-job-review-link:hover {
+  color: #ffe6a3;
+}
+[data-bs-theme="dark"] .bulk-job-review-link:focus-visible {
+  outline-color: #e5bf59;
+}
+[data-bs-theme="dark"] .bulk-job-actions .btn-outline-secondary {
+  --bs-btn-color: #c8d3e4;
+  --bs-btn-border-color: #64748b;
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-bg: #34445a;
+  --bs-btn-hover-border-color: #8291a6;
+}
+[data-bs-theme="dark"] .bulk-analysis-results .bulk-row-needs-review > td {
+  background-color: #252a2b;
+}
+[data-bs-theme="dark"] .bulk-row-review-state {
+  color: #f0ce78;
+  background: #493b18;
+}
+[data-bs-theme="dark"] .bulk-row-review-reason {
+  color: #dfcb91;
+}
