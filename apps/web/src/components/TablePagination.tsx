@@ -19,7 +19,10 @@ export function TablePagination({
   }
 
   return (
-    <div className="card-footer d-flex align-items-center justify-content-between small text-secondary flex-wrap gap-2">
+    <nav
+      aria-label={`Navigasi halaman ${label}`}
+      className="card-footer d-flex align-items-center justify-content-between small text-secondary flex-wrap gap-2"
+    >
       <span>
         Menampilkan {((page - 1) * pageSize + 1).toLocaleString("id-ID")}–
         {Math.min(page * pageSize, total).toLocaleString("id-ID")} dari{" "}
@@ -32,7 +35,7 @@ export function TablePagination({
         </span>
         {/* biome-ignore lint/a11y/useSemanticElements: Bootstrap btn-group markup; a fieldset breaks its layout */}
         <div
-          aria-label={`Pagination ${label}`}
+          aria-label={`Kontrol halaman ${label}`}
           className="btn-group btn-group-sm"
           role="group"
         >
@@ -58,6 +61,6 @@ export function TablePagination({
           </button>
         </div>
       </div>
-    </div>
+    </nav>
   );
 }

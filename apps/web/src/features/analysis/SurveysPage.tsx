@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { DataTable } from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
 import { api } from "../../lib/api";
@@ -18,6 +19,11 @@ type Survey = {
   findings: Record<string, string>;
   analysis: NetworkSearchResult;
 };
+type SurveyChange = {
+  survey: Survey;
+  status: string;
+  findings: Record<string, string>;
+};
 const labels: Record<string, string> = {
   WAITING: "Menunggu survei",
   IN_PROGRESS: "Dalam survei",
@@ -25,6 +31,15 @@ const labels: Record<string, string> = {
   VERIFIED: "Terverifikasi",
   REVISION: "Perlu revisi",
 };
+function SurveyStatusTag({ status }: { status: string }) {
+  return (
+    <span
+      className={`survey-status-tag${status === "VERIFIED" ? " is-verified" : ""}`}
+    >
+      {labels[status] ?? status}
+    </span>
+  );
+}
 const fields = [
   ["connection", "Titik sambungan aktual"],
   ["route", "Jalur kabel aktual"],
@@ -33,6 +48,46 @@ const fields = [
   ["evidence", "Referensi bukti survei (tautan / nomor dokumen)"],
   ["notes", "Catatan / alasan revisi"],
 ];
+function restoreTextFindings(findings: Record<string, string>) {
+  const restored = { ...findings };
+  try {
+    const route = JSON.parse(findings.route ?? "") as Record<string, unknown>;
+    if (route.version === "1" || route.version === 1) {
+      restored.route = [route.type, route.description].filter(Boolean).join("\n");
+    }
+  } catch {
+    // Keep findings saved before the structured form as they are.
+  }
+  try {
+    const capacity = JSON.parse(findings.capacity ?? "") as Record<
+      string,
+      unknown
+    >;
+    if (capacity.version === "1" || capacity.version === 1) {
+      const total = Number(capacity.total);
+      const used = Number(capacity.used);
+      const booked = Number(capacity.booked);
+      const available =
+        [total, used, booked].every(Number.isFinite) &&
+        [capacity.total, capacity.used, capacity.booked].every(Boolean)
+          ? `Tersedia: ${total - used - booked} core`
+          : "";
+      restored.capacity = [
+        capacity.total && `Total: ${capacity.total} core`,
+        capacity.used && `Terpakai: ${capacity.used} core`,
+        capacity.booked && `Dipesan: ${capacity.booked} core`,
+        available,
+        capacity.core && `Core sambungan: ${capacity.core}`,
+        capacity.notes,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+  } catch {
+    // Keep findings saved before the structured form as they are.
+  }
+  return restored;
+}
 
 export function SurveysPage() {
   const client = useQueryClient();
@@ -61,14 +116,24 @@ export function SurveysPage() {
     currentPage * pageSize
   );
   const refresh = () => client.invalidateQueries({ queryKey: ["surveys"] });
+  const openSurvey = (survey: Survey) => {
+    setSelected(survey);
+    setForm(restoreTextFindings(survey.findings ?? {}));
+    update.reset();
+  };
   const update = useMutation({
-    mutationFn: (status: string) =>
-      api("/surveys/" + selected!.id, {
+    mutationFn: ({ survey, status, findings }: SurveyChange) =>
+      api("/surveys/" + survey.id, {
         method: "PATCH",
-        data: { ...form, status },
+        data: { ...findings, status },
       }),
-    onSuccess: async () => {
-      setSelected(null);
+    onSuccess: async (_result, change) => {
+      if (change.status === "IN_PROGRESS") {
+        setSelected({ ...change.survey, status: change.status });
+        setForm(restoreTextFindings(change.findings));
+      } else {
+        setSelected(null);
+      }
       await refresh();
     },
   });
@@ -103,51 +168,97 @@ export function SurveysPage() {
         ) : surveys.isError ? (
           <p className="text-danger p-3">Survei gagal dimuat.</p>
         ) : (
-          <div className="table-responsive">
-            <table className="atlas-table table">
-              <thead>
-                <tr>
-                  <th>Alamat / sumber</th>
-                  <th>Jaringan</th>
-                  <th>Status</th>
-                  <th>Aksi</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((s) => (
-                  <tr key={s.id}>
-                    <td>
-                      {s.address}
-                      <small className="d-block">
-                        {s.row_number
-                          ? `Massal · Baris ${s.row_number}`
-                          : "Tunggal"}{" "}
-                        · {s.requester}
-                      </small>
-                    </td>
-                    <td>{s.analysis.network?.name ?? "—"}</td>
-                    <td>{labels[s.status]}</td>
-                    <td>
-                      <button
-                        className="btn btn-sm btn-outline-primary"
-                        onClick={() => {
-                          setSelected(s);
-                          setForm(s.findings);
-                          update.reset();
-                        }}
-                        type="button"
-                      >
-                        Buka pemeriksaan
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!filtered.length && (
-              <p className="p-3">Tidak ada survei untuk status yang dipilih.</p>
-            )}
-          </div>
+          <DataTable
+            columns={[
+              {
+                key: "address",
+                header: "Alamat / sumber",
+                rowHeader: true,
+                render: (survey: Survey) => (
+                  <>
+                    {survey.address}
+                    <small className="d-block text-secondary fw-normal">
+                      {survey.row_number
+                        ? `Massal · Baris ${survey.row_number}`
+                        : "Tunggal"}{" "}
+                      · {survey.requester}
+                    </small>
+                  </>
+                ),
+              },
+              {
+                key: "network",
+                header: "Jaringan",
+                render: (survey: Survey) =>
+                  survey.analysis.network?.name ?? "—",
+              },
+              {
+                key: "status",
+                header: "Status",
+                render: (survey: Survey) => (
+                  <SurveyStatusTag status={survey.status} />
+                ),
+              },
+              {
+                key: "action",
+                header: "Aksi",
+                className: "text-nowrap",
+                render: (survey: Survey) =>
+                  survey.status === "WAITING" ||
+                  survey.status === "REVISION" ? (
+                    <button
+                      className="btn btn-sm btn-primary"
+                      disabled={update.isPending}
+                      onClick={() =>
+                        update.mutate({
+                          survey,
+                          status: "IN_PROGRESS",
+                          findings: survey.findings ?? {},
+                        })
+                      }
+                      type="button"
+                    >
+                      {survey.status === "WAITING"
+                        ? "Mulai survei"
+                        : "Perbaiki survei"}
+                    </button>
+                  ) : (
+                    <button
+                      className="btn btn-sm btn-outline-primary"
+                      onClick={() => openSurvey(survey)}
+                      type="button"
+                    >
+                      {survey.status === "IN_PROGRESS"
+                        ? "Isi survei"
+                        : survey.status === "REVIEW" && me.data?.role === "ADMIN"
+                          ? "Verifikasi hasil"
+                          : "Lihat hasil"}
+                    </button>
+                  ),
+              },
+            ]}
+            emptyState={
+              filter === "ALL" ? (
+                "Belum ada survei."
+              ) : (
+                <div className="d-flex flex-wrap align-items-center justify-content-center gap-2">
+                  <span>
+                    Tidak ada survei dengan status: {labels[filter]}.
+                  </span>
+                  <button
+                    className="btn btn-sm btn-link"
+                    onClick={() => setFilter("ALL")}
+                    type="button"
+                  >
+                    Tampilkan semua
+                  </button>
+                </div>
+              )
+            }
+            label="Daftar survei"
+            rowKey={(survey: Survey) => survey.id}
+            rows={visible}
+          />
         )}
         {!(surveys.isPending || surveys.isError) && (
           <TablePagination
@@ -158,6 +269,11 @@ export function SurveysPage() {
             total={filtered.length}
           />
         )}
+        {update.error && !selected && (
+          <p className="alert alert-danger m-3" role="alert">
+            {update.error.message}
+          </p>
+        )}
       </section>
       {selected && (
         <section className="card panel-card mt-3">
@@ -165,7 +281,7 @@ export function SurveysPage() {
             <div>
               <h3>{selected.address}</h3>
               <p>
-                {labels[selected.status]}
+                <SurveyStatusTag status={selected.status} />
                 {selected.verified_at
                   ? ` · ${new Date(selected.verified_at).toLocaleString("id-ID")}`
                   : ""}
@@ -203,8 +319,8 @@ export function SurveysPage() {
                   <textarea
                     className="form-control mt-1"
                     maxLength={2000}
-                    onChange={(e) =>
-                      setForm({ ...form, [key]: e.target.value })
+                    onChange={(event) =>
+                      setForm({ ...form, [key]: event.target.value })
                     }
                     readOnly={
                       selected.status === "VERIFIED" ||
@@ -216,23 +332,18 @@ export function SurveysPage() {
                   />
                 </label>
               ))}
-            </div>
-            <div className="d-flex mt-3 gap-2">
-              {["WAITING", "REVISION"].includes(selected.status) && (
-                <button
-                  className="btn btn-primary"
-                  disabled={update.isPending}
-                  onClick={() => update.mutate("IN_PROGRESS")}
-                  type="button"
-                >
-                  Mulai survei
-                </button>
-              )}
+            </div>            <div className="d-flex mt-3 gap-2">
               {selected.status === "IN_PROGRESS" && (
                 <button
                   className="btn btn-primary"
                   disabled={update.isPending}
-                  onClick={() => update.mutate("REVIEW")}
+                  onClick={() =>
+                    update.mutate({
+                      survey: selected,
+                      status: "REVIEW",
+                      findings: form,
+                    })
+                  }
                   type="button"
                 >
                   Kirim hasil untuk verifikasi
@@ -243,7 +354,13 @@ export function SurveysPage() {
                   <button
                     className="btn btn-success"
                     disabled={update.isPending}
-                    onClick={() => update.mutate("VERIFIED")}
+                    onClick={() =>
+                      update.mutate({
+                        survey: selected,
+                        status: "VERIFIED",
+                        findings: form,
+                      })
+                    }
                     type="button"
                   >
                     Verifikasi hasil survei
@@ -251,7 +368,13 @@ export function SurveysPage() {
                   <button
                     className="btn btn-outline-warning"
                     disabled={update.isPending}
-                    onClick={() => update.mutate("REVISION")}
+                    onClick={() =>
+                      update.mutate({
+                        survey: selected,
+                        status: "REVISION",
+                        findings: form,
+                      })
+                    }
                     type="button"
                   >
                     Minta revisi

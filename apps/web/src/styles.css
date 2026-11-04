@@ -425,6 +425,65 @@ body {
 .atlas-table small {
   font-size: 9px;
 }
+.atlas-data-table {
+  --bs-table-bg: var(--bs-body-bg);
+  --bs-table-color: var(--bs-body-color);
+  --bs-table-border-color: var(--bs-border-color);
+  min-width: 720px;
+  margin-bottom: 0;
+  color: var(--bs-body-color);
+  font-size: 13px;
+  vertical-align: middle;
+}
+.atlas-data-table thead th {
+  padding: 12px 16px;
+  color: var(--bs-secondary-color);
+  background: var(--bs-tertiary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.atlas-data-table tbody :is(td, th) {
+  padding: 14px 16px;
+  border-color: var(--bs-border-color);
+}
+.atlas-data-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.atlas-data-table .atlas-data-table-empty {
+  padding: 28px 16px;
+  color: var(--bs-secondary-color);
+  font-weight: 400;
+  text-align: center;
+}
+.atlas-data-table-scroll:focus-visible {
+  outline: 2px solid var(--bs-primary);
+  outline-offset: -2px;
+}
+.atlas-data-table small {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.survey-status-tag {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  padding: 3px 9px;
+  color: var(--bs-body-color);
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.survey-status-tag.is-verified {
+  color: #176b49;
+  background: #e9f6ef;
+  border-color: #bfdfcb;
+}
 .util-cell {
   display: flex;
   gap: 7px;

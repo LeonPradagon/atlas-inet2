@@ -292,7 +292,7 @@
   color: #a4e3c0;
   background: #245341;
 }
-[data-bs-theme="dark"] :is(.atlas-table, .audit-table) {
+[data-bs-theme="dark"] :is(.atlas-table, .atlas-data-table, .audit-table) {
   --bs-table-bg: var(--atlas-surface);
   --bs-table-color: var(--bs-body-color);
   --bs-table-border-color: var(--bs-border-color);
@@ -300,7 +300,8 @@
   --bs-table-hover-bg: #25364f;
   --bs-table-hover-color: #edf2fa;
 }
-[data-bs-theme="dark"] :is(.atlas-table thead th, .audit-table thead th) {
+[data-bs-theme="dark"]
+  :is(.atlas-table thead th, .atlas-data-table thead th, .audit-table thead th) {
   color: #b1bed3;
   background: var(--bs-tertiary-bg);
   border-color: var(--bs-border-color);
@@ -341,6 +342,16 @@
 [data-bs-theme="dark"] .btn-outline-primary {
   --bs-btn-color: #a2b5ff;
   --bs-btn-border-color: #7f99ff;
+}
+[data-bs-theme="dark"] .survey-status-tag {
+  color: #dce5f2;
+  background: #243247;
+  border-color: #42516a;
+}
+[data-bs-theme="dark"] .survey-status-tag.is-verified {
+  color: #a4e3c0;
+  background: #245341;
+  border-color: #33785d;
 }
 [data-bs-theme="dark"]
   :is(.progress, .util-cell .progress, .segment-detail .progress) {

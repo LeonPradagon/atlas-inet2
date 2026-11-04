@@ -6,3 +6,4 @@ var/
 outputs/
 .vite/
 .DS_Store
+/docs/research/

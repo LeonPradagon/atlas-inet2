@@ -10,6 +10,7 @@ import {
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { DataTableShell } from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
 import { api } from "../../lib/api";
@@ -1057,15 +1058,16 @@ export function AnalysisHistoryPage() {
             </p>
           </div>
         ) : history.data?.items.length ? (
-          <div className="table-responsive">
-            <table className="mb-0 table align-middle">
+          <DataTableShell label="Riwayat analisis">
+            <table className="table table-hover atlas-data-table mb-0">
+              <caption className="visually-hidden">Riwayat analisis</caption>
               <thead>
                 <tr>
-                  <th>WAKTU</th>
-                  <th>JENIS</th>
-                  <th>ALAMAT / FILE</th>
-                  <th>JUMLAH / PROGRES</th>
-                  <th />
+                  <th scope="col">Waktu</th>
+                  <th scope="col">Jenis</th>
+                  <th scope="col">Alamat / file</th>
+                  <th scope="col">Jumlah / progres</th>
+                  <th scope="col">Aksi</th>
                 </tr>
               </thead>
               <tbody>
@@ -1084,7 +1086,9 @@ export function AnalysisHistoryPage() {
                             : "Draft FTTH"}
                       </span>
                     </td>
-                    <td className="text-break">{item.title}</td>
+                    <th className="text-break" scope="row">
+                      {item.title}
+                    </th>
                     <td>
                       {item.bulkJobId ? (
                         <>
@@ -1169,62 +1173,22 @@ export function AnalysisHistoryPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </DataTableShell>
         ) : (
           <div className="text-secondary py-5 text-center">
             Menyesuaikan halaman riwayat...
           </div>
         )}
-        <div className="card-footer d-flex align-items-center justify-content-between small text-secondary flex-wrap gap-2">
-          <span>
-            {history.data
-              ? `${history.data.total === 0 ? 0 : ((page - 1) * history.data.pageSize + 1).toLocaleString("id-ID")}–${Math.min(page * history.data.pageSize, history.data.total).toLocaleString("id-ID")} dari ${history.data.total.toLocaleString("id-ID")} riwayat`
-              : "Memuat jumlah riwayat…"}
-          </span>
-          <div className="d-flex align-items-center ms-auto gap-2">
-            <span>
-              Halaman {page.toLocaleString("id-ID")} /{" "}
-              {Math.max(
-                1,
-                Math.ceil(
-                  (history.data?.total ?? 0) / (history.data?.pageSize ?? 25)
-                )
-              ).toLocaleString("id-ID")}
-            </span>
-            {/* biome-ignore lint/a11y/useSemanticElements: Bootstrap btn-group markup; a fieldset breaks its layout */}
-            <div
-              aria-label="Pagination riwayat analisis"
-              className="btn-group btn-group-sm"
-              role="group"
-            >
-              <button
-                aria-label="Sebelumnya"
-                className="btn btn-outline-secondary"
-                disabled={page <= 1 || history.isFetching}
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-                title="Sebelumnya"
-                type="button"
-              >
-                <i aria-hidden="true" className="bi bi-chevron-left" />
-              </button>
-              <button
-                aria-label="Berikutnya"
-                className="btn btn-outline-secondary"
-                disabled={
-                  !history.data ||
-                  page >=
-                    Math.ceil(history.data.total / history.data.pageSize) ||
-                  history.isFetching
-                }
-                onClick={() => setPage((current) => current + 1)}
-                title="Berikutnya"
-                type="button"
-              >
-                <i aria-hidden="true" className="bi bi-chevron-right" />
-              </button>
-            </div>
-          </div>
-        </div>
+        {history.data && (
+          <TablePagination
+            busy={history.isFetching}
+            label="riwayat"
+            onPageChange={setPage}
+            page={page}
+            pageSize={history.data.pageSize}
+            total={history.data.total}
+          />
+        )}
       </section>
       {selectedId && (
         <section className="card panel-card mt-4" ref={detailPanelRef}>
