@@ -3743,3 +3743,6 @@ body {
 .detail-spec-grid span,.detail-spec-grid b{display:block;overflow-wrap:anywhere}.detail-spec-grid span{font-size:10px;margin-bottom:4px;color:var(--bs-secondary-color,#68758b)}.detail-spec-grid b{font-size:11px;line-height:1.45}
 .detail-meta-grid .admin-settings{margin-top:16px!important;padding-top:12px;border-top:1px solid var(--bs-border-color,#edf0f4)}
 @media (max-width:767px){.asset-list-filters{grid-template-columns:1fr}.asset-list-toggle{display:none}.segment-detail h3{font-size:14px}.core-status-list{max-height:330px}}
+.address-pin-picker .maplibregl-canvas {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='36' viewBox='0 0 28 36'%3E%3Cpath d='M14 1C7.4 1 2 6.4 2 13c0 8.5 12 22 12 22s12-13.5 12-22C26 6.4 20.6 1 14 1Z' fill='%233454d1' stroke='white' stroke-width='2'/%3E%3Ccircle cx='14' cy='13' r='4' fill='white'/%3E%3C/svg%3E") 14 35, crosshair !important;
+}

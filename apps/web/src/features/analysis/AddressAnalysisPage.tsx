@@ -237,6 +237,7 @@ function AddressPinPicker({
 
   return (
     <div
+      className="address-pin-picker"
       aria-label="Pilih atau koreksi titik alamat pada peta"
       ref={container}
       role="application"
@@ -263,15 +264,32 @@ export function AddressAnalysisPage() {
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint | null>(
     null
   );
+  const pinPickerRef = useRef<HTMLDivElement>(null);
   const [searchViewport, setSearchViewport] = useState<SearchViewport | null>(
     null
   );
   const [showPinPicker, setShowPinPicker] = useState(false);
+  const [hideAddressSuggestions, setHideAddressSuggestions] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [coordinateCopyStatus, setCoordinateCopyStatus] = useState<
     "idle" | "copied" | "error"
   >("idle");
   const regionLookupId = useRef(0);
+  useEffect(() => {
+    if (!showPinPicker) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      pinPickerRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      pinPickerRef.current
+        ?.querySelector<HTMLCanvasElement>(".maplibregl-canvas")
+        ?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [showPinPicker]);
   const addressQuery = [
     address.street,
     address.number && `No. ${address.number}`,
@@ -882,6 +900,7 @@ export function AddressAnalysisPage() {
                       aria-autocomplete="list"
                       aria-controls="address-suggestions"
                       aria-expanded={
+                        !hideAddressSuggestions &&
                         !selectedPoint &&
                         addressQuery.length >= 3 &&
                         Boolean(suggestionsQuery.data?.length)
@@ -889,14 +908,17 @@ export function AddressAnalysisPage() {
                       autoComplete="street-address"
                       className="form-control"
                       id="street"
-                      onChange={(event) =>
-                        updateAddress("street", event.target.value)
-                      }
+                      onChange={(event) => {
+                        setHideAddressSuggestions(false);
+                        updateAddress("street", event.target.value);
+                      }}
                       placeholder="Contoh: Jl. Panjang Arteri Klp. Dua Raya"
                       role="combobox"
                       value={address.street}
                     />
-                    {!selectedPoint && addressQuery.length >= 3 && (
+                    {!hideAddressSuggestions &&
+                      !selectedPoint &&
+                      addressQuery.length >= 3 && (
                       <div
                         aria-label="Saran alamat"
                         className="list-group position-absolute start-0 end-0 top-100 shadow"
@@ -939,7 +961,10 @@ export function AddressAnalysisPage() {
                             ))}
                             <button
                               className="list-group-item list-group-item-action text-primary text-start"
-                              onClick={() => setShowPinPicker(true)}
+                              onClick={() => {
+                                setHideAddressSuggestions(true);
+                                setShowPinPicker(true);
+                              }}
                               type="button"
                             >
                               <i className="bi bi-geo-alt me-2" />
@@ -1171,7 +1196,7 @@ export function AddressAnalysisPage() {
                     suggestionsQuery.isSuccess &&
                     !suggestionsQuery.data?.length) ||
                   suggestionsQuery.isError) && (
-                  <div className="mt-3">
+                  <div className="mt-3" ref={pinPickerRef}>
                     <div className="d-flex align-items-center justify-content-between mb-2 gap-2">
                       <b>Pilih atau periksa titik alamat</b>
                       {selectedPoint && (
@@ -1203,8 +1228,8 @@ export function AddressAnalysisPage() {
                       {selectedPoint
                         ? "Klik peta atau geser pin untuk mengoreksi posisi."
                         : selectedRegionName
-                          ? `Peta diarahkan ke perkiraan area ${subdistrict ? "kelurahan" : district ? "kecamatan" : city ? "kabupaten/kota" : "provinsi"} ${selectedRegionName}. Klik peta untuk menentukan titik alamat yang tepat.`
-                          : "Klik peta untuk menentukan titik alamat."}
+                          ? `Peta diarahkan ke perkiraan area ${subdistrict ? "kelurahan" : district ? "kecamatan" : city ? "kabupaten/kota" : "provinsi"} ${selectedRegionName}. Klik lokasi yang tepat untuk menaruh pin.`
+                          : "Arahkan kursor ke lokasi yang tepat, lalu klik peta untuk menaruh pin."}
                     </div>
                     {selectedPoint && (
                       <div
@@ -1266,6 +1291,7 @@ export function AddressAnalysisPage() {
                       });
                       setSelectedPoint(null);
                       setShowPinPicker(false);
+                      setHideAddressSuggestions(false);
                       setDebouncedQuery("");
                       analyze.reset();
                     }}
