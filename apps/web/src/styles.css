@@ -3031,6 +3031,66 @@ body {
   border-radius: 14px;
   box-shadow: 0 2px 12px #17233b33;
 }
+
+/* Keep the selectors above the map and the actions inside it. */
+.map-layout {
+  container-type: inline-size;
+}
+.map-canvas-wrap {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  height: auto;
+  padding: 12px;
+}
+.map-province-filter,
+.map-package-picker {
+  position: relative;
+  inset: auto;
+  z-index: 4;
+  width: auto;
+  padding: 12px;
+  background: var(--bs-body-bg, white);
+  border: 1px solid var(--bs-border-color, #dce3ee);
+  border-radius: 12px;
+  box-shadow: 0 2px 12px #17233b22;
+}
+.map-top-actions {
+  position: relative;
+  inset: auto;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  align-self: start;
+  flex-wrap: wrap;
+  margin: 12px 58px 0 12px;
+  pointer-events: none;
+}
+.map-top-actions > * {
+  pointer-events: auto;
+}
+.map-canvas {
+  position: relative;
+  inset: auto;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  height: clamp(380px, 64vh, 700px);
+  border-radius: 8px;
+}
+@container (max-width: 600px) {
+  .map-canvas-wrap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .map-province-filter {
+    grid-row: 1;
+  }
+  .map-package-picker {
+    grid-row: 2;
+  }
+  .map-top-actions,
+  .map-canvas {
+    grid-row: 3;
+  }
+}
 .map-package-picker > header {
   display: flex;
   align-items: center;

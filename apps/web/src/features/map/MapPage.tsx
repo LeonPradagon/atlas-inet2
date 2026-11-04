@@ -1955,17 +1955,6 @@ export function MapPage() {
           />
           <div
             className="map-province-filter"
-            style={{
-              position: "absolute",
-              zIndex: 4,
-              top: 12,
-              left: 12,
-              width: "min(290px, calc(100% - 24px))",
-              padding: 10,
-              borderRadius: 12,
-              background: "var(--bs-body-bg, white)",
-              boxShadow: "0 2px 12px #17233b33",
-            }}
           >
             <label
               className="form-label fw-semibold text-uppercase mb-1"
