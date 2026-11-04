@@ -38,7 +38,6 @@ import {
   legendStyle,
   loadNetworkMapIcons,
 } from "./networkMap";
-import { SegmentRelations } from "./SegmentRelations";
 import { registerSatelliteTiles } from "./satelliteTiles";
 
 type Coordinate = [number, number];
@@ -454,6 +453,27 @@ function matchesAssetSearch(asset: NetworkAsset, query: string) {
     .join(" ");
   return searchable.includes(query);
 }
+type AssetListTab = "cables" | "network";
+function cableFamily(asset: NetworkAsset) {
+  const value = `${asset.cableType ?? ""} ${asset.name} ${asset.attributes?.routeType ?? ""}`.toLocaleUpperCase("id-ID");
+  if (value.includes("FEEDER") || value.includes("FDR")) return "feeder";
+  if (value.includes("BACKBONE") || value.includes("BB_")) return "backbone";
+  if (value.includes("SUB-DISTRIBUSI") || value.includes("SUB DISTRIBUSI") || value.includes("BRENCH")) return "sub-distribusi";
+  if (value.includes("DISTRIBUSI") || value.includes("DST_") || value.includes("DTB_")) return "distribusi";
+  return "lainnya";
+}
+function networkAssetKind(asset: NetworkAsset) {
+  const value = `${asset.attributes?.assetKind ?? ""} ${asset.name}`.toLocaleUpperCase("id-ID");
+  if (value.includes("ODC")) return "odc";
+  if (value.includes("ODP")) return "odp";
+  if (value.includes("CLOSURE") || value.includes("JC")) return "closure";
+  if (value.includes("TIANG") || value.includes("POLE")) return "tiang";
+  return "lainnya";
+}
+function sortCables(a: NetworkAsset, b: NetworkAsset) {
+  const priority = (asset: NetworkAsset) => !isCoreUsageVerified(asset) ? 2 : asset.idleCores > 0 ? 0 : 1;
+  return priority(a) - priority(b) || a.name.localeCompare(b.name, "id-ID");
+}
 function SegmentCoreSummary({ asset }: { asset: NetworkAsset }) {
   if (asset.assetType !== "segment") {
     return null;
@@ -544,9 +564,16 @@ export function MapPage() {
   const [search, setSearch] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [coreFilter, setCoreFilter] = useState("all");
+  const [assetListTab, setAssetListTab] = useState<AssetListTab>("cables");
+  const [isAssetListCollapsed, setIsAssetListCollapsed] = useState(false);
+  const [cableFamilyFilter, setCableFamilyFilter] = useState("all");
+  const [cableStatusFilter, setCableStatusFilter] = useState("all");
+  const [networkKindFilter, setNetworkKindFilter] = useState("all");
   const [coreVerificationSource, setCoreVerificationSource] =
     useState("Survei lapangan");
   const [coreVerificationNote, setCoreVerificationNote] = useState("");
+  const [corePageSize, setCorePageSize] = useState(10);
+  const [corePage, setCorePage] = useState(1);
   const catalogQuery = useQuery({
     queryKey: [
       "segment-catalog",
@@ -616,7 +643,6 @@ export function MapPage() {
   const hoverPopup = useRef<Popup | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
   const iconFilter = useRef<HTMLDetailsElement>(null);
-  const assetDetails = useRef<HTMLDetailsElement>(null);
   const modeRef = useRef<SelectMode>("idle");
   const pointsRef = useRef<Coordinate[]>([]);
   const provincesRef = useRef(provinces);
@@ -919,6 +945,10 @@ export function MapPage() {
     enabled: Boolean(selectedSegment),
     refetchInterval: 30_000,
   });
+  const corePageCount = Math.max(1, Math.ceil((coresQuery.data?.length ?? 0) / corePageSize));
+  const visibleCores = [...(coresQuery.data ?? [])].sort((a, b) => a.coreNumber - b.coreNumber).slice((corePage - 1) * corePageSize, corePage * corePageSize);
+  useEffect(() => { setCorePage(1); }, [selectedSegment?.id, corePageSize]);
+  useEffect(() => { setCorePage((page) => Math.min(page, corePageCount)); }, [corePageCount]);
   const updateCore = useMutation({
     mutationFn: ({
       coreNumber,
@@ -960,12 +990,7 @@ export function MapPage() {
   const updateAsset = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api(`/assets/${id}`, { method: "PATCH", data }),
-    onSuccess: (_, { id }) => {
-      if (selectedSegment?.id === id && assetDetails.current) {
-        assetDetails.current.open = false;
-      }
-      return invalidateNetwork();
-    },
+    onSuccess: () => invalidateNetwork(),
   });
   // biome-ignore lint/correctness/useExhaustiveDependencies: selectedSegment?.id is the trigger: clear mutation state when the selection changes
   useEffect(() => {
@@ -973,12 +998,18 @@ export function MapPage() {
     updateAsset.reset();
   }, [selectedSegment?.id, updateCore.reset, updateAsset.reset]);
   const normalizedSearch = search.trim().toLocaleLowerCase("id-ID");
+  const matchesCableFilters = (item: NetworkAsset) => item.assetType === "segment"
+    && (cableFamilyFilter === "all" || cableFamily(item) === cableFamilyFilter)
+    && (cableStatusFilter === "all" || (cableStatusFilter === "verified" && isCoreUsageVerified(item))
+      || (cableStatusFilter === "unverified" && !isCoreUsageVerified(item))
+      || (cableStatusFilter === "available" && isCoreUsageVerified(item) && item.idleCores > 0)
+      || (cableStatusFilter === "unavailable" && isCoreUsageVerified(item) && item.idleCores <= 0));
   const filteredSegments = networkSegments.filter(
     (item) =>
       item.source !== "kml" &&
-      item.assetType === "segment" &&
+      matchesCableFilters(item) &&
       matchesAssetSearch(item, normalizedSearch)
-  );
+  ).sort(sortCables);
   const ftthDraftGroups = new Map<string, typeof filteredSegments>();
   const standaloneSegments = filteredSegments.filter((segment) => {
     const groupId = ftthDesignGroupId(segment);
@@ -997,7 +1028,17 @@ export function MapPage() {
       (item.source === "kml" || item.assetType !== "segment") &&
       matchesAssetSearch(item, normalizedSearch)
   );
-  const filteredImported = matchedImported.slice(0, 100);
+  const filteredImported = matchedImported.filter((item) => assetListTab === "cables"
+    ? matchesCableFilters(item)
+    : item.assetType !== "segment" && (networkKindFilter === "all" || networkAssetKind(item) === networkKindFilter))
+    .sort(assetListTab === "cables" ? sortCables : (a, b) => a.name.localeCompare(b.name, "id-ID"))
+    .slice(0, 100);
+  const visibleAssets = assetListTab === "cables" ? [...filteredSegments, ...filteredImported] : filteredImported;
+  const firstVisibleAsset = visibleAssets[0];
+  const selectedVisibleInList = visibleAssets.some((asset) => asset.id === selectedId);
+  useEffect(() => {
+    if (!catalogQuery.isPending && firstVisibleAsset && !selectedVisibleInList) setSelectedId(firstVisibleAsset.id);
+  }, [catalogQuery.isPending, firstVisibleAsset?.id, selectedVisibleInList]);
   const catalogPageCount = Math.max(
     1,
     Math.ceil(
@@ -2652,7 +2693,7 @@ export function MapPage() {
               );
             })()}
         </section>
-        <aside className="map-sidebar">
+        <aside className={`map-sidebar ${isAssetListCollapsed ? "is-list-collapsed" : ""}`}>
           <div className="map-tools">
             <div className="map-search">
               <label
@@ -2684,11 +2725,18 @@ export function MapPage() {
                   value={search}
                 />
               </div>
-              <label
+              <div className="asset-list-tabs mt-3" role="tablist" aria-label="Kategori aset jaringan">
+                <button type="button" role="tab" aria-selected={assetListTab === "cables"} className={assetListTab === "cables" ? "active" : ""} onClick={() => setAssetListTab("cables")}>Kabel</button>
+                <button type="button" role="tab" aria-selected={assetListTab === "network"} className={assetListTab === "network" ? "active" : ""} onClick={() => setAssetListTab("network")}>Aset jaringan</button>
+              </div>
+              {assetListTab === "cables" ? <div className="asset-list-filters mt-2">
+                <div><label className="form-label small mb-1" htmlFor="map-cable-family">Jenis kabel</label><select id="map-cable-family" className="form-select form-select-sm" value={cableFamilyFilter} onChange={(event) => setCableFamilyFilter(event.target.value)}><option value="all">Semua kabel</option><option value="feeder">Feeder</option><option value="backbone">Backbone</option><option value="distribusi">Distribusi</option><option value="sub-distribusi">Sub-distribusi</option></select></div>
+                <div><label className="form-label small mb-1" htmlFor="map-cable-status">Status kabel</label><select id="map-cable-status" className="form-select form-select-sm" value={cableStatusFilter} onChange={(event) => setCableStatusFilter(event.target.value)}><option value="all">Semua status</option><option value="verified">Terverifikasi</option><option value="unverified">Belum terverifikasi</option><option value="available">Tersedia</option><option value="unavailable">Tidak tersedia</option></select></div>
+                <div><label
                 className="form-label small mt-2 mb-1"
                 htmlFor="map-core-filter"
               >
-                Filter segmen / core
+                Kapasitas
               </label>
               <select
                 className="form-select form-select-sm"
@@ -2704,7 +2752,7 @@ export function MapPage() {
                 <option value="segments">Semua segmen</option>
                 <option value="filled">Core sudah diisi</option>
                 <option value="empty">Core belum diisi</option>
-              </select>
+              </select></div></div> : <div className="mt-2"><label className="form-label small mb-1" htmlFor="map-network-kind">Jenis aset</label><select id="map-network-kind" className="form-select form-select-sm" value={networkKindFilter} onChange={(event) => setNetworkKindFilter(event.target.value)}><option value="all">Semua aset jaringan</option><option value="odc">ODC</option><option value="odp">ODP</option><option value="closure">Closure</option><option value="tiang">Tiang</option></select></div>}
             </div>
             <div className="map-tool-actions">
               {user?.role === "ADMIN" && (
@@ -2831,6 +2879,7 @@ export function MapPage() {
             )}
           </div>
           <div className="segment-list">
+            <div className="asset-list-header"><span className="asset-list-title">Daftar {assetListTab === "cables" ? "kabel" : "aset jaringan"}</span></div>
             {!provinceCode && !selectedImportIds.length && (
               <div className="map-empty-list">
                 Pilih provinsi, lalu pilih Map Package untuk menampilkan aset.
@@ -2845,7 +2894,7 @@ export function MapPage() {
                 Daftar aset tidak dapat dimuat.
               </div>
             )}
-            {standaloneSegments.map((segment) => (
+            {assetListTab === "cables" && standaloneSegments.map((segment) => (
               <button
                 className={`segment-item ${selectedId === segment.id ? "selected" : ""}`}
                 key={segment.id}
@@ -2864,7 +2913,7 @@ export function MapPage() {
                 <i className="bi bi-chevron-right" />
               </button>
             ))}
-            {[...ftthDraftGroups].map(([groupId, segments]) => (
+            {assetListTab === "cables" && [...ftthDraftGroups].map(([groupId, segments]) => (
               <details
                 className="ftth-design-group"
                 key={groupId}
@@ -2947,13 +2996,13 @@ export function MapPage() {
             ))}
             {matchedImported.length > filteredImported.length && (
               <div className="map-empty-list">
-                Menampilkan 100 dari {matchedImported.length} aset impor.
+                Menampilkan {filteredImported.length} dari {matchedImported.length} aset impor.
                 Gunakan pencarian untuk mempersempit daftar.
               </div>
             )}
             {Boolean(provinceCode || selectedImportIds.length) &&
               !catalogQuery.isPending &&
-              filteredSegments.length + matchedImported.length === 0 && (
+              (assetListTab === "cables" ? filteredSegments.length : 0) + filteredImported.length === 0 && (
                 <div className="map-empty-list">
                   Tidak ada aset jaringan yang cocok.
                 </div>
@@ -3006,14 +3055,15 @@ export function MapPage() {
               </div>
             )}
           <div className="segment-detail">
-            <div className="detail-label">
-              {selectedSegment ? "DETAIL SEGMEN" : "DETAIL DATA IMPOR"}
+            <div className="segment-detail-toolbar"><div className="detail-label">
+              {selectedSegment ? "DETAIL KABEL" : "DETAIL ASET"}
+            </div><button type="button" className="asset-list-toggle" onClick={() => setIsAssetListCollapsed((value) => !value)}>{isAssetListCollapsed ? "Tampilkan daftar" : "Sembunyikan daftar"}</button>
             </div>
-            <h3>{selectedName}</h3>
+            <div className="segment-detail-heading"><h3>{selectedName}</h3>{selectedSegment && <VerificationStatus asset={selectedSegment} />}</div>
             {selectedSegment ? (
               <>
                 <p className="text-secondary">
-                  {selectedSegment.area} · {selectedSegment.cableType}
+                  {selectedSegment.area || "Area belum dicantumkan"} · {selectedSegment.cableType || "Jenis kabel belum dicantumkan"}
                 </p>
                 {selectedDraftId && (
                   <div className="alert alert-primary py-2">
@@ -3024,7 +3074,7 @@ export function MapPage() {
                 )}
                 {selectedSegment.totalCores === 0 && (
                   <div className="alert alert-info py-2">
-                    Kapasitas belum diisi. ADMIN perlu melengkapi jumlah core
+                    Kapasitas belum diisi. Lengkapi jumlah core
                     sebelum segmen dapat dibooking.
                   </div>
                 )}
@@ -3034,56 +3084,8 @@ export function MapPage() {
                       Nama kabel belum sesuai pola standar.
                     </div>
                   )}
-                <div className="core-summary">
-                  <div>
-                    <small>Core terpasang</small>
-                    <b>{selectedSegment.totalCores}</b>
-                  </div>
-                  <div>
-                    <small>Utilisasi</small>
-                    <b>{utilization(selectedSegment)}%</b>
-                  </div>
-                </div>
-                <div className="progress mb-3">
-                  <div
-                    className="progress-bar"
-                    style={{ width: `${utilization(selectedSegment)}%` }}
-                  />
-                </div>
-                <div className="core-breakdown">
-                  {[
-                    ["Terpakai (Used)", selectedSegment.usedCores, "used"],
-                    ["Booked", selectedSegment.bookedCores, "booked"],
-                    [
-                      "Waiting list",
-                      bookings.filter(
-                        (booking) =>
-                          booking.segmentId === selectedSegment.id &&
-                          booking.status === "Waiting List"
-                      ).length,
-                      "booked",
-                    ],
-                    ...(isCoreUsageVerified(selectedSegment)
-                      ? [
-                          [
-                            "Idle / tersedia",
-                            selectedSegment.idleCores,
-                            "available",
-                          ],
-                        ]
-                      : []),
-                  ].map(([label, value, tone]) => (
-                    <div key={String(label)}>
-                      <span>
-                        <i className={`dot ${tone}`} />
-                        {label}
-                      </span>
-                      <b>{value}</b>
-                    </div>
-                  ))}
-                </div>
-                <details className="core-list-details">
-                  <summary>Rincian {selectedSegment.totalCores} core</summary>
+                <details className="core-list-details" open>
+                  <summary>Status dan rincian {selectedSegment.totalCores} core</summary>
                   {selectedSegment.source !== "managed" && (
                     <div className="small mt-2 mb-2 rounded border p-2">
                       <b>
@@ -3204,7 +3206,7 @@ export function MapPage() {
                       </small>
                     ) : coresQuery.data?.length ? (
                       <div className="core-status-list">
-                        {coresQuery.data?.map((core) => (
+                        {visibleCores.map((core) => (
                           <div key={core.coreNumber}>
                             <span>Core {core.coreNumber}</span>
                             {core.status === "Booked" ? (
@@ -3249,10 +3251,22 @@ export function MapPage() {
                       </small>
                     )
                   ) : (
-                    <small className="d-block text-warning">
-                      Daftar status core dikunci sampai kapasitas kabel
-                      diverifikasi.
+                    <small className="core-lock-note" role="status">
+                      <i className="bi bi-info-circle me-1" aria-hidden="true" />Status core tersedia setelah kapasitas kabel diverifikasi.
                     </small>
+                  )}
+                  {isCoreUsageVerified(selectedSegment) && Boolean(coresQuery.data?.length) && (
+                    <div className="core-pagination" aria-label="Pagination status core">
+                      <label htmlFor="core-page-size">Per halaman</label>
+                      <select id="core-page-size" className="form-select form-select-sm" value={corePageSize} onChange={(event) => setCorePageSize(Number(event.target.value))}>
+                        {[10, 20, 30, 40].map((size) => <option key={size} value={size}>{size}</option>)}
+                      </select>
+                      <div className="core-pagination-controls">
+                        <button type="button" className="btn btn-sm btn-outline-secondary" disabled={corePage <= 1} onClick={() => setCorePage((page) => Math.max(1, page - 1))}>Sebelumnya</button>
+                        <small>Halaman {corePage} dari {corePageCount}</small>
+                        <button type="button" className="btn btn-sm btn-outline-secondary" disabled={corePage >= corePageCount} onClick={() => setCorePage((page) => Math.min(corePageCount, page + 1))}>Berikutnya</button>
+                      </div>
+                    </div>
                   )}
                   {updateCore.error && (
                     <small className="text-danger">
@@ -3262,6 +3276,20 @@ export function MapPage() {
                     </small>
                   )}
                 </details>
+                <div className="detail-section-heading">Kapasitas dan penggunaan</div>
+                <div className="core-summary">
+                  <div><small>Core terpasang</small><b>{selectedSegment.totalCores}</b></div>
+                  <div><small>Utilisasi</small><b>{utilization(selectedSegment)}%</b></div>
+                </div>
+                <div className="progress mb-3"><div className="progress-bar" style={{ width: `${utilization(selectedSegment)}%` }} /></div>
+                <div className="core-breakdown">
+                  {[
+                    ["Terpakai (Used)", selectedSegment.usedCores, "used"],
+                    ["Booked", selectedSegment.bookedCores, "booked"],
+                    ["Waiting list", bookings.filter((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List").length, "booked"],
+                    ...(isCoreUsageVerified(selectedSegment) ? [["Idle / tersedia", selectedSegment.idleCores, "available"]] : []),
+                  ].map(([label, value, tone]) => <div key={String(label)}><span><i className={`dot ${tone}`} />{label}</span><b>{value}</b></div>)}
+                </div>
                 <details className="core-list-details">
                   <summary>
                     Waiting list ·{" "}
@@ -3331,7 +3359,7 @@ export function MapPage() {
                   )}
                 </details>
                 <hr />
-                <div className="asset-info">
+                <div className="detail-meta-grid">
                   {(() => {
                     const attributes = Object.entries(
                       selectedSegment.attributes ?? {}
@@ -3356,8 +3384,8 @@ export function MapPage() {
                         /^(to|target|destination|downstream|tujuan|ke|end|odp)([_ -]?id|[_ -]?name)?$/iu
                       ) ?? selectedSegment.odp;
                     return (
-                      <div className="asset-info-group">
-                        <b>Detail koneksi kabel</b>
+                      <div className="asset-info-group detail-meta-group">
+                        <b>Jalur kabel</b>
                         {from || to ? (
                           <div className="route-endpoints">
                             <span>
@@ -3401,9 +3429,9 @@ export function MapPage() {
                       </div>
                     );
                   })()}
-                  <div className="asset-info-group">
-                    <b>Detail kabel</b>
-                    <div className="asset-info">
+                  <div className="asset-info-group detail-meta-group">
+                    <b>Spesifikasi kabel</b>
+                    <div className="detail-spec-grid">
                       <div>
                         <span>Standar legenda</span>
                         <b>
@@ -3431,13 +3459,13 @@ export function MapPage() {
                     selectedSegment.poleHeight ||
                     selectedSegment.odc ||
                     selectedSegment.odp) && (
-                    <div className="asset-info-group">
+                    <div className="asset-info-group detail-meta-group detail-meta-full">
                       <b>
                         {selectedSegment.source === "managed"
                           ? "Informasi aset"
                           : "Data aset dari sumber impor"}
                       </b>
-                      <div className="asset-info">
+                      <div className="detail-spec-grid">
                         {(
                           [
                             ["Tiang", selectedSegment.pole],
@@ -3457,14 +3485,9 @@ export function MapPage() {
                     </div>
                   )}
                 </div>
-                <SegmentRelations
-                  isAdmin={user?.role === "ADMIN"}
-                  key={selectedSegment.id}
-                  segmentId={selectedSegment.id}
-                />
                 {selectedSegment.source !== "managed" && (
                   <details className="admin-settings mt-3">
-                    <summary>Atribut sumber impor</summary>
+                    <summary>Metadata impor</summary>
                     <div className="import-detail-list mt-2">
                       {Object.entries(selectedSegment.attributes ?? {})
                         .filter(([key]) => key !== "__kmlStyle")
@@ -3477,11 +3500,10 @@ export function MapPage() {
                     </div>
                   </details>
                 )}
-                {user?.role === "ADMIN" && (
-                  <details className="admin-settings mt-4" ref={assetDetails}>
+                  <details className="admin-settings mt-4" open>
                     <summary>
                       <i className="bi bi-pencil-square me-2" />
-                      Ubah detail aset
+                      Edit detail kabel
                     </summary>
                     <form
                       className="mt-3"
@@ -3576,7 +3598,6 @@ export function MapPage() {
                       )}
                     </form>
                   </details>
-                )}
                 <Link className="btn btn-primary mt-4 w-100" to="/booking-core">
                   <i className="bi bi-diagram-3 me-2" />
                   Kelola booking core

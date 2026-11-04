@@ -379,8 +379,8 @@ export class AtlasController {
     @Param("id") id: string,
     @Body() body: Record<string, unknown>
   ) {
-    const user = await this.auth.requireAdmin(req);
-    return this.atlas.updateAsset(id, body, user.id);
+    const user = await this.auth.requireUser(req);
+    return this.atlas.updateAsset(id, body, user.id, user.role !== "ADMIN");
   }
 
   @Get("assets/:id/cores")

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
@@ -1342,7 +1343,10 @@ export class AtlasService {
     }
     return rows[0];
   }
-  async updateAsset(id: string, body: Record<string, unknown>, userId: string) {
+  async updateAsset(id: string, body: Record<string, unknown>, userId: string, cableOnly = false) {
+    if (cableOnly && Object.keys(body).some((key) => !["area", "cableType", "totalCores", "installation", "side"].includes(key))) {
+      throw new ForbiddenException({ message: "Hanya detail kabel yang dapat diubah." });
+    }
     const validInstallation = ["Aerial", "Burial"].includes(
       String(body.installation)
     );
@@ -1392,6 +1396,9 @@ export class AtlasService {
       );
       if (!locked.length) {
         throw new NotFoundException({ message: "Aset tidak ditemukan." });
+      }
+      if (cableOnly && locked[0].asset_type !== "segment") {
+        throw new ForbiddenException({ message: "Hanya detail kabel yang dapat diubah." });
       }
       if (body.totalCores !== undefined && locked[0].asset_type !== "segment") {
         throw new BadRequestException({
