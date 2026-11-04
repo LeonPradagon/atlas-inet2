@@ -1,0 +1,43 @@
+{
+  "name": "atlas-inet-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "bootstrap-admin": "node --import tsx src/auth/bootstrap-admin.ts",
+    "bootstrap-admin:local": "node --env-file=../../.env --import tsx src/auth/bootstrap-admin.ts",
+    "build": "tsc -p tsconfig.json",
+    "db:generate": "drizzle-kit generate",
+    "migrate": "node --import tsx src/database/migrate.ts",
+    "migrate:local": "node --env-file=../../.env --import tsx src/database/migrate.ts",
+    "start": "node dist/main.js",
+    "start:dev": "tsx watch src/main.ts",
+    "start:dev:local": "node --env-file=../../.env node_modules/tsx/dist/cli.mjs watch src/main.ts",
+    "test": "node --import tsx --test test/*.test.cjs",
+    "test:integration:local": "npm run build && node --env-file=../../.env test/atlas.integration.cjs"
+  },
+  "dependencies": {
+    "@better-auth/drizzle-adapter": "^1.7.15",
+    "@nestjs/common": "^11.2.6",
+    "@nestjs/core": "^11.2.6",
+    "@nestjs/platform-express": "^11.2.6",
+    "better-auth": "^1.7.15",
+    "drizzle-orm": "^0.45.4",
+    "exceljs": "^4.4.0",
+    "fast-xml-parser": "^5.11.2",
+    "jszip": "^3.10.2",
+    "pg": "^8.23.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.15",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20.9"
+  }
+}
