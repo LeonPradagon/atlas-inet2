@@ -512,6 +512,8 @@ async function main() {
     });
     await segment("http-booking", 2);
     await segment("http-empty", 0);
+    await segment("http-unverified", 2);
+    await q(`UPDATE network_assets SET attributes=attributes || '{"__coreUsageVerification":{"verified":true}}'::jsonb WHERE id='http-booking'`);
 
     assert.deepEqual(await call("/assets/bookable-segments"), signIn);
     const bookable = await call("/assets/bookable-segments", "presales");
@@ -532,6 +534,7 @@ async function main() {
       false,
       "a segment without capacity is not bookable"
     );
+    assert.equal(bookable.body.some((s) => s.id === "http-unverified"), false);
 
     assert.deepEqual(await call("/settings/booking-duration"), signIn);
     assert.deepEqual(await call("/settings/booking-duration", "presales"), {

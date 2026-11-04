@@ -8,7 +8,7 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from "@nestjs/common";
-import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { PoolClient } from "pg";
 import { audit } from "../database/audit";
@@ -67,7 +67,12 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       .where(
         and(
           eq(networkAssets.assetType, "segment"),
-          gt(networkAssets.totalCores, 0)
+          gt(networkAssets.totalCores, 0),
+          or(
+            eq(networkAssets.source, "managed"),
+            sql`${networkAssets.attributes}->'__coreUsageVerification'->'verified' = 'true'::jsonb`,
+            sql`${networkAssets.attributes}->'__coreUsageVerified' = 'true'::jsonb`
+          )
         )
       )
       .groupBy(networkAssets.id)
