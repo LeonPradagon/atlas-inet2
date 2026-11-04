@@ -524,8 +524,8 @@ export function CoreBookingPage() {
             <form onSubmit={addBooking}>
               {!bookableSegments.length && (
                 <div className="alert alert-info">
-                  Belum ada segmen dengan kapasitas core. ADMIN perlu mengisi
-                  kapasitas pada halaman peta jaringan.
+                  Belum ada segmen dengan kapasitas core yang terverifikasi.
+                  ADMIN perlu memverifikasi segmen pada halaman peta jaringan.
                 </div>
               )}
               <label className="form-label" htmlFor="booking-customer">
