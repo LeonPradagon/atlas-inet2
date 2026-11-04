@@ -365,7 +365,7 @@ export function CoreBookingPage() {
             </div>
           </div>
           <div className="table-responsive">
-            <table className="atlas-table booking-table mb-0 table">
+            <table className="table table-hover atlas-data-table booking-table mb-0">
               <thead>
                 <tr>
                   <th>ID / Pelanggan</th>

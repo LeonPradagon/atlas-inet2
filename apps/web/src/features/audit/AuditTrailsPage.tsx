@@ -171,7 +171,7 @@ export function AuditTrailsPage() {
             </div>
           ) : audit.data?.length ? (
             <div className="table-responsive">
-              <table className="audit-table mb-0 table align-middle">
+              <table className="table table-hover atlas-data-table audit-table mb-0 align-middle">
                 <thead>
                   <tr>
                     <th>WAKTU</th>

@@ -576,7 +576,7 @@ export function BulkAnalysisPage() {
               </div>
             </div>
             <div className="table-responsive">
-              <table className="atlas-table table">
+              <table className="table table-hover atlas-data-table">
                 <thead>
                   <tr>
                     <th>Baris</th>

@@ -1,4 +1,9 @@
-import type { CSSProperties, ReactNode } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 
 export type DataTableColumn<Row> = {
   key: string;
@@ -17,6 +22,13 @@ export function DataTableShell({
   label: string;
   children: ReactNode;
 }) {
+  const table =
+    isValidElement<{ className?: string }>(children) &&
+    children.type === "table"
+      ? cloneElement(children, {
+          className: `${children.props.className ?? ""} atlas-data-table`.trim(),
+        })
+      : children;
   return (
     <div
       aria-label={`${label}; gulir horizontal untuk melihat semua kolom`}
@@ -24,7 +36,7 @@ export function DataTableShell({
       role="region"
       tabIndex={0}
     >
-      {children}
+      {table}
     </div>
   );
 }
@@ -37,6 +49,10 @@ export function DataTable<Row>({
   emptyState = "Tidak ada data untuk ditampilkan.",
   rowClassName,
   tableClassName = "",
+  rowId,
+  density = "comfortable",
+  showHeader = true,
+  hover = true,
 }: {
   label: string;
   columns: readonly DataTableColumn<Row>[];
@@ -45,32 +61,42 @@ export function DataTable<Row>({
   emptyState?: ReactNode;
   rowClassName?: (row: Row) => string | undefined;
   tableClassName?: string;
+  rowId?: (row: Row) => string | undefined;
+  density?: "comfortable" | "compact";
+  showHeader?: boolean;
+  hover?: boolean;
 }) {
   return (
     <DataTableShell label={label}>
       <table
         aria-label={label}
-        className={`table table-hover atlas-data-table ${tableClassName}`.trim()}
+        className={`table ${hover ? "table-hover" : ""} atlas-data-table ${density === "compact" ? "atlas-data-table-compact" : ""} ${tableClassName}`.trim()}
       >
         <caption className="visually-hidden">{label}</caption>
-        <thead>
-          <tr>
-            {columns.map((column) => (
-              <th
-                className={column.headerClassName}
-                key={column.key}
-                scope="col"
-                style={column.width ? { width: column.width } : undefined}
-              >
-                {column.header}
-              </th>
-            ))}
-          </tr>
-        </thead>
+        {showHeader && (
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th
+                  className={column.headerClassName}
+                  key={column.key}
+                  scope="col"
+                  style={column.width ? { width: column.width } : undefined}
+                >
+                  {column.header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        )}
         <tbody>
           {rows.length ? (
             rows.map((row) => (
-              <tr className={rowClassName?.(row)} key={rowKey(row)}>
+              <tr
+                className={rowClassName?.(row)}
+                id={rowId?.(row)}
+                key={rowKey(row)}
+              >
                 {columns.map((column) => {
                   const content = column.render(row);
                   const className = column.className;

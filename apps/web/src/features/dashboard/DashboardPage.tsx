@@ -244,7 +244,7 @@ export function DashboardPage() {
                 </div>
                 <div className="card-body p-0">
                   <div className="table-responsive">
-                    <table className="atlas-table mb-0 table">
+                    <table className="table table-hover atlas-data-table mb-0">
                       <thead>
                         <tr>
                           <th>Nama kabel</th>

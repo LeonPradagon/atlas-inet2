@@ -638,7 +638,7 @@ function BulkHistoryDetail({
         </section>
       )}
       <div className="table-responsive">
-        <table className="table-sm table align-middle">
+        <table className="table table-hover atlas-data-table atlas-data-table-compact table-sm align-middle">
           <thead>
             <tr>
               <th>BARIS</th>

@@ -2662,7 +2662,7 @@ export function MapPage() {
                   </header>
                   <table
                     aria-label="Atribut detail aset"
-                    className="map-asset-popup-table"
+                    className="table atlas-data-table atlas-data-table-compact map-asset-popup-table"
                   >
                     <tbody>
                       {fields.map(([label, value], index) => (

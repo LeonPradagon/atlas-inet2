@@ -435,6 +435,14 @@ body {
   font-size: 13px;
   vertical-align: middle;
 }
+.atlas-data-table-compact {
+  min-width: 0;
+  font-size: 12px;
+}
+.atlas-data-table-compact thead th,
+.atlas-data-table-compact tbody :is(td, th) {
+  padding: 7px 10px;
+}
 .atlas-data-table thead th {
   padding: 12px 16px;
   color: var(--bs-secondary-color);
