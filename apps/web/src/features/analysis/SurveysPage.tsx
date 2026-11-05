@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { AtlasTag } from "../../components/AtlasTag";
 import { DataTable } from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
@@ -33,11 +34,9 @@ const labels: Record<string, string> = {
 };
 function SurveyStatusTag({ status }: { status: string }) {
   return (
-    <span
-      className={`atlas-tag${status === "VERIFIED" ? " is-verified" : ""}`}
-    >
+    <AtlasTag className={status === "VERIFIED" ? "is-verified" : ""}>
       {labels[status] ?? status}
-    </span>
+    </AtlasTag>
   );
 }
 const fields = [

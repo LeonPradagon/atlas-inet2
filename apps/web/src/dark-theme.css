@@ -212,7 +212,6 @@
 }
 [data-bs-theme="dark"]
   :is(
-    .step-tag,
     .network-icon,
     .empty-illustration,
     .upload-icon,
@@ -225,6 +224,11 @@
   ) {
   color: #a9bbff;
   background: #273858;
+}
+[data-bs-theme="dark"] .atlas-tag.is-accent {
+  color: #a9bbff;
+  background: #273858;
+  border-color: #425779;
 }
 [data-bs-theme="dark"] :is(.metric-icon.purple, .quick-icon.purple) {
   color: #c4a4ff;
