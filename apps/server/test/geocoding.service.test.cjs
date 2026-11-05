@@ -238,17 +238,30 @@ test("reverse lookup supplements incomplete Photon regions with Nominatim", asyn
   global.fetch = async (input) => {
     const url = new URL(typeof input === "string" ? input : input.toString());
     if (url.hostname === "photon.test") {
-      return response({ features: [{ properties: { locality: "Contoh", postcode: "12345" } }] });
+      return response({
+        features: [{ properties: { locality: "Contoh", postcode: "12345" } }],
+      });
     }
     if (url.hostname === "geoservices.big.go.id") {
       return response({ features: [] });
     }
-    return response({ address: { city: "Kota Contoh", district: "Contoh", village: "Desa Contoh", state: "Banten", country_code: "id" } });
+    return response({
+      address: {
+        city: "Kota Contoh",
+        country_code: "id",
+        district: "Contoh",
+        state: "Banten",
+        village: "Desa Contoh",
+      },
+    });
   };
   t.after(() => {
     global.fetch = previous.fetch;
-    if (previous.geocoder === undefined) delete process.env.GEOCODER_URL;
-    else process.env.GEOCODER_URL = previous.geocoder;
+    if (previous.geocoder === undefined) {
+      delete process.env.GEOCODER_URL;
+    } else {
+      process.env.GEOCODER_URL = previous.geocoder;
+    }
   });
   const result = await new GeocodingService().reverseAddress(106, -6);
   assert.equal(result.city, "Kota Contoh");

@@ -301,7 +301,11 @@
   --bs-table-hover-color: #edf2fa;
 }
 [data-bs-theme="dark"]
-  :is(.atlas-table thead th, .atlas-data-table thead th, .audit-table thead th) {
+  :is(
+    .atlas-table thead th,
+    .atlas-data-table thead th,
+    .audit-table thead th
+  ) {
   color: #b1bed3;
   background: var(--bs-tertiary-bg);
   border-color: var(--bs-border-color);

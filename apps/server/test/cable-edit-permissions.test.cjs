@@ -9,7 +9,11 @@ function serviceFor(assetType) {
   const client = {
     query: async (sql) => {
       statements.push(sql);
-      return { rows: sql.startsWith("SELECT id,asset_type") ? [{ id: "asset-1", asset_type: assetType }] : [] };
+      return {
+        rows: sql.startsWith("SELECT id,asset_type")
+          ? [{ asset_type: assetType, id: "asset-1" }]
+          : [],
+      };
     },
   };
   const service = new AtlasService({ transaction: (work) => work(client) }, {});
@@ -19,16 +23,32 @@ function serviceFor(assetType) {
 
 test("non-admin can update allowed cable details", async () => {
   const { service, statements } = serviceFor("segment");
-  assert.deepEqual(await service.updateAsset("asset-1", { area: "Banten", cableType: "FO" }, "presales", true), { id: "asset-1" });
+  assert.deepEqual(
+    await service.updateAsset(
+      "asset-1",
+      { area: "Banten", cableType: "FO" },
+      "presales",
+      true
+    ),
+    { id: "asset-1" }
+  );
   assert.ok(statements.some((sql) => sql.includes("UPDATE network_assets")));
 });
 
 test("non-admin cannot edit point assets or unrelated fields", async () => {
   const point = serviceFor("point");
-  await assert.rejects(point.service.updateAsset("asset-1", { area: "Banten" }, "presales", true), ForbiddenException);
-  assert.ok(!point.statements.some((sql) => sql.includes("UPDATE network_assets")));
+  await assert.rejects(
+    point.service.updateAsset("asset-1", { area: "Banten" }, "presales", true),
+    ForbiddenException
+  );
+  assert.ok(
+    !point.statements.some((sql) => sql.includes("UPDATE network_assets"))
+  );
   const cable = serviceFor("segment");
-  await assert.rejects(cable.service.updateAsset("asset-1", { name: "changed" }, "presales", true), ForbiddenException);
+  await assert.rejects(
+    cable.service.updateAsset("asset-1", { name: "changed" }, "presales", true),
+    ForbiddenException
+  );
   assert.equal(cable.statements.length, 0);
 });
 

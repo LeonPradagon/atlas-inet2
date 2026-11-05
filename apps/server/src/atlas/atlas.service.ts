@@ -558,7 +558,8 @@ export class AtlasService {
     const match = `%${filter}%`;
     const provinceCondition = provinceMatch(4);
     const conditions = `($1='' OR a.name ILIKE $2 OR a.area ILIKE $2 OR a.cable_type ILIKE $2 OR a.asset_type ILIKE $2 OR a.attributes::text ILIKE $2)
-      AND ($3='all' OR a.asset_type='segment')
+      AND ($3 IN ('all','points') OR a.asset_type='segment')
+      AND ($3<>'points' OR a.asset_type<>'segment')
       AND ($3<>'filled' OR a.total_cores>0)
       AND ($3<>'empty' OR a.total_cores=0)
       AND ($4::text IS NULL OR ${provinceCondition})
@@ -1343,9 +1344,24 @@ export class AtlasService {
     }
     return rows[0];
   }
-  async updateAsset(id: string, body: Record<string, unknown>, userId: string, cableOnly = false) {
-    if (cableOnly && Object.keys(body).some((key) => !["area", "cableType", "totalCores", "installation", "side"].includes(key))) {
-      throw new ForbiddenException({ message: "Hanya detail kabel yang dapat diubah." });
+  async updateAsset(
+    id: string,
+    body: Record<string, unknown>,
+    userId: string,
+    cableOnly = false
+  ) {
+    if (
+      cableOnly &&
+      Object.keys(body).some(
+        (key) =>
+          !["area", "cableType", "totalCores", "installation", "side"].includes(
+            key
+          )
+      )
+    ) {
+      throw new ForbiddenException({
+        message: "Hanya detail kabel yang dapat diubah.",
+      });
     }
     const validInstallation = ["Aerial", "Burial"].includes(
       String(body.installation)
@@ -1398,7 +1414,9 @@ export class AtlasService {
         throw new NotFoundException({ message: "Aset tidak ditemukan." });
       }
       if (cableOnly && locked[0].asset_type !== "segment") {
-        throw new ForbiddenException({ message: "Hanya detail kabel yang dapat diubah." });
+        throw new ForbiddenException({
+          message: "Hanya detail kabel yang dapat diubah.",
+        });
       }
       if (body.totalCores !== undefined && locked[0].asset_type !== "segment") {
         throw new BadRequestException({
@@ -1793,7 +1811,7 @@ export class AtlasService {
           AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
           AND ST_DWithin(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,$3)
         ORDER BY CASE
-          WHEN a.total_cores>0 AND (a.source='managed' OR a.attributes->>'__coreUsageVerified'='true') AND EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available') THEN 0
+          WHEN a.total_cores>0 AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true') AND EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available') THEN 0
           WHEN a.total_cores>0 AND (SELECT count(*) FROM network_cores c WHERE c.asset_id=a.id AND c.status IN ('Used','Booked'))>=a.total_cores THEN 2
           ELSE 1 END,
         ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography),a.id LIMIT 1`,

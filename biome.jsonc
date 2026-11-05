@@ -12,6 +12,9 @@
         "useOptionalChain": "off",
         "useSimplifiedLogicExpression": "off"
       },
+      "nursery": {
+        "useTailwindSortedClasses": "off"
+      },
       "performance": {
         "noAwaitInLoops": "off",
         "noJsxPropsBind": "off",

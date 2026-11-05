@@ -30,6 +30,12 @@ export type CreateBookingInput = {
   cores?: number;
 };
 
+const usageVerified = sql<boolean>`(${or(
+  eq(networkAssets.source, "managed"),
+  sql`${networkAssets.attributes}->'__coreUsageVerification'->'verified' = 'true'::jsonb`,
+  sql`${networkAssets.attributes}->'__coreUsageVerified' = 'true'::jsonb`
+)})`;
+
 @Injectable()
 export class BookingService implements OnModuleInit, OnModuleDestroy {
   private expiryTimer?: NodeJS.Timeout;
@@ -68,11 +74,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         and(
           eq(networkAssets.assetType, "segment"),
           gt(networkAssets.totalCores, 0),
-          or(
-            eq(networkAssets.source, "managed"),
-            sql`${networkAssets.attributes}->'__coreUsageVerification'->'verified' = 'true'::jsonb`,
-            sql`${networkAssets.attributes}->'__coreUsageVerified' = 'true'::jsonb`
-          )
+          usageVerified
         )
       )
       .groupBy(networkAssets.id)
@@ -155,7 +157,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
     return this.db.transaction(async (client) => {
       const tx = drizzle({ client });
       const assets = await tx
-        .select({ totalCores: networkAssets.totalCores })
+        .select({ totalCores: networkAssets.totalCores, usageVerified })
         .from(networkAssets)
         .where(
           and(
@@ -171,6 +173,12 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException({
           message:
             "Kapasitas belum diisi. Minta ADMIN melengkapi jumlah core segmen.",
+        });
+      }
+      if (!assets[0].usageVerified) {
+        throw new BadRequestException({
+          message:
+            "Pemakaian core segmen belum terverifikasi. Minta ADMIN memverifikasi segmen pada halaman peta jaringan.",
         });
       }
       if (cores > assets[0].totalCores) {

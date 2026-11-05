@@ -134,7 +134,7 @@ export function AuditTrailsPage() {
               type="button"
             >
               <i
-                className={`bi bi-arrow-clockwise me-1${audit.isFetching ? "spin" : ""}`}
+                className={`bi bi-arrow-clockwise me-1${audit.isFetching ? " spin" : ""}`}
               />
               {audit.isFetching ? "Memuat..." : "Muat ulang"}
             </button>
