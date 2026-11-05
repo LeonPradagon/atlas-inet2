@@ -39,7 +39,9 @@ function rowReviewReason(row: AnalysisRow) {
   if (["OK", "QUEUED", "PROCESSING", "CANCELLED"].includes(row.status)) {
     return "";
   }
-  if (row.message) return row.message;
+  if (row.message) {
+    return row.message;
+  }
   if (row.status === "NETWORK_NOT_FOUND") {
     return "Jaringan tidak ditemukan dalam radius 1 km.";
   }
@@ -164,10 +166,14 @@ export function BulkAnalysisPage() {
         throw new Error("Format file belum didukung. Pilih file Excel .xlsx.");
       }
       if (file.size === 0) {
-        throw new Error("File kosong. Pilih file Excel yang berisi data lokasi.");
+        throw new Error(
+          "File kosong. Pilih file Excel yang berisi data lokasi."
+        );
       }
       if (file.size > 15 * 1024 * 1024) {
-        throw new Error("Ukuran file melebihi 15 MB. Pilih file yang lebih kecil.");
+        throw new Error(
+          "Ukuran file melebihi 15 MB. Pilih file yang lebih kecil."
+        );
       }
       const form = new FormData();
       form.append("file", file);
@@ -191,18 +197,22 @@ export function BulkAnalysisPage() {
     }
   };
   const chooseFile = (file?: File) => {
-    if (!file) return;
+    if (!file) {
+      return;
+    }
     setSelectedFile(file);
     setError("");
-    if (input.current) input.current.value = "";
+    if (input.current) {
+      input.current.value = "";
+    }
     void processFile(file);
   };
   const fileSizeLabel = (size: number) =>
     size < 1024
       ? `${size} byte`
       : size < 1024 * 1024
-      ? `${Math.max(1, Math.round(size / 1024))} KB`
-      : `${(size / (1024 * 1024)).toFixed(1)} MB`;
+        ? `${Math.max(1, Math.round(size / 1024))} KB`
+        : `${(size / (1024 * 1024)).toFixed(1)} MB`;
   const showRowsNeedingReview = () => {
     setSearch("");
     setStatusFilter("ERROR");
@@ -381,22 +391,32 @@ export function BulkAnalysisPage() {
             ref={input}
             type="file"
           />
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: mouse drop target; the file button inside is the keyboard path */}
+          {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: mouse drop target; the file button inside is the keyboard path */}
           <div
             className={`bulk-upload-zone${isDraggingFile ? " is-dragging" : ""}${loading ? " is-uploading" : ""}`}
             onDragEnter={(event) => {
               event.preventDefault();
-              if (!loading) setIsDraggingFile(true);
+              if (!loading) {
+                setIsDraggingFile(true);
+              }
             }}
-            onDragOver={(event) => event.preventDefault()}
             onDragLeave={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              if (
+                !event.currentTarget.contains(
+                  event.relatedTarget as Node | null
+                )
+              ) {
                 setIsDraggingFile(false);
               }
             }}
+            onDragOver={(event) => event.preventDefault()}
             onDrop={(event) => {
               event.preventDefault();
               setIsDraggingFile(false);
-              if (loading) return;
+              if (loading) {
+                return;
+              }
               if (event.dataTransfer.files.length > 1) {
                 setError("Pilih satu file Excel setiap kali mengunggah.");
                 return;
@@ -404,17 +424,25 @@ export function BulkAnalysisPage() {
               chooseFile(event.dataTransfer.files[0]);
             }}
           >
-            <div className="bulk-upload-icon" aria-hidden="true">
+            <div aria-hidden="true" className="bulk-upload-icon">
               <i className="bi bi-file-earmark-spreadsheet" />
             </div>
             <div className="bulk-upload-copy">
-              <strong>{isDraggingFile ? "Lepaskan file untuk mulai" : "Unggah data lokasi"}</strong>
+              <strong>
+                {isDraggingFile
+                  ? "Lepaskan file untuk mulai"
+                  : "Unggah data lokasi"}
+              </strong>
               <span id="bulk-upload-help">
-                Pilih file Excel (.xlsx), maksimal 15 MB. Analisis langsung dimulai setelah file dipilih.
+                Pilih file Excel (.xlsx), maksimal 15 MB. Analisis langsung
+                dimulai setelah file dipilih.
               </span>
               {selectedFile && (
-                <span className="bulk-upload-selected" title={selectedFile.name}>
-                  <i className="bi bi-file-earmark-check" aria-hidden="true" />
+                <span
+                  className="bulk-upload-selected"
+                  title={selectedFile.name}
+                >
+                  <i aria-hidden="true" className="bi bi-file-earmark-check" />
                   <b>{selectedFile.name}</b>
                   <span>{fileSizeLabel(selectedFile.size)}</span>
                 </span>
@@ -428,9 +456,15 @@ export function BulkAnalysisPage() {
             >
               {selectedFile ? "Pilih file lain" : "Pilih file Excel"}
             </button>
-            <span className="bulk-upload-drop-hint">atau seret file ke sini</span>
+            <span className="bulk-upload-drop-hint">
+              atau seret file ke sini
+            </span>
           </div>
-          <div aria-live="polite" className="bulk-upload-feedback" role="status">
+          <div
+            aria-live="polite"
+            className="bulk-upload-feedback"
+            role="status"
+          >
             {loading && (
               <>
                 <span
@@ -438,7 +472,8 @@ export function BulkAnalysisPage() {
                   className="spinner-border spinner-border-sm"
                 />
                 <span>
-                  Mengunggah {selectedFile?.name ?? "file"} dan memulai analisis…
+                  Mengunggah {selectedFile?.name ?? "file"} dan memulai
+                  analisis…
                 </span>
               </>
             )}
@@ -458,7 +493,9 @@ export function BulkAnalysisPage() {
                           : bulkJobStatusLabel(job.status)}
                       </span>
                     </div>
-                    <span>{job.processed} dari {job.total} lokasi</span>
+                    <span>
+                      {job.processed} dari {job.total} lokasi
+                    </span>
                     {job.failed > 0 && (
                       <button
                         className="bulk-job-review-link"
@@ -466,7 +503,10 @@ export function BulkAnalysisPage() {
                         type="button"
                       >
                         {job.failed} perlu diperiksa
-                        <i className="bi bi-arrow-right-short" aria-hidden="true" />
+                        <i
+                          aria-hidden="true"
+                          className="bi bi-arrow-right-short"
+                        />
                       </button>
                     )}
                   </>
@@ -604,67 +644,67 @@ export function BulkAnalysisPage() {
                         }
                         key={row.row}
                       >
-                      <td>{row.row}</td>
-                      <td>
-                        <button
-                          className="btn btn-link p-0 text-start"
-                          onClick={() => setSelectedRowNumber(row.row)}
-                          type="button"
-                        >
-                          {row.address}
-                        </button>
-                        <small className="d-block">
-                          {row.latitude}, {row.longitude}
-                        </small>
-                      </td>
-                      <td>{row.network?.name ?? "—"}</td>
-                      <td>
-                        {row.result?.network?.searchRadiusMeters ??
-                          row.result?.searchRadiusMeters ??
-                          "—"}{" "}
-                        m
-                      </td>
-                      <td>
-                        {row.distanceMeters == null
-                          ? "Belum tersedia"
-                          : row.distanceMeters >= 1000
-                            ? (row.distanceMeters / 1000).toFixed(2) + " km"
-                            : Math.round(row.distanceMeters) + " m"}
-                      </td>
-                      <td>
-                        {needsReview ? (
-                          <span className="bulk-row-review-state">
-                            Perlu diperiksa
-                          </span>
-                        ) : (
-                          row.status
-                        )}
-                        {reason && (
-                          <small className="bulk-row-review-reason">
-                            {reason}
-                          </small>
-                        )}
-                      </td>
-                      <td>
-                        {row.network && jobQuery.data?.historyId && (
-                          <SubmitSurveyButton
-                            historyId={jobQuery.data.historyId}
-                            rowNumber={row.row}
-                          />
-                        )}
-                        {row.result?.expansionAvailable && (
+                        <td>{row.row}</td>
+                        <td>
                           <button
-                            className="btn btn-outline-primary btn-sm"
-                            disabled={expanding !== null}
-                            onClick={() => void expand(row)}
+                            className="btn btn-link p-0 text-start"
+                            onClick={() => setSelectedRowNumber(row.row)}
                             type="button"
                           >
-                            {expanding === row.row
-                              ? "Mencari…"
-                              : "Cari hingga 2 km"}
+                            {row.address}
                           </button>
-                        )}
-                      </td>
+                          <small className="d-block">
+                            {row.latitude}, {row.longitude}
+                          </small>
+                        </td>
+                        <td>{row.network?.name ?? "—"}</td>
+                        <td>
+                          {row.result?.network?.searchRadiusMeters ??
+                            row.result?.searchRadiusMeters ??
+                            "—"}{" "}
+                          m
+                        </td>
+                        <td>
+                          {row.distanceMeters == null
+                            ? "Belum tersedia"
+                            : row.distanceMeters >= 1000
+                              ? (row.distanceMeters / 1000).toFixed(2) + " km"
+                              : Math.round(row.distanceMeters) + " m"}
+                        </td>
+                        <td>
+                          {needsReview ? (
+                            <span className="bulk-row-review-state">
+                              Perlu diperiksa
+                            </span>
+                          ) : (
+                            row.status
+                          )}
+                          {reason && (
+                            <small className="bulk-row-review-reason">
+                              {reason}
+                            </small>
+                          )}
+                        </td>
+                        <td>
+                          {row.network && jobQuery.data?.historyId && (
+                            <SubmitSurveyButton
+                              historyId={jobQuery.data.historyId}
+                              rowNumber={row.row}
+                            />
+                          )}
+                          {row.result?.expansionAvailable && (
+                            <button
+                              className="btn btn-outline-primary btn-sm"
+                              disabled={expanding !== null}
+                              onClick={() => void expand(row)}
+                              type="button"
+                            >
+                              {expanding === row.row
+                                ? "Mencari…"
+                                : "Cari hingga 2 km"}
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}

@@ -1,7 +1,7 @@
 import {
+  type CSSProperties,
   cloneElement,
   isValidElement,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 
@@ -26,18 +26,19 @@ export function DataTableShell({
     isValidElement<{ className?: string }>(children) &&
     children.type === "table"
       ? cloneElement(children, {
-          className: `${children.props.className ?? ""} atlas-data-table`.trim(),
+          className:
+            `${children.props.className ?? ""} atlas-data-table`.trim(),
         })
       : children;
   return (
-    <div
+    <section
       aria-label={`${label}; gulir horizontal untuk melihat semua kolom`}
       className="table-responsive atlas-data-table-scroll"
-      role="region"
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: a horizontally scrollable region must be focusable so keyboard users can scroll it
       tabIndex={0}
     >
       {table}
-    </div>
+    </section>
   );
 }
 
@@ -101,11 +102,7 @@ export function DataTable<Row>({
                   const content = column.render(row);
                   const className = column.className;
                   return column.rowHeader ? (
-                    <th
-                      className={className}
-                      key={column.key}
-                      scope="row"
-                    >
+                    <th className={className} key={column.key} scope="row">
                       {content}
                     </th>
                   ) : (

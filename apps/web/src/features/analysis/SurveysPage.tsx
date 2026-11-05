@@ -33,9 +33,7 @@ const labels: Record<string, string> = {
 };
 function SurveyStatusTag({ status }: { status: string }) {
   return (
-    <span
-      className={`atlas-tag${status === "VERIFIED" ? " is-verified" : ""}`}
-    >
+    <span className={`atlas-tag${status === "VERIFIED" ? " is-verified" : ""}`}>
       {labels[status] ?? status}
     </span>
   );
@@ -53,7 +51,9 @@ function restoreTextFindings(findings: Record<string, string>) {
   try {
     const route = JSON.parse(findings.route ?? "") as Record<string, unknown>;
     if (route.version === "1" || route.version === 1) {
-      restored.route = [route.type, route.description].filter(Boolean).join("\n");
+      restored.route = [route.type, route.description]
+        .filter(Boolean)
+        .join("\n");
     }
   } catch {
     // Keep findings saved before the structured form as they are.
@@ -230,7 +230,8 @@ export function SurveysPage() {
                     >
                       {survey.status === "IN_PROGRESS"
                         ? "Isi survei"
-                        : survey.status === "REVIEW" && me.data?.role === "ADMIN"
+                        : survey.status === "REVIEW" &&
+                            me.data?.role === "ADMIN"
                           ? "Verifikasi hasil"
                           : "Lihat hasil"}
                     </button>
@@ -242,9 +243,7 @@ export function SurveysPage() {
                 "Belum ada survei."
               ) : (
                 <div className="d-flex flex-wrap align-items-center justify-content-center gap-2">
-                  <span>
-                    Tidak ada survei dengan status: {labels[filter]}.
-                  </span>
+                  <span>Tidak ada survei dengan status: {labels[filter]}.</span>
                   <button
                     className="btn btn-sm btn-link"
                     onClick={() => setFilter("ALL")}
@@ -332,7 +331,8 @@ export function SurveysPage() {
                   />
                 </label>
               ))}
-            </div>            <div className="d-flex mt-3 gap-2">
+            </div>{" "}
+            <div className="d-flex mt-3 gap-2">
               {selected.status === "IN_PROGRESS" && (
                 <button
                   className="btn btn-primary"

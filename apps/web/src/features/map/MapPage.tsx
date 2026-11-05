@@ -38,8 +38,8 @@ import {
   legendStyle,
   loadNetworkMapIcons,
 } from "./networkMap";
-import { registerSatelliteTiles } from "./satelliteTiles";
 import { SegmentRelations } from "./SegmentRelations";
+import { registerSatelliteTiles } from "./satelliteTiles";
 
 type Coordinate = [number, number];
 const indonesiaBounds: [[number, number], [number, number]] = [
@@ -474,7 +474,8 @@ function networkAssetKind(asset: NetworkAsset) {
   return networkAssetKinds[assetIconCategory(asset)] ?? "lainnya";
 }
 function sortCables(a: NetworkAsset, b: NetworkAsset) {
-  const priority = (asset: NetworkAsset) => !isCoreUsageVerified(asset) ? 2 : asset.idleCores > 0 ? 0 : 1;
+  const priority = (asset: NetworkAsset) =>
+    isCoreUsageVerified(asset) ? (asset.idleCores > 0 ? 0 : 1) : 2;
   return priority(a) - priority(b) || a.name.localeCompare(b.name, "id-ID");
 }
 function SegmentCoreSummary({ asset }: { asset: NetworkAsset }) {
@@ -954,10 +955,20 @@ export function MapPage() {
     enabled: Boolean(selectedSegment),
     refetchInterval: 30_000,
   });
-  const corePageCount = Math.max(1, Math.ceil((coresQuery.data?.length ?? 0) / corePageSize));
-  const visibleCores = [...(coresQuery.data ?? [])].sort((a, b) => a.coreNumber - b.coreNumber).slice((corePage - 1) * corePageSize, corePage * corePageSize);
-  useEffect(() => { setCorePage(1); }, [selectedSegment?.id, corePageSize]);
-  useEffect(() => { setCorePage((page) => Math.min(page, corePageCount)); }, [corePageCount]);
+  const corePageCount = Math.max(
+    1,
+    Math.ceil((coresQuery.data?.length ?? 0) / corePageSize)
+  );
+  const visibleCores = [...(coresQuery.data ?? [])]
+    .sort((a, b) => a.coreNumber - b.coreNumber)
+    .slice((corePage - 1) * corePageSize, corePage * corePageSize);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the selected segment and page size are triggers that reset paging
+  useEffect(() => {
+    setCorePage(1);
+  }, [selectedSegment?.id, corePageSize]);
+  useEffect(() => {
+    setCorePage((page) => Math.min(page, corePageCount));
+  }, [corePageCount]);
   const updateCore = useMutation({
     mutationFn: ({
       coreNumber,
@@ -1007,18 +1018,26 @@ export function MapPage() {
     updateAsset.reset();
   }, [selectedSegment?.id, updateCore.reset, updateAsset.reset]);
   const normalizedSearch = search.trim().toLocaleLowerCase("id-ID");
-  const matchesCableFilters = (item: NetworkAsset) => item.assetType === "segment"
-    && (cableFamilyFilter === "all" || cableFamily(item) === cableFamilyFilter)
-    && (cableStatusFilter === "all" || (cableStatusFilter === "verified" && isCoreUsageVerified(item))
-      || (cableStatusFilter === "unverified" && !isCoreUsageVerified(item))
-      || (cableStatusFilter === "available" && isCoreUsageVerified(item) && item.idleCores > 0)
-      || (cableStatusFilter === "unavailable" && isCoreUsageVerified(item) && item.idleCores <= 0));
-  const filteredSegments = networkSegments.filter(
-    (item) =>
-      item.source !== "kml" &&
-      matchesCableFilters(item) &&
-      matchesAssetSearch(item, normalizedSearch)
-  ).sort(sortCables);
+  const matchesCableFilters = (item: NetworkAsset) =>
+    item.assetType === "segment" &&
+    (cableFamilyFilter === "all" || cableFamily(item) === cableFamilyFilter) &&
+    (cableStatusFilter === "all" ||
+      (cableStatusFilter === "verified" && isCoreUsageVerified(item)) ||
+      (cableStatusFilter === "unverified" && !isCoreUsageVerified(item)) ||
+      (cableStatusFilter === "available" &&
+        isCoreUsageVerified(item) &&
+        item.idleCores > 0) ||
+      (cableStatusFilter === "unavailable" &&
+        isCoreUsageVerified(item) &&
+        item.idleCores <= 0));
+  const filteredSegments = networkSegments
+    .filter(
+      (item) =>
+        item.source !== "kml" &&
+        matchesCableFilters(item) &&
+        matchesAssetSearch(item, normalizedSearch)
+    )
+    .sort(sortCables);
   const ftthDraftGroups = new Map<string, typeof filteredSegments>();
   const standaloneSegments = filteredSegments.filter((segment) => {
     const groupId = ftthDesignGroupId(segment);
@@ -1037,13 +1056,25 @@ export function MapPage() {
       (item.source === "kml" || item.assetType !== "segment") &&
       matchesAssetSearch(item, normalizedSearch)
   );
-  const filteredImported = matchedImported.filter((item) => assetListTab === "cables"
-    ? matchesCableFilters(item)
-    : item.assetType !== "segment" && (networkKindFilter === "all" || networkAssetKind(item) === networkKindFilter))
-    .sort(assetListTab === "cables" ? sortCables : (a, b) => a.name.localeCompare(b.name, "id-ID"));
-  const firstVisibleAsset = assetListTab === "cables"
-    ? standaloneSegments[0] ?? [...ftthDraftGroups.values()][0]?.[0] ?? filteredImported[0]
-    : filteredImported[0];
+  const filteredImported = matchedImported
+    .filter((item) =>
+      assetListTab === "cables"
+        ? matchesCableFilters(item)
+        : item.assetType !== "segment" &&
+          (networkKindFilter === "all" ||
+            networkAssetKind(item) === networkKindFilter)
+    )
+    .sort(
+      assetListTab === "cables"
+        ? sortCables
+        : (a, b) => a.name.localeCompare(b.name, "id-ID")
+    );
+  const firstVisibleAsset =
+    assetListTab === "cables"
+      ? (standaloneSegments[0] ??
+        [...ftthDraftGroups.values()][0]?.[0] ??
+        filteredImported[0])
+      : filteredImported[0];
   const selectionKnown = knownAssets.some((asset) => asset.id === selectedId);
   useEffect(() => {
     if (!(catalogQuery.isPending || selectionKnown)) {
@@ -1160,7 +1191,8 @@ export function MapPage() {
         tiles: ["atlas-satellite://{z}/{x}/{y}"],
         tileSize: 256,
         maxzoom: 23,
-        attribution: "Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+        attribution:
+          "Esri, Maxar, Earthstar Geographics, and the GIS User Community",
       });
       instance.addLayer(
         {
@@ -2014,9 +2046,7 @@ export function MapPage() {
             className={`map-canvas ${mode === "idle" ? "" : "map-picking"}`}
             ref={mapElement}
           />
-          <div
-            className="map-province-filter"
-          >
+          <div className="map-province-filter">
             <label
               className="form-label fw-semibold text-uppercase mb-1"
               htmlFor="map-province-filter"
@@ -2383,7 +2413,13 @@ export function MapPage() {
                 if (!instance) {
                   return;
                 }
-                if (!globeEnabled) {
+                if (globeEnabled) {
+                  instance.setProjection({ type: "mercator" });
+                  instance.setMaxBounds(indonesiaBounds);
+                  if (previousMapView.current && instance.getZoom() < 4) {
+                    instance.flyTo(previousMapView.current);
+                  }
+                } else {
                   const center = instance.getCenter();
                   previousMapView.current = {
                     center: [center.lng, center.lat],
@@ -2399,12 +2435,6 @@ export function MapPage() {
                     pitch: 0,
                     bearing: 0,
                   });
-                } else {
-                  instance.setProjection({ type: "mercator" });
-                  instance.setMaxBounds(indonesiaBounds);
-                  if (previousMapView.current && instance.getZoom() < 4) {
-                    instance.flyTo(previousMapView.current);
-                  }
                 }
                 setGlobeEnabled(!globeEnabled);
               }}
@@ -2708,7 +2738,9 @@ export function MapPage() {
               );
             })()}
         </section>
-        <aside className={`map-sidebar ${isAssetListCollapsed ? "is-list-collapsed" : ""}`}>
+        <aside
+          className={`map-sidebar ${isAssetListCollapsed ? "is-list-collapsed" : ""}`}
+        >
           <div className="map-tools">
             <div className="map-search">
               <label
@@ -2740,33 +2772,126 @@ export function MapPage() {
                   value={search}
                 />
               </div>
-              <div className="asset-list-tabs mt-3" role="tablist" aria-label="Kategori aset jaringan">
-                <button type="button" role="tab" aria-selected={assetListTab === "cables"} className={assetListTab === "cables" ? "active" : ""} onClick={() => selectAssetListTab("cables")}>Kabel</button>
-                <button type="button" role="tab" aria-selected={assetListTab === "network"} className={assetListTab === "network" ? "active" : ""} onClick={() => selectAssetListTab("network")}>Aset jaringan</button>
+              <div
+                aria-label="Kategori aset jaringan"
+                className="asset-list-tabs mt-3"
+                role="tablist"
+              >
+                <button
+                  aria-selected={assetListTab === "cables"}
+                  className={assetListTab === "cables" ? "active" : ""}
+                  onClick={() => selectAssetListTab("cables")}
+                  role="tab"
+                  type="button"
+                >
+                  Kabel
+                </button>
+                <button
+                  aria-selected={assetListTab === "network"}
+                  className={assetListTab === "network" ? "active" : ""}
+                  onClick={() => selectAssetListTab("network")}
+                  role="tab"
+                  type="button"
+                >
+                  Aset jaringan
+                </button>
               </div>
-              {assetListTab === "cables" ? <div className="asset-list-filters mt-2">
-                <div><label className="form-label small mb-1" htmlFor="map-cable-family">Jenis kabel</label><select id="map-cable-family" className="form-select form-select-sm" disabled={!(provinceCode || selectedImportIds.length)} value={cableFamilyFilter} onChange={(event) => setCableFamilyFilter(event.target.value)}><option value="all">Semua kabel</option><option value="feeder">Feeder</option><option value="backbone">Backbone</option><option value="distribusi">Distribusi</option><option value="sub-distribusi">Sub-distribusi</option></select></div>
-                <div><label className="form-label small mb-1" htmlFor="map-cable-status">Status kabel</label><select id="map-cable-status" className="form-select form-select-sm" disabled={!(provinceCode || selectedImportIds.length)} value={cableStatusFilter} onChange={(event) => setCableStatusFilter(event.target.value)}><option value="all">Semua status</option><option value="verified">Terverifikasi</option><option value="unverified">Belum terverifikasi</option><option value="available">Tersedia</option><option value="unavailable">Tidak tersedia</option></select></div>
-                <div><label
-                className="form-label small mt-2 mb-1"
-                htmlFor="map-core-filter"
-              >
-                Kapasitas
-              </label>
-              <select
-                className="form-select form-select-sm"
-                disabled={!(provinceCode || selectedImportIds.length)}
-                id="map-core-filter"
-                onChange={(event) => {
-                  setCoreFilter(event.target.value);
-                  setAssetPage(1);
-                }}
-                value={coreFilter}
-              >
-                <option value="all">Semua kapasitas</option>
-                <option value="filled">Core sudah diisi</option>
-                <option value="empty">Core belum diisi</option>
-              </select></div></div> : <div className="mt-2"><label className="form-label small mb-1" htmlFor="map-network-kind">Jenis aset</label><select id="map-network-kind" className="form-select form-select-sm" disabled={!(provinceCode || selectedImportIds.length)} value={networkKindFilter} onChange={(event) => setNetworkKindFilter(event.target.value)}><option value="all">Semua aset jaringan</option><option value="odc">ODC</option><option value="odp">ODP</option><option value="closure">Closure</option><option value="tiang">Tiang</option></select></div>}
+              {assetListTab === "cables" ? (
+                <div className="asset-list-filters mt-2">
+                  <div>
+                    <label
+                      className="form-label small mb-1"
+                      htmlFor="map-cable-family"
+                    >
+                      Jenis kabel
+                    </label>
+                    <select
+                      className="form-select form-select-sm"
+                      disabled={!(provinceCode || selectedImportIds.length)}
+                      id="map-cable-family"
+                      onChange={(event) =>
+                        setCableFamilyFilter(event.target.value)
+                      }
+                      value={cableFamilyFilter}
+                    >
+                      <option value="all">Semua kabel</option>
+                      <option value="feeder">Feeder</option>
+                      <option value="backbone">Backbone</option>
+                      <option value="distribusi">Distribusi</option>
+                      <option value="sub-distribusi">Sub-distribusi</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label
+                      className="form-label small mb-1"
+                      htmlFor="map-cable-status"
+                    >
+                      Status kabel
+                    </label>
+                    <select
+                      className="form-select form-select-sm"
+                      disabled={!(provinceCode || selectedImportIds.length)}
+                      id="map-cable-status"
+                      onChange={(event) =>
+                        setCableStatusFilter(event.target.value)
+                      }
+                      value={cableStatusFilter}
+                    >
+                      <option value="all">Semua status</option>
+                      <option value="verified">Terverifikasi</option>
+                      <option value="unverified">Belum terverifikasi</option>
+                      <option value="available">Tersedia</option>
+                      <option value="unavailable">Tidak tersedia</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label
+                      className="form-label small mt-2 mb-1"
+                      htmlFor="map-core-filter"
+                    >
+                      Kapasitas
+                    </label>
+                    <select
+                      className="form-select form-select-sm"
+                      disabled={!(provinceCode || selectedImportIds.length)}
+                      id="map-core-filter"
+                      onChange={(event) => {
+                        setCoreFilter(event.target.value);
+                        setAssetPage(1);
+                      }}
+                      value={coreFilter}
+                    >
+                      <option value="all">Semua kapasitas</option>
+                      <option value="filled">Core sudah diisi</option>
+                      <option value="empty">Core belum diisi</option>
+                    </select>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2">
+                  <label
+                    className="form-label small mb-1"
+                    htmlFor="map-network-kind"
+                  >
+                    Jenis aset
+                  </label>
+                  <select
+                    className="form-select form-select-sm"
+                    disabled={!(provinceCode || selectedImportIds.length)}
+                    id="map-network-kind"
+                    onChange={(event) =>
+                      setNetworkKindFilter(event.target.value)
+                    }
+                    value={networkKindFilter}
+                  >
+                    <option value="all">Semua aset jaringan</option>
+                    <option value="odc">ODC</option>
+                    <option value="odp">ODP</option>
+                    <option value="closure">Closure</option>
+                    <option value="tiang">Tiang</option>
+                  </select>
+                </div>
+              )}
             </div>
             <div className="map-tool-actions">
               {user?.role === "ADMIN" && (
@@ -2893,7 +3018,11 @@ export function MapPage() {
             )}
           </div>
           <div className="segment-list">
-            <div className="asset-list-header"><span className="asset-list-title">Daftar {assetListTab === "cables" ? "kabel" : "aset jaringan"}</span></div>
+            <div className="asset-list-header">
+              <span className="asset-list-title">
+                Daftar {assetListTab === "cables" ? "kabel" : "aset jaringan"}
+              </span>
+            </div>
             {!provinceCode && !selectedImportIds.length && (
               <div className="map-empty-list">
                 Pilih provinsi, lalu pilih Map Package untuk menampilkan aset.
@@ -2908,71 +3037,81 @@ export function MapPage() {
                 Daftar aset tidak dapat dimuat.
               </div>
             )}
-            {assetListTab === "cables" && standaloneSegments.map((segment) => (
-              <button
-                className={`segment-item ${selectedId === segment.id ? "selected" : ""}`}
-                key={segment.id}
-                onClick={() => focusAsset(segment)}
-                type="button"
-              >
-                <span className="segment-meta">
-                  <b>
-                    <span className="segment-name" title={segment.name}>{segment.name}</span>
-                    <VerificationStatus asset={segment} />
-                  </b>
-                  <small>{segment.area || "Segmen jaringan"}</small>
-                  <SegmentCoreSummary asset={segment} />
-                </span>
-                <i className="bi bi-chevron-right" />
-              </button>
-            ))}
-            {assetListTab === "cables" && [...ftthDraftGroups].map(([groupId, segments]) => (
-              <details
-                className="ftth-design-group"
-                key={groupId}
-                onToggle={(event) => {
-                  if (event.currentTarget.open && segments[0]) {
-                    void focusAsset(segments[0]);
-                  }
-                }}
-              >
-                <summary>
+            {assetListTab === "cables" &&
+              standaloneSegments.map((segment) => (
+                <button
+                  className={`segment-item ${selectedId === segment.id ? "selected" : ""}`}
+                  key={segment.id}
+                  onClick={() => focusAsset(segment)}
+                  type="button"
+                >
                   <span className="segment-meta">
-                    <b><span className="segment-name">Draft FTTH · {segments[0]?.area || "Area desain"}</span></b>
-                    <small>
-                      {segments.length} jalur · {getDraftFeatureCount(groupId)}{" "}
-                      aset dalam satu desain
-                    </small>
-                  </span>
-                  <i className="bi bi-chevron-down" />
-                </summary>
-                <div>
-                  {segments.map((segment) => (
-                    <button
-                      className={`segment-item ${selectedId === segment.id ? "selected" : ""}`}
-                      key={segment.id}
-                      onClick={() => focusAsset(segment)}
-                      type="button"
-                    >
-                      <span className="segment-meta">
-                        <b>
-                          <span className="segment-name" title={segment.name}>{segment.name}</span>
-                          <VerificationStatus asset={segment} />
-                        </b>
-                        <small>
-                          {segment.attributes?.routeType === "FEEDER"
-                            ? "Kabel feeder"
-                            : "Kabel distribusi"}{" "}
-                          · {segment.area}
-                        </small>
-                        <SegmentCoreSummary asset={segment} />
+                    <b>
+                      <span className="segment-name" title={segment.name}>
+                        {segment.name}
                       </span>
-                      <i className="bi bi-chevron-right" />
-                    </button>
-                  ))}
-                </div>
-              </details>
-            ))}
+                      <VerificationStatus asset={segment} />
+                    </b>
+                    <small>{segment.area || "Segmen jaringan"}</small>
+                    <SegmentCoreSummary asset={segment} />
+                  </span>
+                  <i className="bi bi-chevron-right" />
+                </button>
+              ))}
+            {assetListTab === "cables" &&
+              [...ftthDraftGroups].map(([groupId, segments]) => (
+                <details
+                  className="ftth-design-group"
+                  key={groupId}
+                  onToggle={(event) => {
+                    if (event.currentTarget.open && segments[0]) {
+                      void focusAsset(segments[0]);
+                    }
+                  }}
+                >
+                  <summary>
+                    <span className="segment-meta">
+                      <b>
+                        <span className="segment-name">
+                          Draft FTTH · {segments[0]?.area || "Area desain"}
+                        </span>
+                      </b>
+                      <small>
+                        {segments.length} jalur ·{" "}
+                        {getDraftFeatureCount(groupId)} aset dalam satu desain
+                      </small>
+                    </span>
+                    <i className="bi bi-chevron-down" />
+                  </summary>
+                  <div>
+                    {segments.map((segment) => (
+                      <button
+                        className={`segment-item ${selectedId === segment.id ? "selected" : ""}`}
+                        key={segment.id}
+                        onClick={() => focusAsset(segment)}
+                        type="button"
+                      >
+                        <span className="segment-meta">
+                          <b>
+                            <span className="segment-name" title={segment.name}>
+                              {segment.name}
+                            </span>
+                            <VerificationStatus asset={segment} />
+                          </b>
+                          <small>
+                            {segment.attributes?.routeType === "FEEDER"
+                              ? "Kabel feeder"
+                              : "Kabel distribusi"}{" "}
+                            · {segment.area}
+                          </small>
+                          <SegmentCoreSummary asset={segment} />
+                        </span>
+                        <i className="bi bi-chevron-right" />
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              ))}
             {filteredImported.map((line) => (
               <button
                 className={`segment-item imported-item ${selectedId === line.id ? "selected" : ""}`}
@@ -2982,7 +3121,9 @@ export function MapPage() {
               >
                 <span className="segment-meta">
                   <b>
-                    <span className="segment-name" title={line.name}>{line.name}</span>
+                    <span className="segment-name" title={line.name}>
+                      {line.name}
+                    </span>
                     <VerificationStatus asset={line} />
                   </b>
                   <small>
@@ -2998,9 +3139,13 @@ export function MapPage() {
             ))}
             {Boolean(provinceCode || selectedImportIds.length) &&
               !catalogQuery.isPending &&
-              (assetListTab === "cables" ? filteredSegments.length : 0) + filteredImported.length === 0 && (
+              (assetListTab === "cables" ? filteredSegments.length : 0) +
+                filteredImported.length ===
+                0 && (
                 <div className="map-empty-list">
-                  {assetListTab === "cables" ? "Tidak ada kabel yang sesuai dengan filter." : "Tidak ada aset jaringan yang sesuai dengan filter."}
+                  {assetListTab === "cables"
+                    ? "Tidak ada kabel yang sesuai dengan filter."
+                    : "Tidak ada aset jaringan yang sesuai dengan filter."}
                 </div>
               )}
           </div>
@@ -3051,15 +3196,31 @@ export function MapPage() {
               </div>
             )}
           <div className="segment-detail">
-            <div className="segment-detail-toolbar"><div className="detail-label">
-              {selectedSegment ? "DETAIL KABEL" : "DETAIL ASET"}
-            </div><button type="button" className="asset-list-toggle" onClick={() => setIsAssetListCollapsed((value) => !value)}>{isAssetListCollapsed ? "Tampilkan daftar" : "Sembunyikan daftar"}</button>
+            <div className="segment-detail-toolbar">
+              <div className="detail-label">
+                {selectedSegment ? "DETAIL KABEL" : "DETAIL ASET"}
+              </div>
+              <button
+                className="asset-list-toggle"
+                onClick={() => setIsAssetListCollapsed((value) => !value)}
+                type="button"
+              >
+                {isAssetListCollapsed
+                  ? "Tampilkan daftar"
+                  : "Sembunyikan daftar"}
+              </button>
             </div>
-            <div className="segment-detail-heading"><h3>{selectedName}</h3>{selectedSegment && <VerificationStatus asset={selectedSegment} />}</div>
+            <div className="segment-detail-heading">
+              <h3>{selectedName}</h3>
+              {selectedSegment && (
+                <VerificationStatus asset={selectedSegment} />
+              )}
+            </div>
             {selectedSegment ? (
               <>
                 <p className="text-secondary">
-                  {selectedSegment.area || "Area belum dicantumkan"} · {selectedSegment.cableType || "Jenis kabel belum dicantumkan"}
+                  {selectedSegment.area || "Area belum dicantumkan"} ·{" "}
+                  {selectedSegment.cableType || "Jenis kabel belum dicantumkan"}
                 </p>
                 {selectedDraftId && (
                   <div className="alert alert-primary py-2">
@@ -3070,8 +3231,8 @@ export function MapPage() {
                 )}
                 {selectedSegment.totalCores === 0 && (
                   <div className="alert alert-info py-2">
-                    Kapasitas belum diisi. Lengkapi jumlah core
-                    sebelum segmen dapat dibooking.
+                    Kapasitas belum diisi. Lengkapi jumlah core sebelum segmen
+                    dapat dibooking.
                   </div>
                 )}
                 {selectedSegment.source !== "kml" &&
@@ -3081,7 +3242,9 @@ export function MapPage() {
                     </div>
                   )}
                 <details className="core-list-details" open>
-                  <summary>Status dan rincian {selectedSegment.totalCores} core</summary>
+                  <summary>
+                    Status dan rincian {selectedSegment.totalCores} core
+                  </summary>
                   {selectedSegment.source !== "managed" && (
                     <div className="core-verification-panel small mt-2 mb-2 rounded border p-2">
                       <b>
@@ -3248,22 +3411,63 @@ export function MapPage() {
                     )
                   ) : (
                     <small className="core-lock-note" role="status">
-                      <i className="bi bi-info-circle me-1" aria-hidden="true" />Status core tersedia setelah kapasitas kabel diverifikasi.
+                      <i
+                        aria-hidden="true"
+                        className="bi bi-info-circle me-1"
+                      />
+                      Status core tersedia setelah kapasitas kabel diverifikasi.
                     </small>
                   )}
-                  {isCoreUsageVerified(selectedSegment) && Boolean(coresQuery.data?.length) && (
-                    <div className="core-pagination" aria-label="Pagination status core">
-                      <label htmlFor="core-page-size">Per halaman</label>
-                      <select id="core-page-size" className="form-select form-select-sm" value={corePageSize} onChange={(event) => setCorePageSize(Number(event.target.value))}>
-                        {[10, 20, 30, 40].map((size) => <option key={size} value={size}>{size}</option>)}
-                      </select>
-                      <div className="core-pagination-controls">
-                        <button type="button" className="btn btn-sm btn-outline-secondary" disabled={corePage <= 1} onClick={() => setCorePage((page) => Math.max(1, page - 1))}>Sebelumnya</button>
-                        <small>Halaman {corePage} dari {corePageCount}</small>
-                        <button type="button" className="btn btn-sm btn-outline-secondary" disabled={corePage >= corePageCount} onClick={() => setCorePage((page) => Math.min(corePageCount, page + 1))}>Berikutnya</button>
-                      </div>
-                    </div>
-                  )}
+                  {isCoreUsageVerified(selectedSegment) &&
+                    Boolean(coresQuery.data?.length) && (
+                      <nav
+                        aria-label="Pagination status core"
+                        className="core-pagination"
+                      >
+                        <label htmlFor="core-page-size">Per halaman</label>
+                        <select
+                          className="form-select form-select-sm"
+                          id="core-page-size"
+                          onChange={(event) =>
+                            setCorePageSize(Number(event.target.value))
+                          }
+                          value={corePageSize}
+                        >
+                          {[10, 20, 30, 40].map((size) => (
+                            <option key={size} value={size}>
+                              {size}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="core-pagination-controls">
+                          <button
+                            className="btn btn-sm btn-outline-secondary"
+                            disabled={corePage <= 1}
+                            onClick={() =>
+                              setCorePage((page) => Math.max(1, page - 1))
+                            }
+                            type="button"
+                          >
+                            Sebelumnya
+                          </button>
+                          <small>
+                            Halaman {corePage} dari {corePageCount}
+                          </small>
+                          <button
+                            className="btn btn-sm btn-outline-secondary"
+                            disabled={corePage >= corePageCount}
+                            onClick={() =>
+                              setCorePage((page) =>
+                                Math.min(corePageCount, page + 1)
+                              )
+                            }
+                            type="button"
+                          >
+                            Berikutnya
+                          </button>
+                        </div>
+                      </nav>
+                    )}
                   {updateCore.error && (
                     <small className="text-danger">
                       {updateCore.error instanceof Error
@@ -3272,19 +3476,56 @@ export function MapPage() {
                     </small>
                   )}
                 </details>
-                <div className="detail-section-heading">Kapasitas dan penggunaan</div>
-                <div className="core-summary">
-                  <div><small>Core terpasang</small><b>{selectedSegment.totalCores}</b></div>
-                  <div><small>Utilisasi</small><b>{utilization(selectedSegment)}%</b></div>
+                <div className="detail-section-heading">
+                  Kapasitas dan penggunaan
                 </div>
-                <div className="progress mb-3"><div className="progress-bar" style={{ width: `${utilization(selectedSegment)}%` }} /></div>
+                <div className="core-summary">
+                  <div>
+                    <small>Core terpasang</small>
+                    <b>{selectedSegment.totalCores}</b>
+                  </div>
+                  <div>
+                    <small>Utilisasi</small>
+                    <b>{utilization(selectedSegment)}%</b>
+                  </div>
+                </div>
+                <div className="progress mb-3">
+                  <div
+                    className="progress-bar"
+                    style={{ width: `${utilization(selectedSegment)}%` }}
+                  />
+                </div>
                 <div className="core-breakdown">
                   {[
                     ["Terpakai (Used)", selectedSegment.usedCores, "used"],
                     ["Booked", selectedSegment.bookedCores, "booked"],
-                    ["Waiting list", bookings.filter((booking) => booking.segmentId === selectedSegment.id && booking.status === "Waiting List").length, "booked"],
-                    ...(isCoreUsageVerified(selectedSegment) ? [["Idle / tersedia", selectedSegment.idleCores, "available"]] : []),
-                  ].map(([label, value, tone]) => <div key={String(label)}><span><i className={`dot ${tone}`} />{label}</span><b>{value}</b></div>)}
+                    [
+                      "Waiting list",
+                      bookings.filter(
+                        (booking) =>
+                          booking.segmentId === selectedSegment.id &&
+                          booking.status === "Waiting List"
+                      ).length,
+                      "booked",
+                    ],
+                    ...(isCoreUsageVerified(selectedSegment)
+                      ? [
+                          [
+                            "Idle / tersedia",
+                            selectedSegment.idleCores,
+                            "available",
+                          ],
+                        ]
+                      : []),
+                  ].map(([label, value, tone]) => (
+                    <div key={String(label)}>
+                      <span>
+                        <i className={`dot ${tone}`} />
+                        {label}
+                      </span>
+                      <b>{value}</b>
+                    </div>
+                  ))}
                 </div>
                 <details className="core-list-details">
                   <summary>
@@ -3489,7 +3730,9 @@ export function MapPage() {
                 {selectedSegment.source !== "managed" && (
                   <details className="admin-settings mt-3">
                     <summary>Metadata impor</summary>
-                    <small className="d-block text-secondary mt-1">Field asli dari file sumber, untuk pemeriksaan lanjutan.</small>
+                    <small className="d-block text-secondary mt-1">
+                      Field asli dari file sumber, untuk pemeriksaan lanjutan.
+                    </small>
                     <div className="import-detail-list mt-2">
                       {Object.entries(selectedSegment.attributes ?? {})
                         .filter(([key]) => key !== "__kmlStyle")
@@ -3502,104 +3745,99 @@ export function MapPage() {
                     </div>
                   </details>
                 )}
-                  <details className="admin-settings mt-4" open>
-                    <summary>
-                      <i className="bi bi-pencil-square me-2" />
-                      Edit detail kabel
-                    </summary>
-                    <form
-                      className="mt-3"
-                      key={selectedSegment.id}
-                      onSubmit={saveAssetDetails}
+                <details className="admin-settings mt-4" open>
+                  <summary>
+                    <i className="bi bi-pencil-square me-2" />
+                    Edit detail kabel
+                  </summary>
+                  <form
+                    className="mt-3"
+                    key={selectedSegment.id}
+                    onSubmit={saveAssetDetails}
+                  >
+                    <label className="form-label" htmlFor="asset-area">
+                      Area
+                    </label>
+                    <input
+                      className="form-control form-control-sm mb-2"
+                      defaultValue={selectedSegment.area}
+                      id="asset-area"
+                      name="area"
+                    />
+                    <label className="form-label" htmlFor="asset-cable-type">
+                      Tipe kabel
+                    </label>
+                    <input
+                      className="form-control form-control-sm mb-2"
+                      defaultValue={selectedSegment.cableType}
+                      id="asset-cable-type"
+                      name="cableType"
+                    />
+                    <label className="form-label" htmlFor="asset-total-cores">
+                      Jumlah core total
+                    </label>
+                    <input
+                      className="form-control form-control-sm"
+                      defaultValue={selectedSegment.totalCores}
+                      id="asset-total-cores"
+                      max="4096"
+                      min="0"
+                      name="totalCores"
+                      required
+                      type="number"
+                    />
+                    <small className="form-text d-block mb-2">
+                      Core terpakai diatur per nomor di Rincian core; jumlahnya
+                      dihitung otomatis.
+                    </small>
+                    <label className="form-label" htmlFor="asset-installation">
+                      Metode instalasi
+                    </label>
+                    <select
+                      className="form-select form-select-sm mb-2"
+                      defaultValue={selectedSegment.installation}
+                      id="asset-installation"
+                      name="installation"
                     >
-                      <label className="form-label" htmlFor="asset-area">
-                        Area
-                      </label>
-                      <input
-                        className="form-control form-control-sm mb-2"
-                        defaultValue={selectedSegment.area}
-                        id="asset-area"
-                        name="area"
-                      />
-                      <label className="form-label" htmlFor="asset-cable-type">
-                        Tipe kabel
-                      </label>
-                      <input
-                        className="form-control form-control-sm mb-2"
-                        defaultValue={selectedSegment.cableType}
-                        id="asset-cable-type"
-                        name="cableType"
-                      />
-                      <label className="form-label" htmlFor="asset-total-cores">
-                        Jumlah core total
-                      </label>
-                      <input
-                        className="form-control form-control-sm"
-                        defaultValue={selectedSegment.totalCores}
-                        id="asset-total-cores"
-                        max="4096"
-                        min="0"
-                        name="totalCores"
-                        required
-                        type="number"
-                      />
-                      <small className="form-text d-block mb-2">
-                        Core terpakai diatur per nomor di Rincian core;
-                        jumlahnya dihitung otomatis.
+                      <option value="Aerial">Aerial</option>
+                      <option value="Burial">Burial</option>
+                    </select>
+                    <label className="form-label" htmlFor="asset-side">
+                      Sisi jalan
+                    </label>
+                    <select
+                      className="form-select form-select-sm mb-2"
+                      defaultValue={selectedSegment.side}
+                      id="asset-side"
+                      name="side"
+                    >
+                      <option value="Kiri">Kiri</option>
+                      <option value="Kanan">Kanan</option>
+                    </select>
+                    <button
+                      className="btn btn-sm btn-outline-primary"
+                      disabled={updateAsset.isPending}
+                      type="submit"
+                    >
+                      {updateAsset.isPending ? "Menyimpan..." : "Simpan detail"}
+                    </button>
+                    {updateAsset.isSuccess && (
+                      <small
+                        className="d-block text-success mt-2"
+                        role="status"
+                      >
+                        Detail aset tersimpan.
                       </small>
-                      <label
-                        className="form-label"
-                        htmlFor="asset-installation"
-                      >
-                        Metode instalasi
-                      </label>
-                      <select
-                        className="form-select form-select-sm mb-2"
-                        defaultValue={selectedSegment.installation}
-                        id="asset-installation"
-                        name="installation"
-                      >
-                        <option value="Aerial">Aerial</option>
-                        <option value="Burial">Burial</option>
-                      </select>
-                      <label className="form-label" htmlFor="asset-side">
-                        Sisi jalan
-                      </label>
-                      <select
-                        className="form-select form-select-sm mb-2"
-                        defaultValue={selectedSegment.side}
-                        id="asset-side"
-                        name="side"
-                      >
-                        <option value="Kiri">Kiri</option>
-                        <option value="Kanan">Kanan</option>
-                      </select>
-                      <button
-                        className="btn btn-sm btn-outline-primary"
-                        disabled={updateAsset.isPending}
-                        type="submit"
-                      >
-                        {updateAsset.isPending
-                          ? "Menyimpan..."
-                          : "Simpan detail"}
-                      </button>
-                      {updateAsset.isSuccess && (
-                        <small
-                          className="d-block text-success mt-2"
-                          role="status"
-                        >
-                          Detail aset tersimpan.
-                        </small>
-                      )}
-                      {updateAsset.error && (
-                        <small className="d-block text-danger mt-2">
-                          {updateAsset.error instanceof Error
-                            ? updateAsset.error.message
-                            : "Detail aset tidak dapat disimpan."}
-                        </small>
-                      )}
-                    </form>
-                  </details>
+                    )}
+                    {updateAsset.error && (
+                      <small className="d-block text-danger mt-2">
+                        {updateAsset.error instanceof Error
+                          ? updateAsset.error.message
+                          : "Detail aset tidak dapat disimpan."}
+                      </small>
+                    )}
+                  </form>
+                </details>
                 <Link className="btn btn-primary mt-4 w-100" to="/booking-core">
                   <i className="bi bi-diagram-3 me-2" />
                   Kelola booking core
@@ -3608,13 +3846,36 @@ export function MapPage() {
             ) : selectedImported ? (
               <>
                 <p className="text-secondary">
-                  Informasi aset titik dari sumber impor. Geometri dipertahankan tanpa perubahan.
+                  Informasi aset titik dari sumber impor. Geometri dipertahankan
+                  tanpa perubahan.
                 </p>
                 <div className="detail-section-heading">Ringkasan aset</div>
                 <div className="asset-info mb-3">
-                  <div><span>Jenis aset</span><b>{({ odc: "ODC", odp: "ODP", closure: "Closure", tiang: "Tiang" } as Record<string, string>)[networkAssetKind(selectedImported)] ?? "Aset jaringan"}</b></div>
-                  <div><span>Area</span><b>{selectedImported.area || "Belum dicantumkan"}</b></div>
-                  <div><span>Sumber</span><b>{selectedImported.source === "kml" ? "KML/KMZ" : selectedImported.source}</b></div>
+                  <div>
+                    <span>Jenis aset</span>
+                    <b>
+                      {(
+                        {
+                          odc: "ODC",
+                          odp: "ODP",
+                          closure: "Closure",
+                          tiang: "Tiang",
+                        } as Record<string, string>
+                      )[networkAssetKind(selectedImported)] ?? "Aset jaringan"}
+                    </b>
+                  </div>
+                  <div>
+                    <span>Area</span>
+                    <b>{selectedImported.area || "Belum dicantumkan"}</b>
+                  </div>
+                  <div>
+                    <span>Sumber</span>
+                    <b>
+                      {selectedImported.source === "kml"
+                        ? "KML/KMZ"
+                        : selectedImported.source}
+                    </b>
+                  </div>
                   <div>
                     <span>Standar legenda</span>
                     <b>

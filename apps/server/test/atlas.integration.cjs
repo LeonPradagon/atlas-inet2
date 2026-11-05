@@ -557,7 +557,10 @@ async function main() {
       false,
       "a segment without capacity is not bookable"
     );
-    assert.equal(bookable.body.some((s) => s.id === "http-unverified"), false);
+    assert.equal(
+      bookable.body.some((s) => s.id === "http-unverified"),
+      false
+    );
 
     assert.deepEqual(await call("/settings/booking-duration"), signIn);
     assert.deepEqual(await call("/settings/booking-duration", "presales"), {

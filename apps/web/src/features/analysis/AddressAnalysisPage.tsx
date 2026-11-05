@@ -90,7 +90,9 @@ async function resolveRegionParams(
     postalParams.delete("city");
     postalParams.delete("cityCandidate");
     postalParams.delete("province");
-    result = await api<ResolvedRegion | null>(`/regions/resolve?${postalParams}`);
+    result = await api<ResolvedRegion | null>(
+      `/regions/resolve?${postalParams}`
+    );
   }
   return result;
 }
@@ -237,8 +239,8 @@ function AddressPinPicker({
 
   return (
     <div
-      className="address-pin-picker"
       aria-label="Pilih atau koreksi titik alamat pada peta"
+      className="address-pin-picker"
       ref={container}
       role="application"
       style={{
@@ -365,8 +367,12 @@ export function AddressAnalysisPage() {
     retry: false,
     queryFn: () => {
       const params = new URLSearchParams({ postalCode: address.postalCode });
-      if (city) params.set("city", city.name);
-      if (province) params.set("province", province.name);
+      if (city) {
+        params.set("city", city.name);
+      }
+      if (province) {
+        params.set("province", province.name);
+      }
       return resolveRegionParams(params);
     },
   });
@@ -919,66 +925,66 @@ export function AddressAnalysisPage() {
                     {!hideAddressSuggestions &&
                       !selectedPoint &&
                       addressQuery.length >= 3 && (
-                      <div
-                        aria-label="Saran alamat"
-                        className="list-group position-absolute start-0 end-0 top-100 shadow"
-                        id="address-suggestions"
-                        role="listbox"
-                        style={{ zIndex: 20 }}
-                      >
-                        {debouncedQuery !== addressQuery ||
-                        suggestionsQuery.isFetching ? (
-                          <div className="list-group-item text-secondary">
-                            <span className="spinner-border spinner-border-sm me-2" />
-                            Mencari alamat...
-                          </div>
-                        ) : suggestionsQuery.isError ? (
-                          <div className="list-group-item text-danger">
-                            Saran alamat gagal dimuat. Anda tetap bisa memilih
-                            titik pada peta.
-                          </div>
-                        ) : suggestionsQuery.data?.length ? (
-                          <>
-                            {suggestionsQuery.data.map((suggestion) => (
+                        <div
+                          aria-label="Saran alamat"
+                          className="list-group position-absolute start-0 end-0 top-100 shadow"
+                          id="address-suggestions"
+                          role="listbox"
+                          style={{ zIndex: 20 }}
+                        >
+                          {debouncedQuery !== addressQuery ||
+                          suggestionsQuery.isFetching ? (
+                            <div className="list-group-item text-secondary">
+                              <span className="spinner-border spinner-border-sm me-2" />
+                              Mencari alamat...
+                            </div>
+                          ) : suggestionsQuery.isError ? (
+                            <div className="list-group-item text-danger">
+                              Saran alamat gagal dimuat. Anda tetap bisa memilih
+                              titik pada peta.
+                            </div>
+                          ) : suggestionsQuery.data?.length ? (
+                            <>
+                              {suggestionsQuery.data.map((suggestion) => (
+                                <button
+                                  aria-selected={false}
+                                  className="list-group-item list-group-item-action text-start"
+                                  key={suggestion.id}
+                                  onClick={() =>
+                                    void selectSuggestion(suggestion)
+                                  }
+                                  role="option"
+                                  type="button"
+                                >
+                                  <b className="d-block">{suggestion.label}</b>
+                                  <small className="text-secondary">
+                                    {[suggestion.category, suggestion.location]
+                                      .filter(Boolean)
+                                      .join(", ") || "Kandidat Photon"}{" "}
+                                    · periksa pin pada peta
+                                  </small>
+                                </button>
+                              ))}
                               <button
-                                aria-selected={false}
-                                className="list-group-item list-group-item-action text-start"
-                                key={suggestion.id}
-                                onClick={() =>
-                                  void selectSuggestion(suggestion)
-                                }
-                                role="option"
+                                className="list-group-item list-group-item-action text-primary text-start"
+                                onClick={() => {
+                                  setHideAddressSuggestions(true);
+                                  setShowPinPicker(true);
+                                }}
                                 type="button"
                               >
-                                <b className="d-block">{suggestion.label}</b>
-                                <small className="text-secondary">
-                                  {[suggestion.category, suggestion.location]
-                                    .filter(Boolean)
-                                    .join(", ") || "Kandidat Photon"}{" "}
-                                  · periksa pin pada peta
-                                </small>
+                                <i className="bi bi-geo-alt me-2" />
+                                Pilih titik manual di peta
                               </button>
-                            ))}
-                            <button
-                              className="list-group-item list-group-item-action text-primary text-start"
-                              onClick={() => {
-                                setHideAddressSuggestions(true);
-                                setShowPinPicker(true);
-                              }}
-                              type="button"
-                            >
-                              <i className="bi bi-geo-alt me-2" />
-                              Pilih titik manual di peta
-                            </button>
-                          </>
-                        ) : suggestionsQuery.isSuccess ? (
-                          <div className="list-group-item text-secondary">
-                            Belum ada saran yang cocok. Pilih titik secara
-                            manual pada peta.
-                          </div>
-                        ) : null}
-                      </div>
-                    )}
+                            </>
+                          ) : suggestionsQuery.isSuccess ? (
+                            <div className="list-group-item text-secondary">
+                              Belum ada saran yang cocok. Pilih titik secara
+                              manual pada peta.
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
                   </div>
                   <div className="col-12">
                     <div className="fw-semibold">
