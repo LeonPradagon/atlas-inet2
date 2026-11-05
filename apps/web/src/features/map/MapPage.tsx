@@ -2294,12 +2294,7 @@ export function MapPage() {
                         <input
                           aria-label={`Tampilkan ${item.name}`}
                           checked={selected}
-                          onChange={() => {
-                            toggleMapPackage(item.id);
-                            if (packageMenuRef.current) {
-                              packageMenuRef.current.open = false;
-                            }
-                          }}
+                          onChange={() => toggleMapPackage(item.id)}
                           type="checkbox"
                         />
                         <button
