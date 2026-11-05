@@ -854,6 +854,7 @@ export function NearestNetworkMap({
             className="w-100 border-0"
             height="420"
             loading="lazy"
+            sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
             src={`https://maps.google.com/maps?${new URLSearchParams({
               layer: "c",
               cbll: streetViewLocation.join(","),
