@@ -1793,7 +1793,7 @@ export class AtlasService {
           AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
           AND ST_DWithin(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,$3)
         ORDER BY CASE
-          WHEN a.total_cores>0 AND (a.source='managed' OR a.attributes->>'__coreUsageVerified'='true') AND EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available') THEN 0
+          WHEN a.total_cores>0 AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true') AND EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available') THEN 0
           WHEN a.total_cores>0 AND (SELECT count(*) FROM network_cores c WHERE c.asset_id=a.id AND c.status IN ('Used','Booked'))>=a.total_cores THEN 2
           ELSE 1 END,
         ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography),a.id LIMIT 1`,
