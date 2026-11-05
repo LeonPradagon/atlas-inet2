@@ -105,6 +105,15 @@
 [data-bs-theme="dark"] .text-muted {
   color: var(--atlas-muted) !important;
 }
+[data-bs-theme="dark"] .import-detail-list > div {
+  border-color: var(--bs-border-color);
+}
+[data-bs-theme="dark"] .import-detail-list span {
+  color: var(--atlas-muted);
+}
+[data-bs-theme="dark"] .import-detail-list b {
+  color: var(--bs-heading-color);
+}
 [data-bs-theme="dark"]
   :is(
     .content-heading h1,
