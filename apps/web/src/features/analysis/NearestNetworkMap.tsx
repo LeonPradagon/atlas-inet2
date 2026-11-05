@@ -2,6 +2,7 @@ import type { Feature, Geometry } from "geojson";
 import {
   LngLatBounds,
   Map as MapLibreMap,
+  Marker,
   NavigationControl,
   Popup,
   setWorkerUrl,
@@ -106,7 +107,7 @@ export function NetworkLocationsMap({
       center: [118, -2.5],
       zoom: 4,
     });
-    map.addControl(new NavigationControl());
+    map.addControl(new NavigationControl(), "top-right");
     map.on("load", () => {
       map.addSource("locations", {
         type: "geojson",
@@ -166,10 +167,20 @@ export function NetworkLocationsMap({
     />
   );
 }
-export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
+export function NearestNetworkMap({
+  result,
+  streetViewUrl,
+}: {
+  result: NetworkSearchResult;
+  streetViewUrl?: string;
+}) {
   const [assetError, setAssetError] = useState("");
   const [assetCount, setAssetCount] = useState(0);
   const [assetsLoading, setAssetsLoading] = useState(false);
+  const [streetViewLocation, setStreetViewLocation] = useState<
+    [number, number] | null
+  >(null);
+  const streetViewMarker = useRef<Marker | null>(null);
   const element = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!element.current) {
@@ -179,7 +190,12 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
     let request: AbortController | undefined;
     let requestVersion = 0;
     let viewportTimer: ReturnType<typeof setTimeout> | undefined;
+    let loadedBounds: number[] | undefined;
+    let requestedBounds: number[] | undefined;
     let stopIcons: (() => void) | undefined;
+    let streetViewDropTarget: HTMLElement | undefined;
+    let onStreetViewDragOver: ((event: DragEvent) => void) | undefined;
+    let onStreetViewDrop: ((event: DragEvent) => void) | undefined;
     let active = true;
     const assetsById = new Map<string, NetworkAsset>();
     setWorkerUrl(workerUrl);
@@ -231,7 +247,68 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
       center,
       zoom: 14,
     });
-    map.addControl(new NavigationControl());
+    map.addControl(new NavigationControl(), "top-right");
+    if (streetViewUrl) {
+      const controlGroup = map
+        .getContainer()
+        .querySelector<HTMLDivElement>(
+          ".maplibregl-ctrl-top-right .maplibregl-ctrl-group"
+        );
+      if (controlGroup) {
+        const button = document.createElement("button");
+        button.setAttribute(
+          "aria-label",
+          "Seret Pegman ke titik peta untuk Street View"
+        );
+        button.title = "Seret Pegman ke titik peta untuk Street View";
+        button.type = "button";
+        button.draggable = true;
+        button.style.cursor = "pointer";
+        button.innerHTML =
+          '<i class="bi bi-person-standing" aria-hidden="true" style="color:#f4b400;font-size:20px"></i>';
+        button.addEventListener("dragstart", (event) => {
+          event.dataTransfer?.setData(
+            "application/x-atlas-street-view",
+            "street-view"
+          );
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+        });
+        controlGroup.append(button);
+        streetViewDropTarget = map.getCanvasContainer();
+        onStreetViewDragOver = (event) => {
+          if (
+            !event.dataTransfer?.types.includes("application/x-atlas-street-view")
+          ) {
+            return;
+          }
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        };
+        onStreetViewDrop = (event) => {
+          if (
+            event.dataTransfer?.getData("application/x-atlas-street-view") !==
+            "street-view"
+          ) {
+            return;
+          }
+          event.preventDefault();
+          const bounds = map.getCanvas().getBoundingClientRect();
+          const point = map.unproject([
+            event.clientX - bounds.left,
+            event.clientY - bounds.top,
+          ]);
+          streetViewMarker.current?.remove();
+          streetViewMarker.current = new Marker({ color: "#f4b400" })
+            .setLngLat(point)
+            .addTo(map);
+          streetViewMarker.current.getElement().title =
+            "Lokasi Street View yang dipilih";
+          setStreetViewLocation([point.lat, point.lng]);
+        };
+        streetViewDropTarget.addEventListener("dragover", onStreetViewDragOver);
+        streetViewDropTarget.addEventListener("drop", onStreetViewDrop);
+      }
+    }
     map.on("load", () => {
       map.addSource("search", {
         type: "geojson",
@@ -417,10 +494,15 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
         filter: ["==", ["geometry-type"], "Point"],
         paint: { "circle-radius": 16, "circle-opacity": 0 },
       });
+      const containsBounds = (outer: number[] | undefined, inner: number[]) =>
+        Boolean(
+          outer &&
+            inner[0] >= outer[0] &&
+            inner[1] >= outer[1] &&
+            inner[2] <= outer[2] &&
+            inner[3] <= outer[3]
+        );
       const loadViewport = async () => {
-        const version = ++requestVersion;
-        request?.abort();
-        request = new AbortController();
         const bounds = map.getBounds();
         const bbox = [
           Math.max(-180, bounds.getWest()),
@@ -428,6 +510,29 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
           Math.min(180, bounds.getEast()),
           Math.min(90, bounds.getNorth()),
         ];
+        if (containsBounds(requestedBounds, bbox)) {
+          return;
+        }
+        if (containsBounds(loadedBounds, bbox)) {
+          request?.abort();
+          request = undefined;
+          requestVersion += 1;
+          requestedBounds = undefined;
+          stopIcons?.();
+          stopIcons = undefined;
+          setAssetError("");
+          setAssetsLoading(false);
+          return;
+        }
+        const version = ++requestVersion;
+        request?.abort();
+        stopIcons?.();
+        stopIcons = undefined;
+        requestedBounds = bbox;
+        request = new AbortController();
+        const source = map.getSource(
+          "nearby-assets"
+        ) as import("maplibre-gl").GeoJSONSource;
         setAssetsLoading(true);
         try {
           const assets = await api<NetworkAsset[]>(
@@ -450,22 +555,25 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
             );
           }
           const visible = [...unique.values()];
+          const visibleFeatures = assetFeatures(visible);
+          await new Promise<void>((resolve) => {
+            stopIcons = loadNetworkMapIcons(map, visibleFeatures, resolve);
+          });
+          if (!active || version !== requestVersion) {
+            return;
+          }
           assetsById.clear();
           for (const asset of visible) {
             assetsById.set(asset.id, asset);
           }
-          const visibleFeatures = assetFeatures(visible);
-          stopIcons?.();
-          stopIcons = loadNetworkMapIcons(map, visibleFeatures);
-          (
-            map.getSource(
-              "nearby-assets"
-            ) as import("maplibre-gl").GeoJSONSource
-          ).setData({ type: "FeatureCollection", features: visibleFeatures });
+          source.setData({ type: "FeatureCollection", features: visibleFeatures });
+          loadedBounds = bbox;
+          requestedBounds = undefined;
           setAssetCount(visible.length);
           setAssetError("");
         } catch {
           if (active && version === requestVersion) {
+            requestedBounds = undefined;
             setAssetError(
               "Aset pada area peta gagal dimuat. Geser atau zoom peta untuk mencoba lagi."
             );
@@ -478,7 +586,7 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
       };
       map.on("moveend", () => {
         clearTimeout(viewportTimer);
-        viewportTimer = setTimeout(() => void loadViewport(), 250);
+        viewportTimer = setTimeout(() => void loadViewport(), 350);
       });
       const popup = new Popup({
         maxWidth: "460px",
@@ -697,10 +805,18 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
       clearTimeout(viewportTimer);
       request?.abort();
       stopIcons?.();
+      streetViewMarker.current?.remove();
+      streetViewMarker.current = null;
+      if (streetViewDropTarget && onStreetViewDragOver) {
+        streetViewDropTarget.removeEventListener("dragover", onStreetViewDragOver);
+      }
+      if (streetViewDropTarget && onStreetViewDrop) {
+        streetViewDropTarget.removeEventListener("drop", onStreetViewDrop);
+      }
       observer.disconnect();
       map.remove();
     };
-  }, [result]);
+  }, [result, streetViewUrl]);
   return (
     <>
       <small className="d-block text-secondary mb-2" role="status">
@@ -716,6 +832,39 @@ export function NearestNetworkMap({ result }: { result: NetworkSearchResult }) {
         ref={element}
         style={{ height: 500, borderRadius: 8 }}
       />
+      {streetViewLocation && (
+        <section className="card mt-3" aria-label="Street View lokasi survei">
+          <div className="card-header d-flex align-items-center justify-content-between gap-2">
+            <strong>Street View</strong>
+            <button
+              aria-label="Tutup Street View"
+              className="btn btn-sm btn-outline-secondary ms-auto"
+              onClick={() => {
+                streetViewMarker.current?.remove();
+                streetViewMarker.current = null;
+                setStreetViewLocation(null);
+              }}
+              type="button"
+            >
+              Tutup
+            </button>
+          </div>
+          <iframe
+            allowFullScreen
+            className="w-100 border-0"
+            height="420"
+            loading="lazy"
+            src={`https://maps.google.com/maps?${new URLSearchParams({
+              layer: "c",
+              cbll: streetViewLocation.join(","),
+              cbp: "12,0,,0,0",
+              source: "embed",
+              output: "svembed",
+            })}`}
+            title="Street View pada titik peta yang dipilih"
+          />
+        </section>
+      )}
       <small className="d-block text-secondary mt-2">
         Klik ikon atau kabel untuk detail KMZ. Garis ungu putus-putus adalah
         usulan jalur penarikan; ikon dan kabel eksisting mengikuti style KMZ

@@ -308,6 +308,11 @@ export function SurveysPage() {
                   <NearestNetworkMap
                     key={selected.id}
                     result={selected.analysis}
+                    streetViewUrl={`https://www.google.com/maps/@?${new URLSearchParams({
+                      api: "1",
+                      map_action: "pano",
+                      viewpoint: `${selected.analysis.latitude},${selected.analysis.longitude}`,
+                    })}`}
                   />
                 </div>
               )}

@@ -15,6 +15,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
 import { api } from "../../lib/api";
 import { confirmAction, showError } from "../../lib/dialogs";
+import { addAtlasMapIcons } from "../map/networkMap";
 import { bulkJobStatusLabel } from "./bulkJobStatus";
 import {
   NearestNetworkMap,
@@ -136,71 +137,6 @@ function savedMapPoint(
     : null;
 }
 
-function addFtthMapIcons(map: MapLibreMap) {
-  for (const [kind, color] of [
-    ["OLT", "#e8b500"],
-    ["ODC", "#ff0000"],
-    ["ODP", "#0000ff"],
-    ["POLE", "#536177"],
-  ] as const) {
-    const canvas = document.createElement("canvas");
-    canvas.width = 64;
-    canvas.height = 64;
-    const context = canvas.getContext("2d")!;
-    context.scale(2, 2);
-    if (kind === "ODC" || kind === "ODP") {
-      context.fillStyle = color;
-      context.beginPath();
-      context.moveTo(16, 4);
-      context.lineTo(28, 27);
-      context.lineTo(4, 27);
-      context.closePath();
-      context.fill();
-      context.globalCompositeOperation = "destination-out";
-      context.beginPath();
-      context.arc(16, 19, 3.5, 0, 2 * Math.PI);
-      context.fill();
-      context.globalCompositeOperation = "source-over";
-    } else if (kind === "OLT") {
-      context.fillStyle = "#fff";
-      context.strokeStyle = "#d9a400";
-      context.lineWidth = 1.5;
-      context.beginPath();
-      context.roundRect(5, 7, 22, 20, 2);
-      context.fill();
-      context.stroke();
-      for (const y of [12, 18, 24]) {
-        context.fillStyle = "#e8b500";
-        context.fillRect(8, y - 1, 16, 3);
-        context.fillStyle = "#fff";
-        context.fillRect(10, y, 2, 1);
-      }
-    } else {
-      context.strokeStyle = color;
-      context.lineWidth = 2.5;
-      context.beginPath();
-      context.moveTo(16, 4);
-      context.lineTo(16, 29);
-      context.moveTo(8, 10);
-      context.lineTo(24, 10);
-      context.moveTo(10, 15);
-      context.lineTo(22, 15);
-      context.moveTo(13, 7);
-      context.lineTo(13, 11);
-      context.moveTo(19, 7);
-      context.lineTo(19, 11);
-      context.moveTo(11, 29);
-      context.lineTo(21, 29);
-      context.stroke();
-    }
-    map.addImage(
-      `history-ftth-${kind.toLowerCase()}`,
-      context.getImageData(0, 0, 64, 64),
-      { pixelRatio: 2 }
-    );
-  }
-}
-
 function draftRadius(
   features: {
     designAnchor?: boolean;
@@ -308,7 +244,7 @@ function SavedAnalysisMap({
     });
     map.addControl(new NavigationControl(), "top-right");
     map.on("load", () => {
-      addFtthMapIcons(map);
+      addAtlasMapIcons(map);
       if (radii.length) {
         const data: FeatureCollection<Polygon, { radiusMeters: number }> = {
           type: "FeatureCollection",
@@ -403,7 +339,7 @@ function SavedAnalysisMap({
           layout: {
             "icon-image": [
               "concat",
-              "history-ftth-",
+              "atlas-icon-",
               ["downcase", ["get", "kind"]],
             ],
             "icon-size": 0.8,
@@ -419,7 +355,7 @@ function SavedAnalysisMap({
           source: "saved-analysis-points",
           filter: ["==", ["get", "kind"], "POLE"],
           layout: {
-            "icon-image": "history-ftth-pole",
+            "icon-image": "atlas-icon-pole",
             "icon-size": 0.62,
             "icon-allow-overlap": true,
             "icon-ignore-placement": true,

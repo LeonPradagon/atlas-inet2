@@ -533,8 +533,12 @@ export class GeocodingService {
       ? {
           city: properties.city ?? properties.county,
           district: properties.district,
+          number: properties.housenumber,
           postalCode: properties.postcode,
           province: properties.state,
+          street:
+            properties.street ??
+            (properties.type === "street" ? properties.name : undefined),
           subdistrict: properties.locality,
         }
       : null;
@@ -547,7 +551,8 @@ export class GeocodingService {
       photon?.city &&
       photon.district &&
       photon.subdistrict &&
-      !/^(?:rt|rw)\s*\d/iu.test(photon.subdistrict)
+      !/^(?:rt|rw)\s*\d/iu.test(photon.subdistrict) &&
+      photon.street
     ) {
       return photon;
     }
@@ -615,8 +620,16 @@ export class GeocodingService {
           address.county,
           photon?.district
         ),
+        number: address.house_number ?? photon?.number,
         postalCode: address.postcode ?? photon?.postalCode,
         province: address.state ?? photon?.province,
+        street:
+          address.road ??
+          address.pedestrian ??
+          address.residential ??
+          address.footway ??
+          address.path ??
+          photon?.street,
         subdistrict: address.suburb ?? address.village ?? address.neighbourhood,
         subdistrictCandidates: candidates(
           address.suburb,

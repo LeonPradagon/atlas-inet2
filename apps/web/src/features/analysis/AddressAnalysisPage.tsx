@@ -252,6 +252,13 @@ function AddressPinPicker({
 }
 
 export function AddressAnalysisPage() {
+  const [inputMode, setInputMode] = useState<"address" | "coordinates" | null>(
+    null
+  );
+  const [coordinateDraft, setCoordinateDraft] = useState({
+    latitude: "",
+    longitude: "",
+  });
   const [address, setAddress] = useState<AddressFields>({
     street: "",
     number: "",
@@ -264,6 +271,9 @@ export function AddressAnalysisPage() {
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint | null>(
     null
   );
+  const [manualStreetStatus, setManualStreetStatus] = useState<
+    "loading" | "unavailable" | null
+  >(null);
   const pinPickerRef = useRef<HTMLDivElement>(null);
   const [searchViewport, setSearchViewport] = useState<SearchViewport | null>(
     null
@@ -518,9 +528,60 @@ export function AddressAnalysisPage() {
       allowExpand2km?: boolean;
     }) => api<Result>("/analysis/address", postJson(value)),
   });
+  const submitAnalysis = (point = selectedPoint) => {
+    if (!point?.confirmed) {
+      return;
+    }
+    const usesAddress = inputMode === "address";
+    analyze.mutate({
+      address: usesAddress
+        ? fullAddress || address.street
+        : point.label,
+      structured: {
+        street: usesAddress ? address.street : "",
+        number: usesAddress ? address.number : "",
+        subdistrict: usesAddress ? (subdistrict?.name ?? "") : "",
+        district: usesAddress ? (district?.name ?? "") : "",
+        city: usesAddress ? (city?.name ?? "") : "",
+        province: usesAddress ? (province?.name ?? "") : "",
+        postalCode: usesAddress ? address.postalCode : "",
+      },
+      coordinates: {
+        longitude: point.longitude,
+        latitude: point.latitude,
+        provider: point.provider,
+        matchQuality: point.matchQuality,
+        matchedStreet: point.matchedStreet,
+      },
+      coordinateConfirmed: true,
+    });
+  };
+  const parsedCoordinates = (() => {
+    const { latitude, longitude } = coordinateDraft;
+    if (!latitude.trim() || !longitude.trim()) {
+      return null;
+    }
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    return Number.isFinite(lat) &&
+      Number.isFinite(lon) &&
+      lat >= -90 &&
+      lat <= 90 &&
+      lon >= -180 &&
+      lon <= 180
+      ? { latitude: lat, longitude: lon }
+      : null;
+  })();
+  const chooseInputMode = (mode: "address" | "coordinates") => {
+    setInputMode(mode);
+    setManualStreetStatus(null);
+    setSelectedPoint(null);
+    analyze.reset();
+  };
   const error = analyze.error as ApiError | null;
   const updateAddress = (field: keyof AddressFields, value: string) => {
     regionLookupId.current += 1;
+    setManualStreetStatus(null);
     setAddress((current) => ({
       ...current,
       [field]: value,
@@ -631,8 +692,21 @@ export function AddressAnalysisPage() {
       const reverse = await api<Partial<AddressSuggestion> | null>(
         `/analysis/address/reverse?${new URLSearchParams({ longitude: String(longitude), latitude: String(latitude) })}`
       );
+      if (lookupId !== regionLookupId.current) {
+        return;
+      }
+      if (!reverse) {
+        setManualStreetStatus("unavailable");
+        return;
+      }
+      setAddress((current) => ({
+        ...current,
+        street: reverse.street ?? "",
+        number: reverse.number ?? "",
+        ...(reverse.postalCode ? { postalCode: reverse.postalCode } : {}),
+      }));
+      setManualStreetStatus(reverse.street ? null : "unavailable");
       if (
-        !reverse ||
         !(
           reverse.city ||
           reverse.cityCandidates?.length ||
@@ -655,11 +729,15 @@ export function AddressAnalysisPage() {
         postalCode: resolved.postalCode ?? current.postalCode,
       }));
     } catch {
+      if (lookupId === regionLookupId.current) {
+        setManualStreetStatus("unavailable");
+      }
       // Keep the point usable when reverse geocoding or region lookup is unavailable.
     }
   };
   const selectSuggestion = async (suggestion: AddressSuggestion) => {
     const lookupId = ++regionLookupId.current;
+    setManualStreetStatus(null);
     const selectedLabel = suggestion.label;
     setSelectedPoint({
       longitude: suggestion.longitude,
@@ -846,49 +924,85 @@ export function AddressAnalysisPage() {
   return (
     <>
       <PageHeader
-        subtitle="Ubah alamat menjadi koordinat dan temukan jaringan terdekat."
+        subtitle="Temukan jaringan terdekat dari alamat rumah atau koordinat."
         title="Analisis alamat"
       />
       <div className="row g-4">
-        <div className="col-lg-7">
+        <div className={inputMode === "coordinates" ? "col-12" : "col-lg-7"}>
           <section className="card panel-card">
             <div className="card-header analysis-form-header">
               <div>
                 <h3>Lokasi pelanggan</h3>
                 <p>
-                  Ketik alamat bebas atau lengkapi detail wilayah untuk
-                  mempersempit hasil.
+                  Pilih metode input lokasi: alamat rumah atau koordinat.
                 </p>
               </div>
               <span className="step-tag">ANALISIS TUNGGAL</span>
             </div>
             <div className="card-body">
-              <form
+              {!inputMode && (
+                <div>
+                  <div className="fw-semibold mb-2">
+                    Bagaimana Anda ingin memasukkan lokasi?
+                  </div>
+                  <div className="row g-3">
+                    <div className="col-md-6">
+                      <button
+                        className="btn btn-outline-primary text-start w-100 h-100 p-3"
+                        onClick={() => chooseInputMode("address")}
+                        type="button"
+                      >
+                        <i className="bi bi-house-door me-2" />
+                        <b>Alamat rumah</b>
+                        <small className="d-block mt-1">
+                          Cari alamat dan pilih titiknya pada peta.
+                        </small>
+                      </button>
+                    </div>
+                    <div className="col-md-6">
+                      <button
+                        className="btn btn-outline-primary text-start w-100 h-100 p-3"
+                        onClick={() => chooseInputMode("coordinates")}
+                        type="button"
+                      >
+                        <i className="bi bi-crosshair me-2" />
+                        <b>Koordinat langsung</b>
+                        <small className="d-block mt-1">
+                          Masukkan latitude dan longitude.
+                        </small>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {inputMode && (
+                <div
+                  aria-label="Metode input lokasi"
+                  className="btn-group mb-3"
+                  role="group"
+                >
+                  <button
+                    aria-pressed={inputMode === "address"}
+                    className={`btn ${inputMode === "address" ? "btn-primary" : "btn-outline-primary"}`}
+                    onClick={() => chooseInputMode("address")}
+                    type="button"
+                  >
+                    <i className="bi bi-house-door me-2" />Alamat rumah
+                  </button>
+                  <button
+                    aria-pressed={inputMode === "coordinates"}
+                    className={`btn ${inputMode === "coordinates" ? "btn-primary" : "btn-outline-primary"}`}
+                    onClick={() => chooseInputMode("coordinates")}
+                    type="button"
+                  >
+                    <i className="bi bi-crosshair me-2" />Koordinat langsung
+                  </button>
+                </div>
+              )}
+              {inputMode === "address" && <form
                 onSubmit={(event) => {
                   event.preventDefault();
-                  if (!selectedPoint?.confirmed) {
-                    return;
-                  }
-                  analyze.mutate({
-                    address: fullAddress || address.street,
-                    structured: {
-                      street: address.street,
-                      number: address.number,
-                      subdistrict: subdistrict?.name ?? "",
-                      district: district?.name ?? "",
-                      city: city?.name ?? "",
-                      province: province?.name ?? "",
-                      postalCode: address.postalCode,
-                    },
-                    coordinates: {
-                      longitude: selectedPoint.longitude,
-                      latitude: selectedPoint.latitude,
-                      provider: selectedPoint.provider,
-                      matchQuality: selectedPoint.matchQuality,
-                      matchedStreet: selectedPoint.matchedStreet,
-                    },
-                    coordinateConfirmed: true,
-                  });
+                  submitAnalysis();
                 }}
               >
                 <div className="row g-3">
@@ -916,6 +1030,16 @@ export function AddressAnalysisPage() {
                       role="combobox"
                       value={address.street}
                     />
+                    {manualStreetStatus && (
+                      <div
+                        className={`form-text ${manualStreetStatus === "unavailable" ? "text-warning" : ""}`}
+                        role="status"
+                      >
+                        {manualStreetStatus === "loading"
+                          ? "Mencari nama jalan di titik yang dipilih…"
+                          : "Nama jalan tidak tersedia untuk titik ini. Silakan isi manual jika diketahui."}
+                      </div>
+                    )}
                     {!hideAddressSuggestions &&
                       !selectedPoint &&
                       addressQuery.length >= 3 && (
@@ -1208,14 +1332,18 @@ export function AddressAnalysisPage() {
                     </div>
                     <AddressPinPicker
                       onChange={(longitude, latitude) => {
+                        setManualStreetStatus("loading");
+                        setAddress((current) => ({
+                          ...current,
+                          street: "",
+                          number: "",
+                        }));
                         void resolvePointRegions(longitude, latitude);
-                        setSelectedPoint((current) => ({
+                        setSelectedPoint(() => ({
                           longitude,
                           latitude,
-                          label: current?.label ?? "Titik dipilih manual",
-                          provider: current?.provider ?? "manual",
-                          matchQuality: current?.matchQuality,
-                          matchedStreet: current?.matchedStreet,
+                          label: "Titik dipilih manual",
+                          provider: "manual",
                           confirmed: false,
                         }));
                         analyze.reset();
@@ -1280,6 +1408,7 @@ export function AddressAnalysisPage() {
                     className="btn btn-link text-secondary p-0"
                     onClick={() => {
                       regionLookupId.current += 1;
+                      setManualStreetStatus(null);
                       setAddress({
                         street: "",
                         number: "",
@@ -1322,7 +1451,116 @@ export function AddressAnalysisPage() {
                     )}
                   </button>
                 </div>
-              </form>
+              </form>}
+              {inputMode === "coordinates" && (
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!parsedCoordinates) return;
+                    const point: SelectedPoint = {
+                      ...parsedCoordinates,
+                      label: "Koordinat langsung",
+                      provider: "manual",
+                      confirmed: true,
+                    };
+                    setSelectedPoint(point);
+                    submitAnalysis(point);
+                  }}
+                >
+                  <div className="row g-3">
+                    <div className="col-md-6">
+                      <label
+                        className="form-label fw-semibold"
+                        htmlFor="coordinate-latitude"
+                      >
+                        Latitude
+                      </label>
+                      <input
+                        className="form-control"
+                        id="coordinate-latitude"
+                        max="90"
+                        min="-90"
+                        onChange={(event) => {
+                          setCoordinateDraft((current) => ({
+                            ...current,
+                            latitude: event.target.value,
+                          }));
+                          setSelectedPoint(null);
+                          analyze.reset();
+                        }}
+                        placeholder="Contoh: -6.1754"
+                        required
+                        step="any"
+                        type="number"
+                        value={coordinateDraft.latitude}
+                      />
+                    </div>
+                    <div className="col-md-6">
+                      <label
+                        className="form-label fw-semibold"
+                        htmlFor="coordinate-longitude"
+                      >
+                        Longitude
+                      </label>
+                      <input
+                        className="form-control"
+                        id="coordinate-longitude"
+                        max="180"
+                        min="-180"
+                        onChange={(event) => {
+                          setCoordinateDraft((current) => ({
+                            ...current,
+                            longitude: event.target.value,
+                          }));
+                          setSelectedPoint(null);
+                          analyze.reset();
+                        }}
+                        placeholder="Contoh: 106.8272"
+                        required
+                        step="any"
+                        type="number"
+                        value={coordinateDraft.longitude}
+                      />
+                    </div>
+                  </div>
+                  <div className="form-text mt-2">
+                    Latitude: -90 sampai 90. Longitude: -180 sampai 180.
+                  </div>
+                  <div className="d-flex justify-content-between align-items-center mt-4">
+                    <button
+                      className="btn btn-link text-secondary p-0"
+                      onClick={() => {
+                        setCoordinateDraft({ latitude: "", longitude: "" });
+                        setSelectedPoint(null);
+                        analyze.reset();
+                      }}
+                      type="button"
+                    >
+                      Bersihkan
+                    </button>
+                    <button
+                      className="btn btn-primary px-4"
+                      disabled={analyze.isPending || !parsedCoordinates}
+                      type="submit"
+                    >
+                      {analyze.isPending ? (
+                        <>
+                          <span className="spinner-border spinner-border-sm me-2" />
+                          Menganalisis...
+                        </>
+                      ) : selectedPoint?.confirmed ? (
+                        <>
+                          <i className="bi bi-search me-2" />Analisis jaringan
+                        </>
+                      ) : (
+                        <>
+                          <i className="bi bi-search me-2" />Analisis jaringan
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           </section>
           <div className="info-note mt-3">
@@ -1336,7 +1574,7 @@ export function AddressAnalysisPage() {
             </p>
           </div>
         </div>
-        <div className="col-lg-5">
+        <div className={inputMode === "coordinates" ? "col-12" : "col-lg-5"}>
           {analyze.data ? (
             <section className="card panel-card result-card">
               <div

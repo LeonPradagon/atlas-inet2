@@ -601,7 +601,8 @@ export function cableLengthMeters(geometry: Geometry | null): number | null {
 
 export function loadNetworkMapIcons(
   instance: MapLibreMap,
-  features: Feature<Geometry, Record<string, unknown>>[]
+  features: Feature<Geometry, Record<string, unknown>>[],
+  onComplete?: () => void
 ) {
   let active = true;
   const icons = new Map<string, { url: string; color: string }>();
@@ -623,6 +624,24 @@ export function loadNetworkMapIcons(
         color: String(feature.properties?.iconTint ?? "#ffffff"),
       });
     }
+  }
+  let remaining = [...icons.keys()].filter((id) => !instance.hasImage(id)).length;
+  let completed = false;
+  const complete = () => {
+    if (completed) {
+      return;
+    }
+    completed = true;
+    onComplete?.();
+  };
+  const settle = () => {
+    remaining -= 1;
+    if (remaining === 0) {
+      complete();
+    }
+  };
+  if (remaining === 0) {
+    complete();
   }
   const addLoadedIcon = (
     id: string,
@@ -662,16 +681,19 @@ export function loadNetworkMapIcons(
           );
           addLoadedIcon(id, image, color);
         })
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(settle);
     } else {
       void instance
         .loadImage(url)
         .then(({ data }) => addLoadedIcon(id, data, color))
-        .catch(() => undefined);
+        .catch(() => undefined)
+        .finally(settle);
     }
   }
 
   return () => {
     active = false;
+    complete();
   };
 }

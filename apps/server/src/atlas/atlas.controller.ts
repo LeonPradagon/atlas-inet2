@@ -514,6 +514,7 @@ export class AtlasController {
       throw new BadRequestException({ message: "Alamat wajib diisi." });
     }
     if (
+      !body.coordinates &&
       !(
         body.structured?.province?.trim() &&
         body.structured.city?.trim() &&
