@@ -558,7 +558,8 @@ export class AtlasService {
     const match = `%${filter}%`;
     const provinceCondition = provinceMatch(4);
     const conditions = `($1='' OR a.name ILIKE $2 OR a.area ILIKE $2 OR a.cable_type ILIKE $2 OR a.asset_type ILIKE $2 OR a.attributes::text ILIKE $2)
-      AND ($3='all' OR a.asset_type='segment')
+      AND ($3 IN ('all','points') OR a.asset_type='segment')
+      AND ($3<>'points' OR a.asset_type<>'segment')
       AND ($3<>'filled' OR a.total_cores>0)
       AND ($3<>'empty' OR a.total_cores=0)
       AND ($4::text IS NULL OR ${provinceCondition})

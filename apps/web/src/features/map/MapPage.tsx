@@ -574,18 +574,24 @@ export function MapPage() {
   const [coreVerificationNote, setCoreVerificationNote] = useState("");
   const [corePageSize, setCorePageSize] = useState(10);
   const [corePage, setCorePage] = useState(1);
+  const catalogFilter =
+    assetListTab === "network"
+      ? "points"
+      : coreFilter === "all"
+        ? "segments"
+        : coreFilter;
   const catalogQuery = useQuery({
     queryKey: [
       "segment-catalog",
       assetPage,
       catalogSearch,
-      coreFilter,
+      catalogFilter,
       provinceCode,
       selectedImportIds,
     ],
     queryFn: () =>
       api<NetworkAssetPage>(
-        `/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${coreFilter}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : ""}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`
+        `/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${catalogFilter}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : ""}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`
       ),
     enabled: Boolean(provinceCode && selectedImportIds.length),
     refetchInterval: 30_000,
@@ -1031,17 +1037,21 @@ export function MapPage() {
   const filteredImported = matchedImported.filter((item) => assetListTab === "cables"
     ? matchesCableFilters(item)
     : item.assetType !== "segment" && (networkKindFilter === "all" || networkAssetKind(item) === networkKindFilter))
-    .sort(assetListTab === "cables" ? sortCables : (a, b) => a.name.localeCompare(b.name, "id-ID"))
-    .slice(0, 100);
-  const visibleAssets = assetListTab === "cables" ? [...filteredSegments, ...filteredImported] : filteredImported;
+    .sort(assetListTab === "cables" ? sortCables : (a, b) => a.name.localeCompare(b.name, "id-ID"));
   const firstVisibleAsset = assetListTab === "cables"
     ? standaloneSegments[0] ?? [...ftthDraftGroups.values()][0]?.[0] ?? filteredImported[0]
     : filteredImported[0];
-  const selectedVisibleInList = visibleAssets.some((asset) => asset.id === selectedId);
+  const selectionKnown = knownAssets.some((asset) => asset.id === selectedId);
   useEffect(() => {
-    if (!catalogQuery.isPending && firstVisibleAsset && !selectedVisibleInList) setSelectedId(firstVisibleAsset.id);
-    if (!catalogQuery.isPending && !firstVisibleAsset && selectedId) setSelectedId("");
-  }, [catalogQuery.isPending, firstVisibleAsset?.id, selectedVisibleInList, selectedId]);
+    if (!(catalogQuery.isPending || selectionKnown)) {
+      setSelectedId(firstVisibleAsset?.id ?? "");
+    }
+  }, [catalogQuery.isPending, firstVisibleAsset?.id, selectionKnown]);
+  const selectAssetListTab = (tab: AssetListTab) => {
+    setAssetListTab(tab);
+    setAssetPage(1);
+    setSelectedId("");
+  };
   const catalogPageCount = Math.max(
     1,
     Math.ceil(
@@ -2729,8 +2739,8 @@ export function MapPage() {
                 />
               </div>
               <div className="asset-list-tabs mt-3" role="tablist" aria-label="Kategori aset jaringan">
-                <button type="button" role="tab" aria-selected={assetListTab === "cables"} className={assetListTab === "cables" ? "active" : ""} onClick={() => setAssetListTab("cables")}>Kabel</button>
-                <button type="button" role="tab" aria-selected={assetListTab === "network"} className={assetListTab === "network" ? "active" : ""} onClick={() => setAssetListTab("network")}>Aset jaringan</button>
+                <button type="button" role="tab" aria-selected={assetListTab === "cables"} className={assetListTab === "cables" ? "active" : ""} onClick={() => selectAssetListTab("cables")}>Kabel</button>
+                <button type="button" role="tab" aria-selected={assetListTab === "network"} className={assetListTab === "network" ? "active" : ""} onClick={() => selectAssetListTab("network")}>Aset jaringan</button>
               </div>
               {assetListTab === "cables" ? <div className="asset-list-filters mt-2">
                 <div><label className="form-label small mb-1" htmlFor="map-cable-family">Jenis kabel</label><select id="map-cable-family" className="form-select form-select-sm" disabled={!(provinceCode || selectedImportIds.length)} value={cableFamilyFilter} onChange={(event) => setCableFamilyFilter(event.target.value)}><option value="all">Semua kabel</option><option value="feeder">Feeder</option><option value="backbone">Backbone</option><option value="distribusi">Distribusi</option><option value="sub-distribusi">Sub-distribusi</option></select></div>
@@ -2752,7 +2762,6 @@ export function MapPage() {
                 value={coreFilter}
               >
                 <option value="all">Semua kapasitas</option>
-                <option value="segments">Semua segmen</option>
                 <option value="filled">Core sudah diisi</option>
                 <option value="empty">Core belum diisi</option>
               </select></div></div> : <div className="mt-2"><label className="form-label small mb-1" htmlFor="map-network-kind">Jenis aset</label><select id="map-network-kind" className="form-select form-select-sm" disabled={!(provinceCode || selectedImportIds.length)} value={networkKindFilter} onChange={(event) => setNetworkKindFilter(event.target.value)}><option value="all">Semua aset jaringan</option><option value="odc">ODC</option><option value="odp">ODP</option><option value="closure">Closure</option><option value="tiang">Tiang</option></select></div>}
@@ -2985,12 +2994,6 @@ export function MapPage() {
                 <i className="bi bi-chevron-right" />
               </button>
             ))}
-            {matchedImported.length > filteredImported.length && (
-              <div className="map-empty-list">
-                Menampilkan {filteredImported.length} dari {matchedImported.length} aset impor.
-                Gunakan pencarian untuk mempersempit daftar.
-              </div>
-            )}
             {Boolean(provinceCode || selectedImportIds.length) &&
               !catalogQuery.isPending &&
               (assetListTab === "cables" ? filteredSegments.length : 0) + filteredImported.length === 0 && (

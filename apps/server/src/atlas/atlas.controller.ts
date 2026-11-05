@@ -241,7 +241,7 @@ export class AtlasController {
         message: "Parameter pagination aset tidak valid.",
       });
     }
-    if (!["all", "segments", "filled", "empty"].includes(coreFilter)) {
+    if (!["all", "segments", "points", "filled", "empty"].includes(coreFilter)) {
       throw new BadRequestException({ message: "Filter core tidak valid." });
     }
     if (provinceCode !== undefined && !/^\d{2}$/u.test(provinceCode)) {
