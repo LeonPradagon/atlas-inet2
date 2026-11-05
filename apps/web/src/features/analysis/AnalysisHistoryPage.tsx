@@ -1031,7 +1031,7 @@ export function AnalysisHistoryPage() {
               type="button"
             >
               <i
-                className={`bi bi-arrow-clockwise me-1${history.isFetching ? "spin" : ""}`}
+                className={`bi bi-arrow-clockwise me-1${history.isFetching ? " spin" : ""}`}
               />
               Muat ulang
             </button>
