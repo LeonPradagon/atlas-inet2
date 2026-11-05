@@ -39,6 +39,7 @@ import {
   loadNetworkMapIcons,
 } from "./networkMap";
 import { registerSatelliteTiles } from "./satelliteTiles";
+import { SegmentRelations } from "./SegmentRelations";
 
 type Coordinate = [number, number];
 const indonesiaBounds: [[number, number], [number, number]] = [
@@ -3480,6 +3481,11 @@ export function MapPage() {
                     </div>
                   )}
                 </div>
+                <SegmentRelations
+                  isAdmin={user?.role === "ADMIN"}
+                  key={selectedSegment.id}
+                  segmentId={selectedSegment.id}
+                />
                 {selectedSegment.source !== "managed" && (
                   <details className="admin-settings mt-3">
                     <summary>Metadata impor</summary>
