@@ -625,7 +625,9 @@ export function loadNetworkMapIcons(
       });
     }
   }
-  let remaining = [...icons.keys()].filter((id) => !instance.hasImage(id)).length;
+  let remaining = [...icons.keys()].filter(
+    (id) => !instance.hasImage(id)
+  ).length;
   let completed = false;
   const complete = () => {
     if (completed) {

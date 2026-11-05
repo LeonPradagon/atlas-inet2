@@ -600,7 +600,17 @@ export class AtlasService {
       }>(
         `SELECT count(*)::int AS total FROM network_assets a
         WHERE ${conditions}`,
-        [filter, match, coreFilter, provinceCode ?? null, importId ?? null, assetType, cableFamily, cableStatus, networkKind]
+        [
+          filter,
+          match,
+          coreFilter,
+          provinceCode ?? null,
+          importId ?? null,
+          assetType,
+          cableFamily,
+          cableStatus,
+          networkKind,
+        ]
       ),
       this.db.query<AssetRecord>(
         `WITH page AS (
@@ -1612,12 +1622,13 @@ export class AtlasService {
     }
     if (
       !Array.isArray(coreStatuses) ||
-      coreStatuses.some((entry) =>
-        !entry ||
-        typeof entry !== "object" ||
-        !Number.isInteger(entry.coreNumber) ||
-        entry.coreNumber < 1 ||
-        !["Available", "Used"].includes(entry.status)
+      coreStatuses.some(
+        (entry) =>
+          !entry ||
+          typeof entry !== "object" ||
+          !Number.isInteger(entry.coreNumber) ||
+          entry.coreNumber < 1 ||
+          !["Available", "Used"].includes(entry.status)
       ) ||
       new Set(coreStatuses.map(({ coreNumber }) => coreNumber)).size !==
         coreStatuses.length
@@ -1641,7 +1652,9 @@ export class AtlasService {
           [assetId, coreNumber]
         );
         if (!current.length) {
-          throw new NotFoundException({ message: `Core ${coreNumber} tidak ditemukan.` });
+          throw new NotFoundException({
+            message: `Core ${coreNumber} tidak ditemukan.`,
+          });
         }
         if (current[0].status === "Booked") {
           throw new ConflictException({

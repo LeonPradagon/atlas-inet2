@@ -271,13 +271,17 @@ export function NearestNetworkMap({
             "application/x-atlas-street-view",
             "street-view"
           );
-          if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "copy";
+          }
         });
         controlGroup.append(button);
         streetViewDropTarget = map.getCanvasContainer();
         onStreetViewDragOver = (event) => {
           if (
-            !event.dataTransfer?.types.includes("application/x-atlas-street-view")
+            !event.dataTransfer?.types.includes(
+              "application/x-atlas-street-view"
+            )
           ) {
             return;
           }
@@ -566,7 +570,10 @@ export function NearestNetworkMap({
           for (const asset of visible) {
             assetsById.set(asset.id, asset);
           }
-          source.setData({ type: "FeatureCollection", features: visibleFeatures });
+          source.setData({
+            type: "FeatureCollection",
+            features: visibleFeatures,
+          });
           loadedBounds = bbox;
           requestedBounds = undefined;
           setAssetCount(visible.length);
@@ -808,7 +815,10 @@ export function NearestNetworkMap({
       streetViewMarker.current?.remove();
       streetViewMarker.current = null;
       if (streetViewDropTarget && onStreetViewDragOver) {
-        streetViewDropTarget.removeEventListener("dragover", onStreetViewDragOver);
+        streetViewDropTarget.removeEventListener(
+          "dragover",
+          onStreetViewDragOver
+        );
       }
       if (streetViewDropTarget && onStreetViewDrop) {
         streetViewDropTarget.removeEventListener("drop", onStreetViewDrop);
@@ -833,7 +843,7 @@ export function NearestNetworkMap({
         style={{ height: 500, borderRadius: 8 }}
       />
       {streetViewLocation && (
-        <section className="card mt-3" aria-label="Street View lokasi survei">
+        <section aria-label="Street View lokasi survei" className="card mt-3">
           <div className="card-header d-flex align-items-center justify-content-between gap-2">
             <strong>Street View</strong>
             <button

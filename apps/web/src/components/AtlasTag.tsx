@@ -6,9 +6,5 @@ type AtlasTagProps = {
 };
 
 export function AtlasTag({ children, className = "" }: AtlasTagProps) {
-  return (
-    <span className={`atlas-tag ${className}`.trim()}>
-      {children}
-    </span>
-  );
+  return <span className={`atlas-tag ${className}`.trim()}>{children}</span>;
 }
