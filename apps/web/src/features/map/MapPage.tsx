@@ -2530,7 +2530,7 @@ export function MapPage() {
                 } else {
                   instance.setProjection({ type: "mercator" });
                   instance.setMaxBounds(indonesiaBounds);
-                  if (previousMapView.current) {
+                  if (previousMapView.current && instance.getZoom() < 4) {
                     instance.flyTo(previousMapView.current);
                   }
                 }
