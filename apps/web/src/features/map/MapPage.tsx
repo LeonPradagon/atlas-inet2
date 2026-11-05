@@ -554,6 +554,7 @@ export function MapPage() {
     bearing: number;
     pitch: number;
   } | null>({ center: [118, -2.5], zoom: 5.3, bearing: 0, pitch: 0 });
+  const provinceSelectRef = useRef<HTMLSelectElement>(null);
   const packageMenuRef = useRef<HTMLDetailsElement>(null);
   const packageBoundsRequest = useRef(0);
   const importPackages = mapImportsQuery.data ?? [];
@@ -2109,6 +2110,7 @@ export function MapPage() {
             </label>
             <select
               className="form-select form-select-sm mb-2"
+              ref={provinceSelectRef}
               disabled={mapProvincesQuery.isPending}
               id="map-province-filter"
               onChange={(event) => {
@@ -2203,8 +2205,7 @@ export function MapPage() {
               </small>
             )}
           </div>
-          {provinceCode && (
-            <section aria-label="Pilih perusahaan dan paket KMZ" className="map-package-picker">
+          <section aria-label="Pilih perusahaan dan paket KMZ" className="map-package-picker">
               <header>
                 <label
                   className="form-label fw-semibold text-uppercase mb-1"
@@ -2215,6 +2216,7 @@ export function MapPage() {
                 <button
                   aria-label="Riwayat proses impor"
                   className="map-package-history"
+                  disabled={!provinceCode}
                   onClick={() => {
                     setShowImportHistory(true);
                     void mapImportsQuery.refetch();
@@ -2227,7 +2229,7 @@ export function MapPage() {
               </header>
               <select
                 className="form-select form-select-sm mb-2"
-                disabled={mapImportsQuery.isPending || mapImportsQuery.isError || !importPackages.length}
+                disabled={!provinceCode || mapImportsQuery.isPending || mapImportsQuery.isError || !importPackages.length}
                 id="map-company-select"
                 onChange={(event) => selectCompanyPackages(event.target.value)}
                 value={selectedCompanyValue}
@@ -2247,10 +2249,27 @@ export function MapPage() {
                   <option disabled value="__multiple__">Beberapa perusahaan</option>
                 )}
               </select>
+              {!provinceCode && (
+                <button
+                  className="map-province-guidance"
+                  onClick={() => {
+                    setProvincePickMessage("Pilih provinsi terlebih dahulu untuk melihat perusahaan.");
+                    provinceSelectRef.current?.focus();
+                    try {
+                      provinceSelectRef.current?.showPicker();
+                    } catch {
+                      // Focus still moves to the province selector if showPicker is unavailable.
+                    }
+                  }}
+                  type="button"
+                >
+                  Pilih provinsi terlebih dahulu untuk melihat perusahaan
+                </button>
+              )}
               <div className="form-label fw-semibold text-uppercase mb-1">
                 Pilih paket KMZ
               </div>
-              <details ref={packageMenuRef}>
+              {provinceCode ? <details ref={packageMenuRef}>
                 <summary className="form-select form-select-sm">
                   <span title={activeImportPackage?.name}>
                     {activeImportPackage?.name ?? "Pilih paket KMZ"}
@@ -2338,14 +2357,17 @@ export function MapPage() {
                     );
                   })}
                 </div>
-              </details>
+              </details> : (
+                <div aria-disabled="true" className="map-package-disabled form-select form-select-sm">
+                  Pilih provinsi terlebih dahulu
+                </div>
+              )}
               {selectedImportPackages.length > 0 && (
                 <small className="map-package-summary">
                   {selectedImportPackages.length} paket ditampilkan · paket aktif digunakan untuk edit dan ekspor
                 </small>
               )}
             </section>
-          )}
           {showImportHistory && (
             <div className="map-import-history-backdrop">
               <section

@@ -3530,6 +3530,33 @@ body {
 .map-package-picker > header .form-label {
   margin-bottom: 0.25rem;
 }
+.map-province-guidance {
+  display: block;
+  width: 100%;
+  margin: -2px 0 12px;
+  padding: 0;
+  color: var(--bs-primary, #3157d5);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+.map-province-guidance:hover {
+  text-decoration: underline;
+}
+.map-package-history:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+.map-package-disabled {
+  display: flex;
+  align-items: center;
+  color: var(--bs-secondary-color, #738096);
+  background-color: var(--bs-secondary-bg, #f4f6f8);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
 .map-package-picker details {
   position: relative;
 }
