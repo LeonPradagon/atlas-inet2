@@ -392,6 +392,25 @@ async function main() {
       "PASS: multi-asset relations, shared heights, removal, persistence, exports, unchanged source geometry/style"
     );
 
+    for (const [id, offset] of [
+      ["near-unverified", 0.0001],
+      ["far-verified", 0.002],
+    ]) {
+      await q(
+        "INSERT INTO network_assets(id,name,asset_type,source,geometry) VALUES($1,$1,'segment','kml',ST_SetSRID(ST_MakeLine(ST_MakePoint(110+$2::float8,-7),ST_MakePoint(110+$2::float8,-7.01)),4326))",
+        [id, offset]
+      );
+      await atlas.updateAsset(id, { totalCores: 2 }, "admin");
+    }
+    await atlas.verifyCoreUsage("far-verified", "Survei lapangan", "", "admin");
+    assert.equal(
+      (await atlas.nearestNetwork(110, -7.005)).id,
+      "far-verified",
+      "a verified segment with idle cores outranks a closer unverified one"
+    );
+    console.log(
+      "PASS: nearest network prefers segments whose core usage is verified"
+    );
 
     // Exercise real controller routes and RBAC with isolated test sessions, not application accounts.
     const { NestFactory } = require("@nestjs/core");
