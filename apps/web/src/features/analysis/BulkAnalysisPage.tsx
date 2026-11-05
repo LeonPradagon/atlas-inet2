@@ -36,15 +36,15 @@ type BulkJob = {
   cancelRequested: boolean;
 };
 function rowReviewReason(row: AnalysisRow) {
+  if (["OK", "QUEUED", "PROCESSING", "CANCELLED"].includes(row.status)) {
+    return "";
+  }
   if (row.message) return row.message;
   if (row.status === "NETWORK_NOT_FOUND") {
     return "Jaringan tidak ditemukan dalam radius 1 km.";
   }
   if (row.status === "ROUTING_UNAVAILABLE") {
     return "Jaringan ditemukan, tetapi rute jalan belum tersedia.";
-  }
-  if (["OK", "QUEUED", "PROCESSING", "CANCELLED"].includes(row.status)) {
-    return "";
   }
   return "Periksa kembali alamat atau koordinat pada file.";
 }
@@ -179,6 +179,8 @@ export function BulkAnalysisPage() {
       url.searchParams.set("jobId", result.jobId);
       window.history.replaceState(window.history.state, "", url);
       setJobId(result.jobId);
+      setSearch("");
+      setStatusFilter("");
       setPage(1);
       setSelectedRowNumber(null);
       await queryClient.invalidateQueries({ queryKey: ["analysis-history"] });
@@ -456,17 +458,16 @@ export function BulkAnalysisPage() {
                           : bulkJobStatusLabel(job.status)}
                       </span>
                     </div>
-                    {job.failed > 0 ? (
+                    <span>{job.processed} dari {job.total} lokasi</span>
+                    {job.failed > 0 && (
                       <button
                         className="bulk-job-review-link"
                         onClick={showRowsNeedingReview}
                         type="button"
                       >
-                        {job.failed} dari {job.total} lokasi perlu diperiksa
+                        {job.failed} perlu diperiksa
                         <i className="bi bi-arrow-right-short" aria-hidden="true" />
                       </button>
-                    ) : (
-                      <span>{job.processed} dari {job.total} lokasi</span>
                     )}
                   </>
                 ) : (
