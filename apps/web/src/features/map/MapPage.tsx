@@ -2169,10 +2169,6 @@ export function MapPage() {
                 </option>
               ))}
             </select>
-            <small className="d-block">
-              Pilih provinsi terlebih dahulu, lalu pilih perusahaan untuk
-              menampilkan aset.
-            </small>
             {provincePickMessage && (
               <small className="text-warning d-block mt-1" role="status">
                 {provincePickMessage}
@@ -2185,13 +2181,6 @@ export function MapPage() {
                 KMZ
               </small>
             )}
-            {!provinceCode &&
-              !selectedImportIds.length &&
-              provinces.length > 0 && (
-                <small className="text-muted d-block mt-1">
-                  Aset jaringan dimuat setelah wilayah provinsi diklik.
-                </small>
-              )}
             {!mapProvincesQuery.isPending &&
               !mapProvincesQuery.isError &&
               !provinces.length && (
@@ -2253,7 +2242,6 @@ export function MapPage() {
                 <button
                   className="map-province-guidance"
                   onClick={() => {
-                    setProvincePickMessage("Pilih provinsi terlebih dahulu untuk melihat perusahaan.");
                     provinceSelectRef.current?.focus();
                     try {
                       provinceSelectRef.current?.showPicker();
@@ -2263,7 +2251,7 @@ export function MapPage() {
                   }}
                   type="button"
                 >
-                  Pilih provinsi terlebih dahulu untuk melihat perusahaan
+                  Pilih provinsi dulu
                 </button>
               )}
               <div className="form-label fw-semibold text-uppercase mb-1">
