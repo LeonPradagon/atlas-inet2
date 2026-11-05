@@ -324,9 +324,6 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             )}
           </ul>
         </nav>
-        <div className="sidebar-footer">
-          <span className="status-dot" /> ATLAS · Workspace jaringan
-        </div>
       </aside>
       <main className="app-main">
         <div className="content-wrapper">
