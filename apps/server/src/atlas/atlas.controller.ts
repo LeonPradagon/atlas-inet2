@@ -225,7 +225,11 @@ export class AtlasController {
     @Query("coreFilter") coreFilter = "all",
     @Query("provinceCode") provinceCode?: string,
     @Query("importId") importId?: string,
-    @Query("importIds") importIds?: string
+    @Query("importIds") importIds?: string,
+    @Query("assetType") assetType = "all",
+    @Query("cableFamily") cableFamily = "all",
+    @Query("cableStatus") cableStatus = "all",
+    @Query("networkKind") networkKind = "all"
   ) {
     await this.auth.requireUser(req);
     const parsedPage = page === undefined ? 1 : Number(page);
@@ -246,6 +250,18 @@ export class AtlasController {
     ) {
       throw new BadRequestException({ message: "Filter core tidak valid." });
     }
+    if (!["all", "cables", "network"].includes(assetType)) {
+      throw new BadRequestException({ message: "Filter jenis aset tidak valid." });
+    }
+    if (!["all", "feeder", "backbone", "distribusi", "sub-distribusi"].includes(cableFamily)) {
+      throw new BadRequestException({ message: "Filter jenis kabel tidak valid." });
+    }
+    if (!["all", "verified", "unverified", "available", "unavailable"].includes(cableStatus)) {
+      throw new BadRequestException({ message: "Filter status kabel tidak valid." });
+    }
+    if (!["all", "odc", "odp", "closure", "tiang"].includes(networkKind)) {
+      throw new BadRequestException({ message: "Filter jenis aset jaringan tidak valid." });
+    }
     if (provinceCode !== undefined && !/^\d{2}$/u.test(provinceCode)) {
       throw new BadRequestException({ message: "Kode provinsi tidak valid." });
     }
@@ -256,7 +272,11 @@ export class AtlasController {
       parsedPageSize,
       coreFilter,
       provinceCode,
-      packageFilter
+      packageFilter,
+      assetType,
+      cableFamily,
+      cableStatus,
+      networkKind
     );
   }
 
@@ -395,10 +415,20 @@ export class AtlasController {
   async verifyCoreUsage(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
-    @Body() body: { source?: string; note?: string }
+    @Body() body: {
+      source?: string;
+      note?: string;
+      coreStatuses?: { coreNumber: number; status: string }[];
+    }
   ) {
-    const user = await this.auth.requireAdmin(req);
-    return this.atlas.verifyCoreUsage(id, body?.source, body?.note, user.id);
+    const user = await this.auth.requireUser(req);
+    return this.atlas.verifyCoreUsage(
+      id,
+      body?.source,
+      body?.note,
+      user.id,
+      body?.coreStatuses
+    );
   }
 
   @Get("assets/:id/relations")
@@ -424,7 +454,7 @@ export class AtlasController {
     @Param("coreNumber") coreNumber: string,
     @Body() body: { status?: string }
   ) {
-    const user = await this.auth.requireAdmin(req);
+    const user = await this.auth.requireUser(req);
     return this.atlas.setCoreStatus(
       id,
       Number(coreNumber),

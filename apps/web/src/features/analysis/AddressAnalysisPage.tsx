@@ -8,6 +8,7 @@ import {
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { useEffect, useRef, useState } from "react";
+import { AtlasTag } from "../../components/AtlasTag";
 import { PageHeader } from "../../components/PageHeader";
 import { type ApiError, api, postJson } from "../../lib/api";
 import {
@@ -943,7 +944,7 @@ export function AddressAnalysisPage() {
                   Pilih metode input lokasi: alamat rumah atau koordinat.
                 </p>
               </div>
-              <span className="step-tag">ANALISIS TUNGGAL</span>
+              <AtlasTag className="is-accent">ANALISIS TUNGGAL</AtlasTag>
             </div>
             <div className="card-body">
               {!inputMode && (
