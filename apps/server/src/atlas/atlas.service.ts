@@ -1578,7 +1578,8 @@ export class AtlasService {
     assetId: string,
     source: string | undefined,
     note: string | undefined,
-    userId: string
+    userId: string,
+    coreStatuses: { coreNumber: number; status: string }[] = []
   ) {
     const allowedSources = [
       "Survei lapangan",
@@ -1591,6 +1592,22 @@ export class AtlasService {
     if (!allowedSources.includes(String(source))) {
       throw new BadRequestException({ message: "Pilih sumber verifikasi." });
     }
+    if (
+      !Array.isArray(coreStatuses) ||
+      coreStatuses.some((entry) =>
+        !entry ||
+        typeof entry !== "object" ||
+        !Number.isInteger(entry.coreNumber) ||
+        entry.coreNumber < 1 ||
+        !["Available", "Used"].includes(entry.status)
+      ) ||
+      new Set(coreStatuses.map(({ coreNumber }) => coreNumber)).size !==
+        coreStatuses.length
+    ) {
+      throw new BadRequestException({
+        message: "Perubahan status core tidak valid.",
+      });
+    }
     return this.db.transaction(async (client) => {
       const { rows: assets } = await client.query(
         "SELECT id,total_cores FROM network_assets WHERE id=$1 AND asset_type='segment' FOR UPDATE",
@@ -1600,6 +1617,37 @@ export class AtlasService {
         throw new NotFoundException({ message: "Segmen tidak ditemukan." });
       }
       const total = Number(assets[0].total_cores);
+      for (const { coreNumber, status } of coreStatuses) {
+        const { rows: current } = await client.query(
+          "SELECT status FROM network_cores WHERE asset_id=$1 AND core_number=$2 FOR UPDATE",
+          [assetId, coreNumber]
+        );
+        if (!current.length) {
+          throw new NotFoundException({ message: `Core ${coreNumber} tidak ditemukan.` });
+        }
+        if (current[0].status === "Booked") {
+          throw new ConflictException({
+            message: `Core ${coreNumber} sedang dibooking dan tidak dapat diubah.`,
+          });
+        }
+        if (current[0].status !== status) {
+          await client.query(
+            "UPDATE network_cores SET status=$3 WHERE asset_id=$1 AND core_number=$2",
+            [assetId, coreNumber, status]
+          );
+          await audit(
+            client,
+            userId,
+            "CORE_STATUS_CHANGED",
+            "CORE",
+            `${assetId}:${coreNumber}`,
+            { assetId, coreNumber, status }
+          );
+          if (status === "Available") {
+            await allocateWaiting(client, assetId, userId);
+          }
+        }
+      }
       const { rows: counts } = await client.query(
         `SELECT count(*)::int AS total,
         count(*) FILTER (WHERE status='Available')::int AS available,

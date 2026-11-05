@@ -413,10 +413,20 @@ export class AtlasController {
   async verifyCoreUsage(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
-    @Body() body: { source?: string; note?: string }
+    @Body() body: {
+      source?: string;
+      note?: string;
+      coreStatuses?: { coreNumber: number; status: string }[];
+    }
   ) {
-    const user = await this.auth.requireAdmin(req);
-    return this.atlas.verifyCoreUsage(id, body?.source, body?.note, user.id);
+    const user = await this.auth.requireUser(req);
+    return this.atlas.verifyCoreUsage(
+      id,
+      body?.source,
+      body?.note,
+      user.id,
+      body?.coreStatuses
+    );
   }
 
   @Get("assets/:id/relations")
@@ -442,7 +452,7 @@ export class AtlasController {
     @Param("coreNumber") coreNumber: string,
     @Body() body: { status?: string }
   ) {
-    const user = await this.auth.requireAdmin(req);
+    const user = await this.auth.requireUser(req);
     return this.atlas.setCoreStatus(
       id,
       Number(coreNumber),
