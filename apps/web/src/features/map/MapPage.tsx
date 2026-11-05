@@ -454,21 +454,23 @@ function matchesAssetSearch(asset: NetworkAsset, query: string) {
   return searchable.includes(query);
 }
 type AssetListTab = "cables" | "network";
+const cableFamilies: Record<string, string> = {
+  BACKBONE: "backbone",
+  BRANCH: "sub-distribusi",
+  DISTRIBUTION: "distribusi",
+  FEEDER: "feeder",
+};
+const networkAssetKinds: Record<string, string> = {
+  JC: "closure",
+  ODC: "odc",
+  ODP: "odp",
+  POLE: "tiang",
+};
 function cableFamily(asset: NetworkAsset) {
-  const value = `${asset.cableType ?? ""} ${asset.name} ${asset.attributes?.routeType ?? ""}`.toLocaleUpperCase("id-ID");
-  if (value.includes("FEEDER") || value.includes("FDR")) return "feeder";
-  if (value.includes("BACKBONE") || value.includes("BB_")) return "backbone";
-  if (value.includes("SUB-DISTRIBUSI") || value.includes("SUB DISTRIBUSI") || value.includes("BRENCH")) return "sub-distribusi";
-  if (value.includes("DISTRIBUSI") || value.includes("DST_") || value.includes("DTB_")) return "distribusi";
-  return "lainnya";
+  return cableFamilies[legendStyle(asset).category] ?? "lainnya";
 }
 function networkAssetKind(asset: NetworkAsset) {
-  const value = `${asset.attributes?.assetKind ?? ""} ${asset.name}`.toLocaleUpperCase("id-ID");
-  if (value.includes("ODC")) return "odc";
-  if (value.includes("ODP")) return "odp";
-  if (value.includes("CLOSURE") || value.includes("JC")) return "closure";
-  if (value.includes("TIANG") || value.includes("POLE")) return "tiang";
-  return "lainnya";
+  return networkAssetKinds[assetIconCategory(asset)] ?? "lainnya";
 }
 function sortCables(a: NetworkAsset, b: NetworkAsset) {
   const priority = (asset: NetworkAsset) => !isCoreUsageVerified(asset) ? 2 : asset.idleCores > 0 ? 0 : 1;
