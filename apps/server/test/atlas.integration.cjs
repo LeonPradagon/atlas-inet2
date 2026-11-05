@@ -112,12 +112,15 @@ async function main() {
       bookings.approveBooking(await requestBooking(segmentId, cores), "admin");
     const status = async (id) =>
       (await q("SELECT status FROM bookings WHERE id=$1", [id])).rows[0].status;
-    const segment = async (id, count) => {
+    const segment = async (id, count, verified = true) => {
       await q(
         `INSERT INTO network_assets(id,name,asset_type,source,area,geometry,source_geometry,attributes) VALUES($1,$1,'segment','kml','Original area',ST_GeomFromText('LINESTRING(106.8 -6.2,106.81 -6.21)',4326),'{"type":"LineString","coordinates":[[106.8,-6.2,12],[106.81,-6.21,13]]}','{"__kmlStyle":{"lineColor":"#ff0000"},"name":"Original KML"}')`,
         [id]
       );
       await atlas.updateAsset(id, { totalCores: count }, "admin");
+      if (verified) {
+        await atlas.verifyCoreUsage(id, "Survei lapangan", "", "admin");
+      }
     };
     await segment("multi", 6);
     const hold = await booking("multi", 6);
@@ -157,6 +160,7 @@ async function main() {
     for (const n of [1, 2, 3]) {
       await atlas.setCoreStatus("fifo", n, "Used", "admin");
     }
+    await atlas.verifyCoreUsage("fifo", "Survei lapangan", "", "admin");
     const tailRequest = await requestBooking("fifo", 2);
     const head = await booking("fifo", 4),
       tail = await bookings.approveBooking(tailRequest, "admin");
@@ -388,6 +392,7 @@ async function main() {
       "PASS: multi-asset relations, shared heights, removal, persistence, exports, unchanged source geometry/style"
     );
 
+
     // Exercise real controller routes and RBAC with isolated test sessions, not application accounts.
     const { NestFactory } = require("@nestjs/core");
     const { AppModule } = require("../dist/app.module");
@@ -511,9 +516,8 @@ async function main() {
       ).rows,
     });
     await segment("http-booking", 2);
-    await segment("http-empty", 0);
-    await segment("http-unverified", 2);
-    await q(`UPDATE network_assets SET attributes=attributes || '{"__coreUsageVerification":{"verified":true}}'::jsonb WHERE id='http-booking'`);
+    await segment("http-empty", 0, false);
+    await segment("http-unverified", 2, false);
 
     assert.deepEqual(await call("/assets/bookable-segments"), signIn);
     const bookable = await call("/assets/bookable-segments", "presales");
@@ -614,6 +618,21 @@ async function main() {
         body: {
           message:
             "Kapasitas belum diisi. Minta ADMIN melengkapi jumlah core segmen.",
+        },
+        status: 400,
+      }
+    );
+    assert.deepEqual(
+      await call(
+        "/bookings",
+        "presales",
+        "POST",
+        bookingInput("HTTP A", 1, "http-unverified")
+      ),
+      {
+        body: {
+          message:
+            "Pemakaian core segmen belum terverifikasi. Minta ADMIN memverifikasi segmen pada halaman peta jaringan.",
         },
         status: 400,
       }
