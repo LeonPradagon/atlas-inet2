@@ -525,6 +525,15 @@ export class AtlasService {
         COALESCE(l.details->>'fileName', 'Map Package') AS name,
         COALESCE((l.details->>'importedCount')::int, 0) AS "importedCount",
         COALESCE((l.details->>'segmentCount')::int, 0) AS "segmentCount",
+        COALESCE((
+          SELECT jsonb_agg(company.name ORDER BY company.name)
+          FROM (
+            SELECT DISTINCT NULLIF(btrim(a.attributes->>'Company'), '') AS name
+            FROM network_assets a
+            WHERE ${assetImportId}=l.entity_id
+          ) company
+          WHERE company.name IS NOT NULL
+        ), '[]'::jsonb) AS companies,
         COALESCE((l.details->>'ftthFolderCount')::int, (
           SELECT count(DISTINCT array_to_string((string_to_array(a.attributes->>'folderPath', '/'))[1:p.ordinality], ' / '))::int
           FROM network_assets a
@@ -552,7 +561,11 @@ export class AtlasService {
     pageSize = 50,
     coreFilter = "all",
     provinceCode?: string,
-    importId?: string
+    importId?: string,
+    assetType = "all",
+    cableFamily = "all",
+    cableStatus = "all",
+    networkKind = "all"
   ) {
     const filter = search.trim();
     const match = `%${filter}%`;
@@ -562,20 +575,37 @@ export class AtlasService {
       AND ($3<>'filled' OR a.total_cores>0)
       AND ($3<>'empty' OR a.total_cores=0)
       AND ($4::text IS NULL OR ${provinceCondition})
-      AND ($5::text IS NULL OR ${assetImportId}=ANY(string_to_array($5, ',')))`;
+      AND ($5::text IS NULL OR ${assetImportId}=ANY(string_to_array($5, ',')))
+      AND ($6='all' OR ($6='cables' AND a.asset_type='segment') OR ($6='network' AND a.asset_type<>'segment'))
+      AND ($7='all' OR CASE
+        WHEN upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')) LIKE '%FEEDER%' OR upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')) LIKE '%FDR%' THEN 'feeder'
+        WHEN upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')) LIKE '%BACKBONE%' OR position('BB_' in upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')))>0 THEN 'backbone'
+        WHEN upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')) LIKE '%SUB-DISTRIBUSI%' OR upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')) LIKE '%SUB DISTRIBUSI%' OR upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')) LIKE '%BRENCH%' THEN 'sub-distribusi'
+        WHEN upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')) LIKE '%DISTRIBUSI%' OR position('DST_' in upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')))>0 OR position('DTB_' in upper(concat_ws(' ',a.cable_type,a.name,a.attributes->>'routeType')))>0 THEN 'distribusi'
+        ELSE 'lainnya' END=$7)
+      AND ($8='all' OR ($8='verified' AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true'))
+        OR ($8='unverified' AND NOT (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true'))
+        OR ($8='available' AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true') AND EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available'))
+        OR ($8='unavailable' AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true') AND NOT EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available')))
+      AND ($9='all' OR CASE
+        WHEN upper(concat_ws(' ',a.attributes->>'assetKind',a.name)) LIKE '%ODC%' THEN 'odc'
+        WHEN upper(concat_ws(' ',a.attributes->>'assetKind',a.name)) LIKE '%ODP%' THEN 'odp'
+        WHEN upper(concat_ws(' ',a.attributes->>'assetKind',a.name)) LIKE '%CLOSURE%' OR upper(concat_ws(' ',a.attributes->>'assetKind',a.name)) LIKE '%JC%' THEN 'closure'
+        WHEN upper(concat_ws(' ',a.attributes->>'assetKind',a.name)) LIKE '%TIANG%' OR upper(concat_ws(' ',a.attributes->>'assetKind',a.name)) LIKE '%POLE%' THEN 'tiang'
+        ELSE 'lainnya' END=$9)`;
     const [{ rows: countRows }, { rows }] = await Promise.all([
       this.db.query<{
         total: number;
       }>(
         `SELECT count(*)::int AS total FROM network_assets a
         WHERE ${conditions}`,
-        [filter, match, coreFilter, provinceCode ?? null, importId ?? null]
+        [filter, match, coreFilter, provinceCode ?? null, importId ?? null, assetType, cableFamily, cableStatus, networkKind]
       ),
       this.db.query<AssetRecord>(
         `WITH page AS (
           SELECT a.id,a.name FROM network_assets a
           WHERE ${conditions}
-          ORDER BY a.name,a.id LIMIT $6 OFFSET $7
+          ORDER BY a.name,a.id LIMIT $10 OFFSET $11
         )
         SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
           a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
@@ -591,6 +621,10 @@ export class AtlasService {
           coreFilter,
           provinceCode ?? null,
           importId ?? null,
+          assetType,
+          cableFamily,
+          cableStatus,
+          networkKind,
           pageSize,
           (page - 1) * pageSize,
         ]

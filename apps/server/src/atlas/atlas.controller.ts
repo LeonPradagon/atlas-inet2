@@ -225,7 +225,11 @@ export class AtlasController {
     @Query("coreFilter") coreFilter = "all",
     @Query("provinceCode") provinceCode?: string,
     @Query("importId") importId?: string,
-    @Query("importIds") importIds?: string
+    @Query("importIds") importIds?: string,
+    @Query("assetType") assetType = "all",
+    @Query("cableFamily") cableFamily = "all",
+    @Query("cableStatus") cableStatus = "all",
+    @Query("networkKind") networkKind = "all"
   ) {
     await this.auth.requireUser(req);
     const parsedPage = page === undefined ? 1 : Number(page);
@@ -244,6 +248,18 @@ export class AtlasController {
     if (!["all", "segments", "filled", "empty"].includes(coreFilter)) {
       throw new BadRequestException({ message: "Filter core tidak valid." });
     }
+    if (!["all", "cables", "network"].includes(assetType)) {
+      throw new BadRequestException({ message: "Filter jenis aset tidak valid." });
+    }
+    if (!["all", "feeder", "backbone", "distribusi", "sub-distribusi"].includes(cableFamily)) {
+      throw new BadRequestException({ message: "Filter jenis kabel tidak valid." });
+    }
+    if (!["all", "verified", "unverified", "available", "unavailable"].includes(cableStatus)) {
+      throw new BadRequestException({ message: "Filter status kabel tidak valid." });
+    }
+    if (!["all", "odc", "odp", "closure", "tiang"].includes(networkKind)) {
+      throw new BadRequestException({ message: "Filter jenis aset jaringan tidak valid." });
+    }
     if (provinceCode !== undefined && !/^\d{2}$/u.test(provinceCode)) {
       throw new BadRequestException({ message: "Kode provinsi tidak valid." });
     }
@@ -254,7 +270,11 @@ export class AtlasController {
       parsedPageSize,
       coreFilter,
       provinceCode,
-      packageFilter
+      packageFilter,
+      assetType,
+      cableFamily,
+      cableStatus,
+      networkKind
     );
   }
 
