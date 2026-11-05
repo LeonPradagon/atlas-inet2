@@ -1144,7 +1144,11 @@ export function MapPage() {
     const resizeObserver = new ResizeObserver(() => instance.resize());
     resizeObserver.observe(mapElement.current);
     instance.addControl(new NavigationControl(), "top-right");
-    instance.on("error", () => setMapError(true));
+    instance.on("error", (event) => {
+      if (!("sourceId" in event && event.sourceId === "satellite-imagery")) {
+        setMapError(true);
+      }
+    });
     instance.on("load", () => {
       instance.setProjection({ type: "globe" });
       addAtlasMapIcons(instance);
