@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { gps } from "exifr";
+import { useRef, useState } from "react";
 import { AtlasTag } from "../../components/AtlasTag";
 import { DataTable } from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
@@ -97,6 +98,9 @@ export function SurveysPage() {
   const pageSize = 10;
   const [selected, setSelected] = useState<Survey | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
+  const [imageError, setImageError] = useState("");
+  const [readingImage, setReadingImage] = useState(false);
+  const imageReadId = useRef(0);
   const me = useQuery({
     queryKey: ["me"],
     queryFn: () => api<{ role: string }>("/me"),
@@ -118,6 +122,9 @@ export function SurveysPage() {
   );
   const refresh = () => client.invalidateQueries({ queryKey: ["surveys"] });
   const openSurvey = (survey: Survey) => {
+    imageReadId.current++;
+    setImageError("");
+    setReadingImage(false);
     setSelected(survey);
     setForm(restoreTextFindings(survey.findings ?? {}));
     update.reset();
@@ -340,11 +347,75 @@ export function SurveysPage() {
                 </label>
               ))}
             </div>{" "}
+            <div className="mt-3">
+              <label className="form-label" htmlFor="survey-image">
+                Foto bukti survei
+              </label>
+              {selected.status === "IN_PROGRESS" && (
+                <>
+                  <input
+                    accept="image/jpeg,image/png,image/webp"
+                    className="form-control"
+                    id="survey-image"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      const readId = ++imageReadId.current;
+                      setImageError("");
+                      setReadingImage(false);
+                      if (!file) return;
+                      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 2 * 1024 * 1024) {
+                        setImageError("Pilih gambar JPG, PNG, atau WebP dengan ukuran maksimal 2 MB.");
+                        return;
+                      }
+                      const reader = new FileReader();
+                      setReadingImage(true);
+                      reader.onload = async () => {
+                        const location = await gps(file).catch(() => undefined);
+                        if (readId !== imageReadId.current) return;
+                        if (!location || !Number.isFinite(location.latitude) || !Number.isFinite(location.longitude) || Math.abs(location.latitude) > 90 || Math.abs(location.longitude) > 180 || typeof reader.result !== "string") {
+                          setImageError("Foto tidak memiliki koordinat GPS. Aktifkan lokasi pada kamera dan pilih foto asli.");
+                        } else {
+                          setForm((current) => ({ ...current, image: reader.result as string, imageLatitude: String(location.latitude), imageLongitude: String(location.longitude) }));
+                        }
+                        setReadingImage(false);
+                      };
+                      reader.onerror = () => {
+                        if (readId === imageReadId.current) {
+                          setImageError("Gambar tidak dapat dibaca.");
+                          setReadingImage(false);
+                        }
+                      };
+                      reader.readAsDataURL(file);
+                    }}
+                    type="file"
+                  />
+                  <small className="text-secondary">JPG, PNG, atau WebP, maksimal 2 MB. Foto harus memiliki koordinat GPS.</small>
+                </>
+              )}
+              {imageError && <p className="text-danger" role="alert">{imageError}</p>}
+              {form.image && (
+                <div className="mt-2">
+                  <a href={form.image} target="_blank" rel="noreferrer">
+                    <img alt="Bukti survei" src={form.image} style={{ maxWidth: "100%", maxHeight: 240, objectFit: "contain" }} />
+                  </a>
+                  {form.imageLatitude && form.imageLongitude ? (
+                    <p className="mt-2 mb-1">Koordinat foto: {form.imageLatitude}, {form.imageLongitude}</p>
+                  ) : (
+                    <p className="text-secondary mt-2 mb-1">Koordinat foto tidak tersedia.</p>
+                  )}
+                  {selected.status === "IN_PROGRESS" && (
+                    <button className="btn btn-sm btn-outline-danger d-block mt-2" onClick={() => { imageReadId.current++; setReadingImage(false); setForm((current) => ({ ...current, image: "", imageLatitude: "", imageLongitude: "" })); }} type="button">Hapus gambar</button>
+                  )}
+                </div>
+              )}
+              {!form.image && selected.status !== "IN_PROGRESS" && <p className="text-secondary">Tidak ada gambar.</p>}
+            </div>
             <div className="d-flex mt-3 gap-2">
               {selected.status === "IN_PROGRESS" && (
                 <button
                   className="btn btn-primary"
-                  disabled={update.isPending}
+                  disabled={update.isPending || readingImage}
                   onClick={() =>
                     update.mutate({
                       survey: selected,

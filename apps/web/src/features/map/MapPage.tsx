@@ -579,6 +579,7 @@ export function MapPage() {
   });
   const [provinceCode, setProvinceCode] = useState("");
   const [selectedImportIds, setSelectedImportIds] = useState<string[]>([]);
+  const [selectedCompanyValue, setSelectedCompanyValue] = useState("");
   const [activeImportId, setActiveImportId] = useState("");
   const [globeEnabled, setGlobeEnabled] = useState(true);
   const [satelliteEnabled, setSatelliteEnabled] = useState(false);
@@ -598,17 +599,15 @@ export function MapPage() {
   const selectedImportPackages = importPackages.filter((item) =>
     selectedImportIds.includes(item.id)
   );
-  const selectedCompanyNames = [
-    ...new Set(selectedImportPackages.flatMap((item) => item.companies ?? [])),
-  ];
-  const selectedCompanyValue =
-    selectedImportIds.length === 0
-      ? ""
-      : selectedCompanyNames.length === 1
-        ? selectedCompanyNames[0]
-        : selectedCompanyNames.length === 0
-          ? "__unassigned__"
-          : "__multiple__";
+  const companyPackages = importPackages.filter((item) =>
+    selectedCompanyValue === "__unassigned__"
+      ? !item.companies?.length
+      : selectedCompanyValue === "__multiple__"
+        ? selectedImportIds.includes(item.id)
+        : Boolean(
+            selectedCompanyValue && item.companies?.includes(selectedCompanyValue)
+          )
+  );
   const hasUnassignedCompanyPackages = importPackages.some(
     (item) => !item.companies?.length
   );
@@ -1545,6 +1544,7 @@ export function MapPage() {
             setMapBounds(province.bounds);
             setSelectedImportIds([]);
             setActiveImportId("");
+            setSelectedCompanyValue("");
             setProvinceCode(province.code);
             instance.setPaintProperty(
               "province-selection-fill",
@@ -1848,6 +1848,23 @@ export function MapPage() {
       await queryClient.invalidateQueries({
         queryKey: ["network-map-imports"],
       });
+      const updatedPackages =
+        queryClient.getQueryData<MapImportPackage[]>(["network-map-imports"]) ??
+        [];
+      const selectedPackages = updatedPackages.filter((item) =>
+        packageIds.includes(item.id)
+      );
+      const importedCompanies = [
+        ...new Set(selectedPackages.flatMap((item) => item.companies ?? [])),
+      ];
+      setSelectedCompanyValue(
+        importedCompanies.length === 0
+          ? "__unassigned__"
+          : importedCompanies.length === 1 &&
+              selectedPackages.every((item) => item.companies?.length)
+            ? importedCompanies[0]
+            : "__multiple__"
+      );
       await queryClient.invalidateQueries({
         queryKey: ["network-map-provinces"],
       });
@@ -1922,6 +1939,7 @@ export function MapPage() {
       });
   }
   function selectCompanyPackages(company: string) {
+    setSelectedCompanyValue(company);
     const matchingPackages = company
       ? company === "__unassigned__"
         ? importPackages.filter((item) => !item.companies?.length)
@@ -2215,6 +2233,7 @@ export function MapPage() {
                 setMapBounds(nextProvince?.bounds ?? null);
                 setSelectedImportIds([]);
                 setActiveImportId("");
+                setSelectedCompanyValue("");
                 setProvinceCode(event.target.value);
                 if (!nextProvince) {
                   map.current?.flyTo({ center: [118, -2.5], zoom: 5.3 });
@@ -2394,7 +2413,13 @@ export function MapPage() {
                       Belum ada paket. Impor file KML/KMZ untuk memulai.
                     </small>
                   )}
-                  {mapImportsQuery.data?.map((item) => {
+                  {!selectedCompanyValue &&
+                    !mapImportsQuery.isPending &&
+                    !mapImportsQuery.isError &&
+                    importPackages.length > 0 && (
+                      <small>Pilih perusahaan terlebih dahulu.</small>
+                    )}
+                  {companyPackages.map((item) => {
                     const selected = selectedImportIds.includes(item.id);
                     const active = activeImportId === item.id;
                     return (

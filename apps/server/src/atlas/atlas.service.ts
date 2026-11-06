@@ -8,6 +8,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import type { PoolClient } from "pg";
+import { gps } from "exifr";
 import { allocateWaiting, BookingService } from "../booking/booking.service";
 import { audit } from "../database/audit";
 import { Database } from "../database/database";
@@ -241,6 +242,41 @@ export class AtlasService {
           .trim()
           .slice(0, 2000);
       }
+      const image = body.image ?? survey.findings.image ?? "";
+      let imageLatitude = String(survey.findings.imageLatitude ?? "");
+      let imageLongitude = String(survey.findings.imageLongitude ?? "");
+      if (typeof image !== "string") {
+        throw new BadRequestException({ message: "Gambar survei tidak valid." });
+      }
+      if (image) {
+        if (image.length > 2_796_230) {
+          throw new BadRequestException({ message: "Ukuran gambar maksimal 2 MB." });
+        }
+        const match = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/u.exec(image);
+        const data = match ? Buffer.from(match[2], "base64") : null;
+        const valid = data && data.length <= 2 * 1024 * 1024 && (
+          (match?.[1] === "jpeg" && data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) ||
+          (match?.[1] === "png" && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) ||
+          (match?.[1] === "webp" && data.subarray(0, 4).toString() === "RIFF" && data.subarray(8, 12).toString() === "WEBP")
+        );
+        if (!valid) {
+          throw new BadRequestException({ message: "Gambar harus JPG, PNG, atau WebP dengan ukuran maksimal 2 MB." });
+        }
+        if (image !== survey.findings.image) {
+          const location = await gps(data).catch(() => undefined);
+          if (!location || !Number.isFinite(location.latitude) || !Number.isFinite(location.longitude) || Math.abs(location.latitude) > 90 || Math.abs(location.longitude) > 180) {
+            throw new BadRequestException({ message: "Foto harus memiliki koordinat GPS. Aktifkan lokasi pada kamera dan unggah foto asli." });
+          }
+          imageLatitude = String(location.latitude);
+          imageLongitude = String(location.longitude);
+        }
+      } else {
+        imageLatitude = "";
+        imageLongitude = "";
+      }
+      findings.image = image;
+      findings.imageLatitude = imageLatitude;
+      findings.imageLongitude = imageLongitude;
       if (
         ["REVIEW", "VERIFIED"].includes(status) &&
         ["connection", "route", "length", "capacity", "evidence"].some(
@@ -269,7 +305,7 @@ export class AtlasService {
         [id, status, JSON.stringify(findings), userId]
       );
       await audit(client, userId, "SURVEY_STATUS_CHANGED", "SURVEY", id, {
-        findings,
+        findings: { ...findings, image: image ? "[gambar terlampir]" : "" },
         from: survey.status,
         to: status,
       });
