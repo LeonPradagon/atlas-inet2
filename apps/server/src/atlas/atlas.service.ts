@@ -7,8 +7,8 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import type { PoolClient } from "pg";
 import { gps } from "exifr";
+import type { PoolClient } from "pg";
 import { allocateWaiting, BookingService } from "../booking/booking.service";
 import { audit } from "../database/audit";
 import { Database } from "../database/database";
@@ -246,26 +246,54 @@ export class AtlasService {
       let imageLatitude = String(survey.findings.imageLatitude ?? "");
       let imageLongitude = String(survey.findings.imageLongitude ?? "");
       if (typeof image !== "string") {
-        throw new BadRequestException({ message: "Gambar survei tidak valid." });
+        throw new BadRequestException({
+          message: "Gambar survei tidak valid.",
+        });
       }
       if (image) {
         if (image.length > 2_796_230) {
-          throw new BadRequestException({ message: "Ukuran gambar maksimal 2 MB." });
+          throw new BadRequestException({
+            message: "Ukuran gambar maksimal 2 MB.",
+          });
         }
-        const match = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/u.exec(image);
+        const match =
+          /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/u.exec(
+            image
+          );
         const data = match ? Buffer.from(match[2], "base64") : null;
-        const valid = data && data.length <= 2 * 1024 * 1024 && (
-          (match?.[1] === "jpeg" && data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) ||
-          (match?.[1] === "png" && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) ||
-          (match?.[1] === "webp" && data.subarray(0, 4).toString() === "RIFF" && data.subarray(8, 12).toString() === "WEBP")
-        );
+        const valid =
+          data &&
+          data.length <= 2 * 1024 * 1024 &&
+          ((match?.[1] === "jpeg" &&
+            data.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) ||
+            (match?.[1] === "png" &&
+              data
+                .subarray(0, 8)
+                .equals(
+                  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+                )) ||
+            (match?.[1] === "webp" &&
+              data.subarray(0, 4).toString() === "RIFF" &&
+              data.subarray(8, 12).toString() === "WEBP"));
         if (!valid) {
-          throw new BadRequestException({ message: "Gambar harus JPG, PNG, atau WebP dengan ukuran maksimal 2 MB." });
+          throw new BadRequestException({
+            message:
+              "Gambar harus JPG, PNG, atau WebP dengan ukuran maksimal 2 MB.",
+          });
         }
         if (image !== survey.findings.image) {
           const location = await gps(data).catch(() => undefined);
-          if (!location || !Number.isFinite(location.latitude) || !Number.isFinite(location.longitude) || Math.abs(location.latitude) > 90 || Math.abs(location.longitude) > 180) {
-            throw new BadRequestException({ message: "Foto harus memiliki koordinat GPS. Aktifkan lokasi pada kamera dan unggah foto asli." });
+          if (
+            !location ||
+            !Number.isFinite(location.latitude) ||
+            !Number.isFinite(location.longitude) ||
+            Math.abs(location.latitude) > 90 ||
+            Math.abs(location.longitude) > 180
+          ) {
+            throw new BadRequestException({
+              message:
+                "Foto harus memiliki koordinat GPS. Aktifkan lokasi pada kamera dan unggah foto asli.",
+            });
           }
           imageLatitude = String(location.latitude);
           imageLongitude = String(location.longitude);
@@ -1631,9 +1659,36 @@ export class AtlasService {
       throw new NotFoundException({ message: "Segmen tidak ditemukan." });
     }
     const { rows } = await this.db.query(
-      `SELECT c.core_number AS "coreNumber",c.status,b.id AS "bookingId",b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",b.expires_at AS "expiresAt"
+      `SELECT c.core_number AS "coreNumber",c.status,c.connected_asset_id AS "connectedAssetId",c.connected_side AS "connectedSide",destination.name AS "connectedAssetName",b.id AS "bookingId",b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",b.expires_at AS "expiresAt"
       FROM network_cores c LEFT JOIN booking_cores bc ON bc.core_id=c.id LEFT JOIN bookings b ON b.id=bc.booking_id
+      LEFT JOIN network_assets destination ON destination.id=c.connected_asset_id
       WHERE c.asset_id=$1 ORDER BY c.core_number`,
+      [assetId]
+    );
+    return rows;
+  }
+  async listCoreDestinations(assetId: string) {
+    const { rows: segments } = await this.db.query(
+      "SELECT id,geometry,attributes->>'Distribution ID' AS \"distributionId\" FROM network_assets WHERE id=$1 AND asset_type='segment' AND GeometryType(geometry)='LINESTRING'",
+      [assetId]
+    );
+    if (!segments.length) {
+      throw new NotFoundException({ message: "Segmen tidak ditemukan." });
+    }
+    const { rows } = await this.db.query(
+      `SELECT p.id,p.name,p.attributes->>'Tipe Perangkat' AS type,
+        ends.side,round(ST_DistanceSphere(p.geometry,ends.geometry)::numeric,1) AS distance
+      FROM network_assets s JOIN network_assets p ON p.asset_type='asset' AND GeometryType(p.geometry)='POINT'
+      CROSS JOIN LATERAL (VALUES
+        ('A'::text,ST_StartPoint(s.geometry)),('B'::text,ST_EndPoint(s.geometry))
+      ) AS ends(side,geometry)
+      WHERE s.id=$1
+        AND p.geometry && ST_Expand(s.geometry,0.001)
+        AND (s.attributes->>'Distribution ID' IS NULL
+          OR p.attributes->>'Distribution ID'=s.attributes->>'Distribution ID')
+        AND upper(p.attributes->>'Tipe Perangkat')=ANY(ARRAY['OLT','OTB','ODC','ODP','CLOSURE','SLACK / COIL'])
+        AND ST_DistanceSphere(p.geometry,ends.geometry)<=25
+      ORDER BY ends.side,distance,p.name`,
       [assetId]
     );
     return rows;
@@ -1643,7 +1698,12 @@ export class AtlasService {
     source: string | undefined,
     note: string | undefined,
     userId: string,
-    coreStatuses: { coreNumber: number; status: string }[] = []
+    coreStatuses: {
+      coreNumber: number;
+      status: string;
+      connectedAssetId?: string | null;
+      connectedSide?: string | null;
+    }[] = []
   ) {
     const allowedSources = [
       "Survei lapangan",
@@ -1664,7 +1724,12 @@ export class AtlasService {
           typeof entry !== "object" ||
           !Number.isInteger(entry.coreNumber) ||
           entry.coreNumber < 1 ||
-          !["Available", "Used"].includes(entry.status)
+          !["Available", "Used"].includes(entry.status) ||
+          (entry.status === "Used" &&
+            (typeof entry.connectedAssetId !== "string" ||
+              !["A", "B"].includes(String(entry.connectedSide)))) ||
+          (entry.status === "Available" &&
+            (entry.connectedAssetId != null || entry.connectedSide != null))
       ) ||
       new Set(coreStatuses.map(({ coreNumber }) => coreNumber)).size !==
         coreStatuses.length
@@ -1682,9 +1747,14 @@ export class AtlasService {
         throw new NotFoundException({ message: "Segmen tidak ditemukan." });
       }
       const total = Number(assets[0].total_cores);
-      for (const { coreNumber, status } of coreStatuses) {
+      for (const {
+        coreNumber,
+        status,
+        connectedAssetId = null,
+        connectedSide = null,
+      } of coreStatuses) {
         const { rows: current } = await client.query(
-          "SELECT status FROM network_cores WHERE asset_id=$1 AND core_number=$2 FOR UPDATE",
+          'SELECT status,connected_asset_id AS "connectedAssetId",connected_side AS "connectedSide" FROM network_cores WHERE asset_id=$1 AND core_number=$2 FOR UPDATE',
           [assetId, coreNumber]
         );
         if (!current.length) {
@@ -1697,10 +1767,30 @@ export class AtlasService {
             message: `Core ${coreNumber} sedang dibooking dan tidak dapat diubah.`,
           });
         }
-        if (current[0].status !== status) {
+        if (status === "Used") {
+          const destination = await client.query(
+            `SELECT 1 FROM network_assets segment JOIN network_assets point
+              ON point.id=$3 AND point.asset_type='asset' AND GeometryType(point.geometry)='POINT'
+              WHERE segment.id=$1 AND segment.asset_type='segment'
+                AND (segment.attributes->>'Distribution ID' IS NULL
+                  OR point.attributes->>'Distribution ID'=segment.attributes->>'Distribution ID')
+                AND ST_DistanceSphere(point.geometry,CASE WHEN $2='A' THEN ST_StartPoint(segment.geometry) ELSE ST_EndPoint(segment.geometry) END)<=25`,
+            [assetId, connectedSide, connectedAssetId]
+          );
+          if (!destination.rowCount) {
+            throw new BadRequestException({
+              message: `Tujuan core ${coreNumber} harus berada di salah satu ujung kabel pada kelompok distribusi yang sama.`,
+            });
+          }
+        }
+        if (
+          current[0].status !== status ||
+          current[0].connectedAssetId !== connectedAssetId ||
+          current[0].connectedSide !== connectedSide
+        ) {
           await client.query(
-            "UPDATE network_cores SET status=$3 WHERE asset_id=$1 AND core_number=$2",
-            [assetId, coreNumber, status]
+            "UPDATE network_cores SET status=$3,connected_asset_id=$4,connected_side=$5 WHERE asset_id=$1 AND core_number=$2",
+            [assetId, coreNumber, status, connectedAssetId, connectedSide]
           );
           await audit(
             client,
@@ -1708,7 +1798,7 @@ export class AtlasService {
             "CORE_STATUS_CHANGED",
             "CORE",
             `${assetId}:${coreNumber}`,
-            { assetId, coreNumber, status }
+            { assetId, connectedAssetId, connectedSide, coreNumber, status }
           );
           if (status === "Available") {
             await allocateWaiting(client, assetId, userId);

@@ -427,6 +427,12 @@ export class AtlasController {
     return this.atlas.listCores(id);
   }
 
+  @Get("assets/:id/cores/destinations")
+  async coreDestinations(@Req() req: IncomingMessage, @Param("id") id: string) {
+    await this.auth.requireUser(req);
+    return this.atlas.listCoreDestinations(id);
+  }
+
   @Post("assets/:id/cores/verify")
   async verifyCoreUsage(
     @Req() req: IncomingMessage,
@@ -434,7 +440,12 @@ export class AtlasController {
     @Body() body: {
       source?: string;
       note?: string;
-      coreStatuses?: { coreNumber: number; status: string }[];
+      coreStatuses?: {
+        coreNumber: number;
+        status: string;
+        connectedAssetId?: string | null;
+        connectedSide?: string | null;
+      }[];
     }
   ) {
     const user = await this.auth.requireUser(req);

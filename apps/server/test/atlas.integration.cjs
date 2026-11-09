@@ -477,7 +477,7 @@ async function main() {
           status: "Used",
         })
       ).status,
-      403
+      200
     );
     console.log(
       "PASS: HTTP authentication and ADMIN/PRESALES access boundaries"

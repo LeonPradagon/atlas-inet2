@@ -178,6 +178,8 @@ export const networkCores = pgTable(
   "network_cores",
   {
     assetId: text("asset_id").notNull(),
+    connectedAssetId: text("connected_asset_id"),
+    connectedSide: text("connected_side"),
     coreNumber: integer("core_number").notNull(),
     id: bigserial({ mode: "number" }).primaryKey().notNull(),
     status: text().default("Available").notNull(),
@@ -195,6 +197,11 @@ export const networkCores = pgTable(
       foreignColumns: [networkAssets.id],
       name: "network_cores_asset_id_fkey",
     }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.connectedAssetId],
+      foreignColumns: [networkAssets.id],
+      name: "network_cores_connected_asset_id_fkey",
+    }).onDelete("restrict"),
     unique("network_cores_asset_id_core_number_key").on(
       table.assetId,
       table.coreNumber
@@ -202,6 +209,14 @@ export const networkCores = pgTable(
     check(
       "network_cores_status_check",
       sql`status = ANY (ARRAY['Available'::text, 'Booked'::text, 'Used'::text])`
+    ),
+    check(
+      "network_cores_connected_side_check",
+      sql`connected_side IS NULL OR connected_side = ANY (ARRAY['A'::text, 'B'::text])`
+    ),
+    check(
+      "network_cores_destination_pair_check",
+      sql`(connected_asset_id IS NULL) = (connected_side IS NULL)`
     ),
   ]
 );
