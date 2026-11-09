@@ -53,6 +53,18 @@ type MapProvinceOption = {
   folderCount: number;
   bounds: [number, number, number, number] | null;
 };
+type CoreDestination = {
+  id: string;
+  name: string;
+  type: string | null;
+  side: "A" | "B";
+  distance: number | string;
+};
+type PendingCoreChange = {
+  status: "Available" | "Used";
+  connectedAssetId: string | null;
+  connectedSide: "A" | "B" | null;
+};
 type MapProvinceResponse = {
   items: MapProvinceOption[];
 };
@@ -68,6 +80,41 @@ type MapImportPackage = {
   actorName: string | null;
   actorEmail: string | null;
 };
+type SavedMapSelection = {
+  provinceCode: string;
+  importIds: string[];
+  companyValue: string;
+  activeImportId: string;
+};
+const mapSelectionStorageKey = "atlas-map-selection-v1";
+function readSavedMapSelection(): SavedMapSelection {
+  const empty: SavedMapSelection = {
+    provinceCode: "",
+    importIds: [],
+    companyValue: "",
+    activeImportId: "",
+  };
+  try {
+    const value = sessionStorage.getItem(mapSelectionStorageKey);
+    if (!value) {
+      return empty;
+    }
+    const parsed = JSON.parse(value) as Partial<SavedMapSelection>;
+    return {
+      provinceCode:
+        typeof parsed.provinceCode === "string" ? parsed.provinceCode : "",
+      importIds: Array.isArray(parsed.importIds)
+        ? parsed.importIds.filter((id): id is string => typeof id === "string")
+        : [],
+      companyValue:
+        typeof parsed.companyValue === "string" ? parsed.companyValue : "",
+      activeImportId:
+        typeof parsed.activeImportId === "string" ? parsed.activeImportId : "",
+    };
+  } catch {
+    return empty;
+  }
+}
 type RouteLine = Feature<
   LineString,
   {
@@ -433,6 +480,72 @@ function firstCoordinate(geometry: NetworkAsset["geometry"]): Coordinate {
   );
   return child ? firstCoordinate(child) : [106.79, -6.26];
 }
+function cableCoordinates(
+  geometry: LineString | { type: "MultiLineString"; coordinates: Position[][] }
+) {
+  return geometry.type === "LineString"
+    ? [geometry.coordinates]
+    : geometry.coordinates;
+}
+function coordinateDistanceMeters(a: Position, b: Position) {
+  const radians = Math.PI / 180;
+  const latitudeA = a[1] * radians;
+  const latitudeB = b[1] * radians;
+  const latitudeDelta = (b[1] - a[1]) * radians;
+  const longitudeDelta = (b[0] - a[0]) * radians;
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(latitudeA) *
+      Math.cos(latitudeB) *
+      Math.sin(longitudeDelta / 2) ** 2;
+  return (
+    6_371_000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine))
+  );
+}
+function coordinateAlongCable(
+  lines: Position[][],
+  fraction: number
+): Coordinate | null {
+  const segments = lines.flatMap((line) =>
+    line.slice(1).map((end, index) => ({ start: line[index], end }))
+  );
+  const lengths = segments.map(({ start, end }) =>
+    coordinateDistanceMeters(start, end)
+  );
+  const totalLength = lengths.reduce((total, length) => total + length, 0);
+  if (!totalLength) {
+    return null;
+  }
+  let remaining = totalLength * fraction;
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    const length = lengths[index];
+    if (!(segment && length)) {
+      continue;
+    }
+    if (remaining <= length) {
+      const ratio = remaining / length;
+      return [
+        segment.start[0] + (segment.end[0] - segment.start[0]) * ratio,
+        segment.start[1] + (segment.end[1] - segment.start[1]) * ratio,
+      ];
+    }
+    remaining -= length;
+  }
+  const last = segments.at(-1)?.end;
+  return last ? [last[0], last[1]] : null;
+}
+function bearingDegrees(from: Coordinate, to: Coordinate) {
+  const radians = Math.PI / 180;
+  const latitudeFrom = from[1] * radians;
+  const latitudeTo = to[1] * radians;
+  const longitudeDelta = (to[0] - from[0]) * radians;
+  const y = Math.sin(longitudeDelta) * Math.cos(latitudeTo);
+  const x =
+    Math.cos(latitudeFrom) * Math.sin(latitudeTo) -
+    Math.sin(latitudeFrom) * Math.cos(latitudeTo) * Math.cos(longitudeDelta);
+  return (Math.atan2(y, x) / radians + 360) % 360;
+}
 function matchesAssetSearch(asset: NetworkAsset, query: string) {
   if (!query) {
     return true;
@@ -564,6 +677,7 @@ function VerificationStatus({ asset }: { asset: NetworkAsset }) {
   );
 }
 export function MapPage() {
+  const [savedMapSelection] = useState(readSavedMapSelection);
   const mapImportsQuery = useQuery({
     queryKey: ["network-map-imports"],
     queryFn: () => api<MapImportPackage[]>("/assets/imports"),
@@ -577,10 +691,19 @@ export function MapPage() {
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
   });
-  const [provinceCode, setProvinceCode] = useState("");
-  const [selectedImportIds, setSelectedImportIds] = useState<string[]>([]);
-  const [selectedCompanyValue, setSelectedCompanyValue] = useState("");
-  const [activeImportId, setActiveImportId] = useState("");
+  const [provinceCode, setProvinceCode] = useState(
+    savedMapSelection.provinceCode
+  );
+  const [selectedImportIds, setSelectedImportIds] = useState<string[]>(
+    savedMapSelection.importIds
+  );
+  const [selectedCompanyValue, setSelectedCompanyValue] = useState(
+    savedMapSelection.companyValue
+  );
+  const [activeImportId, setActiveImportId] = useState(
+    savedMapSelection.activeImportId
+  );
+  const restorePackageBounds = useRef(savedMapSelection.importIds.length > 0);
   const [globeEnabled, setGlobeEnabled] = useState(true);
   const [satelliteEnabled, setSatelliteEnabled] = useState(false);
   const previousMapView = useRef<{
@@ -605,7 +728,8 @@ export function MapPage() {
       : selectedCompanyValue === "__multiple__"
         ? selectedImportIds.includes(item.id)
         : Boolean(
-            selectedCompanyValue && item.companies?.includes(selectedCompanyValue)
+            selectedCompanyValue &&
+              item.companies?.includes(selectedCompanyValue)
           )
   );
   const hasUnassignedCompanyPackages = importPackages.some(
@@ -621,6 +745,66 @@ export function MapPage() {
   );
   const selectedProvinceCodeRef = useRef(provinceCode);
   selectedProvinceCodeRef.current = provinceCode;
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        mapSelectionStorageKey,
+        JSON.stringify({
+          provinceCode,
+          importIds: selectedImportIds,
+          companyValue: selectedCompanyValue,
+          activeImportId,
+        } satisfies SavedMapSelection)
+      );
+    } catch {
+      // Ignore storage restrictions; the map still works for this visit.
+    }
+  }, [provinceCode, selectedImportIds, selectedCompanyValue, activeImportId]);
+  useEffect(() => {
+    if (!mapProvincesQuery.isSuccess || !provinceCode) {
+      return;
+    }
+    if (!provinces.some((item) => item.code === provinceCode)) {
+      setProvinceCode("");
+      setSelectedImportIds([]);
+      setSelectedCompanyValue("");
+      setActiveImportId("");
+    }
+  }, [mapProvincesQuery.isSuccess, provinceCode, provinces]);
+  useEffect(() => {
+    if (!mapImportsQuery.isSuccess) {
+      return;
+    }
+    const availableIds = new Set(importPackages.map((item) => item.id));
+    const validImportIds = selectedImportIds.filter((id) =>
+      availableIds.has(id)
+    );
+    setSelectedImportIds((current) =>
+      current.length === validImportIds.length ? current : validImportIds
+    );
+    const nextActiveId =
+      activeImportId && validImportIds.includes(activeImportId)
+        ? activeImportId
+        : ([...validImportIds].reverse()[0] ?? "");
+    if (nextActiveId !== activeImportId) {
+      setActiveImportId(nextActiveId);
+    }
+    if (
+      selectedCompanyValue &&
+      !["__multiple__", "__unassigned__"].includes(selectedCompanyValue) &&
+      !importPackages.some((item) =>
+        item.companies?.includes(selectedCompanyValue)
+      )
+    ) {
+      setSelectedCompanyValue("");
+    }
+  }, [
+    mapImportsQuery.isSuccess,
+    importPackages,
+    selectedCompanyValue,
+    selectedImportIds,
+    activeImportId,
+  ]);
   const [assetPage, setAssetPage] = useState(1);
   const [search, setSearch] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
@@ -636,7 +820,7 @@ export function MapPage() {
   const [isCoreVerificationExpanded, setIsCoreVerificationExpanded] =
     useState(false);
   const [pendingCoreStatuses, setPendingCoreStatuses] = useState<
-    Record<number, "Available" | "Used">
+    Record<number, PendingCoreChange>
   >({});
   const [corePageSize, setCorePageSize] = useState(10);
   const [corePage, setCorePage] = useState(1);
@@ -768,6 +952,24 @@ export function MapPage() {
   const [popupAnchor, setPopupAnchor] = useState<Coordinate | null>(null);
   const [popupPosition, setPopupPosition] = useState({ left: 12, top: 54 });
   const popupElement = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!assetPopup) {
+      return;
+    }
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        popupElement.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setAssetPopup(null);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+    };
+  }, [assetPopup]);
   useEffect(() => {
     const instance = map.current;
     const element = popupElement.current;
@@ -990,6 +1192,12 @@ export function MapPage() {
   });
   const selectedCableGeometry =
     selectedSegmentGeometry.data?.geometry ?? selectedSegment?.geometry ?? null;
+  const selectedCableLineColor =
+    (allNetworkFeatures.find(
+      (feature) => feature.properties.id === selectedSegment?.id
+    )?.properties.lineColor as string | undefined) ??
+    selectedLegend?.color ??
+    "#3454d1";
   const selectedImported =
     selectedAsset && selectedAsset.assetType !== "segment"
       ? selectedAsset
@@ -1050,6 +1258,9 @@ export function MapPage() {
         {
           coreNumber: number;
           status: "Available" | "Booked" | "Used";
+          connectedAssetId: string | null;
+          connectedAssetName: string | null;
+          connectedSide: "A" | "B" | null;
           customer?: string;
           picCustomer?: string;
           picPresales?: string;
@@ -1059,6 +1270,15 @@ export function MapPage() {
     enabled: Boolean(selectedSegment),
     refetchInterval: 30_000,
   });
+  const coreDestinationsQuery = useQuery({
+    queryKey: ["core-destinations", selectedSegment?.id],
+    queryFn: () =>
+      api<CoreDestination[]>(
+        `/assets/${selectedSegment?.id}/cores/destinations`
+      ),
+    enabled: Boolean(selectedSegment),
+    staleTime: 30_000,
+  });
   const corePageCount = Math.max(
     1,
     Math.ceil((coresQuery.data?.length ?? 0) / corePageSize)
@@ -1066,6 +1286,147 @@ export function MapPage() {
   const visibleCores = [...(coresQuery.data ?? [])]
     .sort((a, b) => a.coreNumber - b.coreNumber)
     .slice((corePage - 1) * corePageSize, corePage * corePageSize);
+  const coreDestinationSummary = useMemo(() => {
+    const counts = new Map<
+      string,
+      { assetId: string; assetName: string; side: "A" | "B"; count: number }
+    >();
+    for (const core of coresQuery.data ?? []) {
+      const change = pendingCoreStatuses[core.coreNumber];
+      const status = change?.status ?? core.status;
+      const assetId = change ? change.connectedAssetId : core.connectedAssetId;
+      const side = change ? change.connectedSide : core.connectedSide;
+      if (status !== "Used" || !assetId || !side) {
+        continue;
+      }
+      const key = `${assetId}:${side}`;
+      const existing = counts.get(key);
+      const destination = coreDestinationsQuery.data?.find(
+        (item) => item.id === assetId && item.side === side
+      );
+      counts.set(key, {
+        assetId,
+        assetName:
+          destination?.name ?? core.connectedAssetName ?? "Aset jaringan",
+        side,
+        count: (existing?.count ?? 0) + 1,
+      });
+    }
+    return [...counts.values()].sort((a, b) =>
+      a.assetName.localeCompare(b.assetName, "id")
+    );
+  }, [coresQuery.data, coreDestinationsQuery.data, pendingCoreStatuses]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mapReady is required to populate the source created during map initialization
+  useEffect(() => {
+    const source = map.current?.getSource("selected-cable-highlight") as
+      | GeoJSONSource
+      | undefined;
+    if (!source) {
+      return;
+    }
+
+    const features: Feature<Geometry, Record<string, unknown>>[] = [];
+    const geometry = selectedCableGeometry;
+    if (
+      geometry?.type === "LineString" ||
+      geometry?.type === "MultiLineString"
+    ) {
+      const lines = cableCoordinates(geometry);
+      const first = lines[0]?.[0];
+      const last = lines.at(-1)?.at(-1);
+      features.push({
+        type: "Feature",
+        properties: {
+          featureType: "route",
+          lineColor: selectedCableLineColor,
+        },
+        geometry,
+      });
+
+      const destinationsBySide = (["A", "B"] as const).map((side) => {
+        const destinations = coreDestinationSummary.filter(
+          (item) => item.side === side
+        );
+        return {
+          side,
+          count: destinations.reduce((sum, item) => sum + item.count, 0),
+        };
+      });
+
+      for (const destination of destinationsBySide) {
+        if (!destination.count) {
+          continue;
+        }
+        const endpoint = destination.side === "A" ? first : last;
+        // Anchor the marker to the route part that actually reaches this end.
+        // For split KMZ lines, a percentage across every component can land on
+        // an unrelated part of the imported geometry.
+        const endpointLine = destination.side === "A" ? lines[0] : lines.at(-1);
+        const arrowCoordinate = endpointLine
+          ? coordinateAlongCable(
+              [endpointLine],
+              destination.side === "A" ? 0.18 : 0.82
+            )
+          : null;
+        if (!endpoint) {
+          continue;
+        }
+
+        if (arrowCoordinate) {
+          const bearing = bearingDegrees(arrowCoordinate, [
+            endpoint[0],
+            endpoint[1],
+          ]);
+          features.push({
+            type: "Feature",
+            properties: {
+              featureType: "core-direction-count",
+              label: `${destination.count} core · ${destination.side}`,
+              lineColor: selectedCableLineColor,
+            },
+            geometry: { type: "Point", coordinates: arrowCoordinate },
+          });
+          features.push({
+            type: "Feature",
+            properties: {
+              featureType: "core-direction-arrow",
+              lineColor: selectedCableLineColor,
+              rotation: (bearing - 90 + 360) % 360,
+            },
+            geometry: { type: "Point", coordinates: arrowCoordinate },
+          });
+        }
+      }
+
+      if (first) {
+        features.push({
+          type: "Feature",
+          properties: { featureType: "endpoint", side: "A" },
+          geometry: { type: "Point", coordinates: first },
+        });
+      }
+      if (last) {
+        features.push({
+          type: "Feature",
+          properties: { featureType: "endpoint", side: "B" },
+          geometry: { type: "Point", coordinates: last },
+        });
+      }
+    }
+
+    source.setData({ type: "FeatureCollection", features });
+  }, [
+    mapReady,
+    selectedCableGeometry,
+    selectedCableLineColor,
+    selectedSegment?.id,
+    coreDestinationSummary,
+  ]);
+  const hasUsedCoreWithoutDestination = Object.values(pendingCoreStatuses).some(
+    (change) =>
+      change.status === "Used" &&
+      (!change.connectedAssetId || !change.connectedSide)
+  );
   // biome-ignore lint/correctness/useExhaustiveDependencies: the selected segment and page size are triggers that reset paging
   useEffect(() => {
     setCorePage(1);
@@ -1075,7 +1436,12 @@ export function MapPage() {
   }, [corePageCount]);
   const verifyCoreUsage = useMutation({
     mutationFn: (
-      coreStatuses: { coreNumber: number; status: "Available" | "Used" }[]
+      coreStatuses: {
+        coreNumber: number;
+        status: "Available" | "Used";
+        connectedAssetId: string | null;
+        connectedSide: "A" | "B" | null;
+      }[]
     ) =>
       api<{
         verifiedAt: string;
@@ -1351,6 +1717,32 @@ export function MapPage() {
           "line-opacity": ["coalesce", ["get", "lineOpacity"], 0.9],
         },
       });
+      instance.addSource("selected-cable-highlight", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      instance.addLayer({
+        id: "selected-cable-casing",
+        type: "line",
+        source: "selected-cable-highlight",
+        filter: ["==", ["get", "featureType"], "route"],
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": 9,
+          "line-opacity": 0.96,
+        },
+      });
+      instance.addLayer({
+        id: "selected-cable-route",
+        type: "line",
+        source: "selected-cable-highlight",
+        filter: ["==", ["get", "featureType"], "route"],
+        paint: {
+          "line-color": ["get", "lineColor"],
+          "line-width": 5,
+          "line-opacity": 1,
+        },
+      });
       instance.addLayer({
         id: "network-hit",
         type: "line",
@@ -1482,6 +1874,98 @@ export function MapPage() {
           "circle-stroke-color": "#f29b38",
         },
       });
+      instance.addLayer({
+        id: "selected-cable-endpoint-a-label",
+        type: "symbol",
+        source: "selected-cable-highlight",
+        filter: [
+          "all",
+          ["==", ["get", "featureType"], "endpoint"],
+          ["==", ["get", "side"], "A"],
+        ],
+        layout: {
+          "text-field": ["get", "side"],
+          "text-font": ["Open Sans Semibold"],
+          "text-size": 13,
+          "text-offset": [0, -1.7],
+          "text-anchor": "bottom",
+          "text-padding": 3,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#175cd3",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 2.5,
+        },
+      });
+      instance.addLayer({
+        id: "selected-cable-endpoint-b-label",
+        type: "symbol",
+        source: "selected-cable-highlight",
+        filter: [
+          "all",
+          ["==", ["get", "featureType"], "endpoint"],
+          ["==", ["get", "side"], "B"],
+        ],
+        layout: {
+          "text-field": ["get", "side"],
+          "text-font": ["Open Sans Semibold"],
+          "text-size": 13,
+          "text-offset": [0, 1.7],
+          "text-anchor": "top",
+          "text-padding": 3,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": "#7f56d9",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 2.5,
+        },
+      });
+      instance.addLayer({
+        id: "selected-cable-core-direction-count",
+        type: "symbol",
+        source: "selected-cable-highlight",
+        filter: ["==", ["get", "featureType"], "core-direction-count"],
+        layout: {
+          "text-field": ["get", "label"],
+          "text-font": ["Open Sans Semibold"],
+          "text-size": 12,
+          "text-offset": [0, -1.5],
+          "text-anchor": "bottom",
+          "text-padding": 4,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": ["get", "lineColor"],
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 2,
+        },
+      });
+      instance.addLayer({
+        id: "selected-cable-core-direction-arrows",
+        type: "symbol",
+        source: "selected-cable-highlight",
+        filter: ["==", ["get", "featureType"], "core-direction-arrow"],
+        layout: {
+          "text-field": "➤",
+          "text-font": ["Open Sans Semibold"],
+          "text-size": 18,
+          "text-rotate": ["get", "rotation"],
+          "text-rotation-alignment": "map",
+          "text-keep-upright": false,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+        },
+        paint: {
+          "text-color": ["get", "lineColor"],
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 2,
+        },
+      });
       void fetch("/data/indonesia-provinces.geojson")
         .then((response) => response.json())
         .then((data) => {
@@ -1607,13 +2091,28 @@ export function MapPage() {
             (asset) => asset.id === id
           );
           setSelectedId(id);
-          setSearch("");
-          if (clickedAsset) {
+          const isCable =
+            clickedAsset?.assetType === "segment" ||
+            ["LineString", "MultiLineString"].includes(
+              String(feature?.properties?.geometryType)
+            );
+          if (isCable) {
+            setAssetListTab("cables");
+            setCableFamilyFilter("all");
+            setCableStatusFilter("all");
+            setCoreFilter("all");
+            setAssetPage(1);
+            setSearch("");
+            setIsSegmentPickerOpen(false);
+          } else {
+            setSearch("");
+            setIsSegmentPickerOpen(false);
+          }
+          if (clickedAsset && !isCable) {
             setAssetListTab(
               clickedAsset.assetType === "segment" ? "cables" : "network"
             );
           }
-          setIsSegmentPickerOpen(false);
           setPopupAnchor([event.lngLat.lng, event.lngLat.lat]);
           setAssetPopup(clickedAsset ?? null);
         }
@@ -1708,9 +2207,7 @@ export function MapPage() {
     };
   }, []);
   useEffect(() => {
-    const province = provincesRef.current.find(
-      (item) => item.code === provinceCode
-    );
+    const province = provinces.find((item) => item.code === provinceCode);
     if (!(mapReady && province?.bounds)) {
       return;
     }
@@ -1727,7 +2224,51 @@ export function MapPage() {
     setAssetPage(1);
     setSelectedId("");
     setAssetPopup(null);
-  }, [mapReady, provinceCode]);
+  }, [mapReady, provinceCode, provinces]);
+  useEffect(() => {
+    if (
+      !restorePackageBounds.current ||
+      !mapReady ||
+      !mapImportsQuery.isSuccess ||
+      !mapProvincesQuery.isSuccess ||
+      !provinces.some((item) => item.code === provinceCode)
+    ) {
+      return;
+    }
+    restorePackageBounds.current = false;
+    const availableIds = new Set(importPackages.map((item) => item.id));
+    const ids = selectedImportIds.filter((id) => availableIds.has(id));
+    if (!ids.length) {
+      return;
+    }
+    const request = ++packageBoundsRequest.current;
+    void api<{ bounds: [number, number, number, number] | null }>(
+      `/assets/bounds?importIds=${ids.join(",")}&provinceCode=${encodeURIComponent(provinceCode)}`
+    )
+      .then(({ bounds }) => {
+        if (request === packageBoundsRequest.current && bounds && map.current) {
+          setMapBounds(bounds);
+          map.current.fitBounds(bounds, {
+            padding: 64,
+            maxZoom: 12,
+            duration: 500,
+          });
+        }
+      })
+      .catch(() => {
+        if (request === packageBoundsRequest.current) {
+          setFileError("Batas paket peta gagal dipulihkan.");
+        }
+      });
+  }, [
+    importPackages,
+    mapImportsQuery.isSuccess,
+    mapProvincesQuery.isSuccess,
+    mapReady,
+    provinceCode,
+    provinces,
+    selectedImportIds,
+  ]);
   useEffect(() => {
     (
       map.current?.getSource("network-shapes") as GeoJSONSource | undefined
@@ -2190,6 +2731,7 @@ export function MapPage() {
     setSelectedId(asset.id);
     setSearch("");
     setIsSegmentPickerOpen(false);
+    setAssetPopup(null);
     await focusGeometry(asset.id, asset.geometry);
   };
   return (
@@ -3301,9 +3843,7 @@ export function MapPage() {
                 }
                 role="combobox"
                 value={
-                  isSegmentPickerOpen
-                    ? search
-                    : search || selectedAsset?.name || ""
+                  isSegmentPickerOpen ? search : selectedAsset?.name || search
                 }
               />
             </div>
@@ -3527,6 +4067,34 @@ export function MapPage() {
                   {selectedSegment.cableType || "Jenis kabel belum dicantumkan"}
                 </p>
                 <section
+                  aria-label="Titik ujung kabel"
+                  className="segment-endpoints-summary"
+                >
+                  {(["A", "B"] as const).map((side) => {
+                    const endpoint = coreDestinationsQuery.data?.find(
+                      (item) => item.side === side
+                    );
+                    return (
+                      <div key={side}>
+                        <small>Ujung {side}</small>
+                        <strong>
+                          {coreDestinationsQuery.isPending
+                            ? "Mencari titik…"
+                            : coreDestinationsQuery.isError
+                              ? "Tidak dapat dimuat"
+                              : (endpoint?.name ?? "Belum terdeteksi otomatis")}
+                        </strong>
+                        {endpoint && (
+                          <span>
+                            {Number(endpoint.distance).toLocaleString("id-ID")}{" "}
+                            m dari ujung kabel
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </section>
+                <section
                   aria-label="Ringkasan kapasitas kabel"
                   className="segment-capacity-summary"
                 >
@@ -3733,6 +4301,7 @@ export function MapPage() {
                             className="btn btn-sm btn-outline-primary"
                             disabled={
                               verifyCoreUsage.isPending ||
+                              hasUsedCoreWithoutDestination ||
                               (isCoreVerificationExpanded &&
                                 coresQuery.data?.length !==
                                   selectedSegment.totalCores)
@@ -3747,9 +4316,9 @@ export function MapPage() {
                               }
                               verifyCoreUsage.mutate(
                                 Object.entries(pendingCoreStatuses).map(
-                                  ([coreNumber, status]) => ({
+                                  ([coreNumber, change]) => ({
                                     coreNumber: Number(coreNumber),
-                                    status,
+                                    ...change,
                                   })
                                 )
                               );
@@ -3767,6 +4336,12 @@ export function MapPage() {
                           {Object.keys(pendingCoreStatuses).length > 0 && (
                             <small className="text-warning" role="status">
                               Ada perubahan status core yang belum disimpan.
+                            </small>
+                          )}
+                          {hasUsedCoreWithoutDestination && (
+                            <small className="text-warning" role="status">
+                              Pilih tujuan dan arah untuk setiap core berstatus
+                              Terpakai.
                             </small>
                           )}
                         </div>
@@ -3797,46 +4372,179 @@ export function MapPage() {
                         Status core tidak dapat dimuat.
                       </small>
                     ) : coresQuery.data?.length ? (
-                      <div className="core-status-list">
-                        {visibleCores.map((core) => (
-                          <div key={core.coreNumber}>
-                            <span>Core {core.coreNumber}</span>
-                            {core.status === "Booked" ? (
-                              <span
-                                className="status-pill is-booked"
-                                title={`PIC customer: ${core.picCustomer ?? "—"} · PIC presales: ${core.picPresales ?? "—"}`}
-                              >
-                                Booked · {core.customer}
-                              </span>
-                            ) : (
-                              <select
-                                className="form-select form-select-sm"
-                                onChange={(event) => {
-                                  const status = event.target.value as
-                                    | "Available"
-                                    | "Used";
-                                  setPendingCoreStatuses((current) => {
-                                    const next = { ...current };
-                                    if (status === core.status) {
-                                      delete next[core.coreNumber];
-                                    } else {
-                                      next[core.coreNumber] = status;
-                                    }
-                                    return next;
-                                  });
-                                }}
-                                value={
-                                  pendingCoreStatuses[core.coreNumber] ??
-                                  core.status
+                      <>
+                        <div className="core-status-list">
+                          {visibleCores.map((core) => {
+                            const change = pendingCoreStatuses[core.coreNumber];
+                            const status = change?.status ?? core.status;
+                            const connectedAssetId = change
+                              ? change.connectedAssetId
+                              : core.connectedAssetId;
+                            const connectedSide = change
+                              ? change.connectedSide
+                              : core.connectedSide;
+                            const destinationValue =
+                              connectedAssetId && connectedSide
+                                ? `${connectedAssetId}:${connectedSide}`
+                                : "";
+                            return (
+                              <div
+                                className={
+                                  status === "Used"
+                                    ? "core-status-row is-used"
+                                    : "core-status-row"
                                 }
+                                key={core.coreNumber}
                               >
-                                <option value="Available">Tersedia</option>
-                                <option value="Used">Terpakai</option>
-                              </select>
-                            )}
+                                <span>Core {core.coreNumber}</span>
+                                {core.status === "Booked" ? (
+                                  <span
+                                    className="status-pill is-booked"
+                                    title={`PIC customer: ${core.picCustomer ?? "—"} · PIC presales: ${core.picPresales ?? "—"}`}
+                                  >
+                                    Booked · {core.customer}
+                                  </span>
+                                ) : (
+                                  <div className="core-status-fields">
+                                    <select
+                                      aria-label={`Status Core ${core.coreNumber}`}
+                                      className="form-select form-select-sm"
+                                      onChange={(event) => {
+                                        const nextStatus = event.target.value as
+                                          | "Available"
+                                          | "Used";
+                                        setPendingCoreStatuses((current) => {
+                                          const next = { ...current };
+                                          const updated: PendingCoreChange = {
+                                            status: nextStatus,
+                                            connectedAssetId:
+                                              nextStatus === "Used"
+                                                ? (change?.connectedAssetId ??
+                                                  core.connectedAssetId)
+                                                : null,
+                                            connectedSide:
+                                              nextStatus === "Used"
+                                                ? (change?.connectedSide ??
+                                                  core.connectedSide)
+                                                : null,
+                                          };
+                                          if (
+                                            updated.status === core.status &&
+                                            updated.connectedAssetId ===
+                                              core.connectedAssetId &&
+                                            updated.connectedSide ===
+                                              core.connectedSide
+                                          ) {
+                                            delete next[core.coreNumber];
+                                          } else {
+                                            next[core.coreNumber] = updated;
+                                          }
+                                          return next;
+                                        });
+                                      }}
+                                      value={status}
+                                    >
+                                      <option value="Available">
+                                        Tersedia
+                                      </option>
+                                      <option value="Used">Terpakai</option>
+                                    </select>
+                                    {status === "Used" && (
+                                      <select
+                                        aria-label={`Terhubung ke untuk Core ${core.coreNumber}`}
+                                        className="form-select form-select-sm core-destination-select"
+                                        disabled={
+                                          coreDestinationsQuery.isPending
+                                        }
+                                        onChange={(event) => {
+                                          const [assetId, destinationSide] =
+                                            event.target.value.split(":");
+                                          setPendingCoreStatuses((current) => ({
+                                            ...current,
+                                            [core.coreNumber]: {
+                                              status: "Used",
+                                              connectedAssetId: assetId || null,
+                                              connectedSide:
+                                                destinationSide === "A" ||
+                                                destinationSide === "B"
+                                                  ? destinationSide
+                                                  : null,
+                                            },
+                                          }));
+                                        }}
+                                        value={destinationValue}
+                                      >
+                                        <option value="">
+                                          Pilih tujuan sambungan
+                                        </option>
+                                        {coreDestinationsQuery.data?.map(
+                                          (destination) => (
+                                            <option
+                                              key={`${destination.id}:${destination.side}`}
+                                              value={`${destination.id}:${destination.side}`}
+                                            >
+                                              {destination.name} · Arah ujung{" "}
+                                              {destination.side}
+                                            </option>
+                                          )
+                                        )}
+                                      </select>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {coreDestinationsQuery.isError && (
+                          <small className="d-block text-danger mt-2">
+                            Daftar tujuan sambungan tidak dapat dimuat.
+                          </small>
+                        )}
+                        {!coreDestinationsQuery.isPending &&
+                          !coreDestinationsQuery.isError &&
+                          !coreDestinationsQuery.data?.length && (
+                            <small className="d-block text-secondary mt-2">
+                              Belum ada aset terminasi di sekitar ujung kabel
+                              pada kelompok distribusi yang sama.
+                            </small>
+                          )}
+                        {coreDestinationSummary.length > 0 && (
+                          <div className="core-destination-summary">
+                            <div className="core-destination-summary-header">
+                              <strong>
+                                Pemakaian core per titik sambungan
+                              </strong>
+                              <span>
+                                {coreDestinationSummary.reduce(
+                                  (total, destination) =>
+                                    total + destination.count,
+                                  0
+                                )}{" "}
+                                core · {coreDestinationSummary.length} tujuan
+                              </span>
+                            </div>
+                            <ul
+                              aria-label="Daftar tujuan core"
+                              className="core-destination-list"
+                            >
+                              {coreDestinationSummary.map((destination) => (
+                                <li
+                                  key={`${destination.assetId}:${destination.side}`}
+                                >
+                                  <span className="core-destination-count">
+                                    {destination.count} core
+                                  </span>
+                                  <strong>{destination.assetName}</strong>
+                                  <span className="core-destination-side">
+                                    Ujung {destination.side}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
                           </div>
-                        ))}
-                      </div>
+                        )}
+                      </>
                     ) : (
                       <small className="text-secondary">
                         Belum ada core terpasang.
