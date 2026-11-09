@@ -18,6 +18,11 @@ import {
   loadNetworkMapIcons,
 } from "../map/networkMap";
 import type { NetworkCapacity } from "./NetworkCapacityDetail";
+import {
+  type TerminationResults,
+  uniqueTerminationCables,
+} from "./TerminationDetail";
+import { describeSourceCable, type TerminationPlan } from "./terminationPlan";
 
 function cableDisplayDetails(name: string) {
   const parts = name
@@ -44,6 +49,14 @@ function cableDisplayDetails(name: string) {
   };
 }
 export type NetworkSearchResult = {
+  terminations?: TerminationResults;
+  terminationPlan?: TerminationPlan;
+  proposal?: {
+    kind: string;
+    cores: number | null;
+    latitude: number;
+    longitude: number;
+  };
   latitude: number;
   longitude: number;
   searchRadiusMeters?: number;
@@ -217,6 +230,110 @@ export function NearestNetworkMap({
         properties: { kind: "location", label: "Titik lokasi" },
       },
     ];
+    for (const evidence of result.terminationPlan?.routeEvidence ?? []) {
+      if (evidence.id !== result.terminationPlan?.targetId) {
+        features.push({
+          type: "Feature",
+          geometry: {
+            type: "Point",
+            coordinates: [evidence.longitude, evidence.latitude],
+          },
+          properties: {
+            kind: "route-evidence",
+            id: evidence.id,
+            label: evidence.name,
+            deviceType: evidence.type,
+            distance: evidence.distanceToRouteMeters,
+            recordedCables: evidence.recordedCables,
+          },
+        });
+      }
+    }
+    for (const [index, point] of (
+      result.terminationPlan?.deviceCandidates ?? []
+    ).entries()) {
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [point.longitude, point.latitude],
+        },
+        properties: {
+          kind: "device-candidate",
+          label:
+            point.basis === "PLANNING"
+              ? `Usulan awal ${point.kind}`
+              : `Opsi ${point.kind} ${index + 1}`,
+          basis: point.basis ?? "EVIDENCE",
+          deviceType: point.kind,
+          reason: point.reason,
+          evidenceDistance: point.distanceToEvidenceMeters ?? 0,
+        },
+      });
+    }
+    for (const [index, point] of (
+      result.terminationPlan?.connectionCandidates ?? []
+    ).entries()) {
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [point.longitude, point.latitude],
+        },
+        properties: {
+          kind: "connection-candidate",
+          label: point.recommendedKind
+            ? `Opsi ${point.recommendedKind} ${index + 1}`
+            : `Potensi sambungan ${index + 1}`,
+          recommendedKind: point.recommendedKind ?? "",
+          cableName: point.cableName,
+          distance: point.distanceMeters,
+        },
+      });
+    }
+    for (const [index, point] of (
+      result.terminationPlan?.points ?? []
+    ).entries()) {
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [point.longitude, point.latitude],
+        },
+        properties: {
+          kind: "plan",
+          label: `Kandidat closure ${index + 1}`,
+          deviceType: "Closure",
+        },
+      });
+    }
+    for (const cable of result.terminationPlan?.cables ?? []) {
+      features.push({
+        type: "Feature",
+        geometry: cable.geometry,
+        properties: {
+          kind: "plan-route",
+          label: `Rencana kabel ${cable.type} · ${cable.cores === null ? "core belum ditentukan" : `${cable.cores} core`}`,
+          distance: cable.distanceMeters,
+          cableType: cable.type,
+          cores: cable.cores ?? "Belum ditentukan",
+        },
+      });
+    }
+    if (result.proposal) {
+      features.push({
+        type: "Feature",
+        geometry: {
+          type: "Point",
+          coordinates: [result.proposal.longitude, result.proposal.latitude],
+        },
+        properties: {
+          kind: "proposal",
+          label: `Usulan ${result.proposal.kind}`,
+          deviceType: result.proposal.kind,
+        },
+      });
+    }
     if (result.network?.geometry) {
       features.push({
         type: "Feature",
@@ -234,7 +351,7 @@ export function NearestNetworkMap({
         properties: { kind: "target", label: result.network.name },
       });
     }
-    if (result.routeGeometry) {
+    if (result.routeGeometry && !result.terminationPlan) {
       features.push({
         type: "Feature",
         geometry: result.routeGeometry,
@@ -340,7 +457,7 @@ export function NearestNetworkMap({
         id: "cable-route",
         type: "line",
         source: "search",
-        filter: ["==", "kind", "route"],
+        filter: ["in", "kind", "route", "plan-route"],
         paint: {
           "line-color": kmzLegend.find((rule) => rule.category === "DROP")!
             .color,
@@ -352,7 +469,11 @@ export function NearestNetworkMap({
         id: "locations",
         type: "circle",
         source: "search",
-        filter: ["==", "$type", "Point"],
+        filter: [
+          "all",
+          ["==", "$type", "Point"],
+          ["!=", "kind", "route-evidence"],
+        ],
         paint: {
           "circle-radius": 8,
           "circle-color": [
@@ -360,6 +481,14 @@ export function NearestNetworkMap({
             ["get", "kind"],
             "location",
             "#e53935",
+            "proposal",
+            "#e77a12",
+            "plan",
+            "#e77a12",
+            "connection-candidate",
+            "#e77a12",
+            "device-candidate",
+            "#e77a12",
             "#3454d1",
           ],
           "circle-stroke-color": "#fff",
@@ -370,13 +499,45 @@ export function NearestNetworkMap({
         id: "labels",
         type: "symbol",
         source: "search",
-        filter: ["==", "$type", "Point"],
+        filter: [
+          "all",
+          ["==", "$type", "Point"],
+          ["!=", "kind", "proposal"],
+          ["!=", "kind", "plan"],
+          ["!=", "kind", "connection-candidate"],
+          ["!=", "kind", "device-candidate"],
+          ["!=", "kind", "route-evidence"],
+        ],
         layout: {
           "text-field": ["get", "label"],
           "text-size": 12,
           "text-offset": [0, 1.5],
         },
         paint: { "text-halo-color": "#fff", "text-halo-width": 2 },
+      });
+      map.addLayer({
+        id: "proposal-label",
+        type: "symbol",
+        source: "search",
+        filter: [
+          "in",
+          "kind",
+          "proposal",
+          "plan",
+          "connection-candidate",
+          "device-candidate",
+        ],
+        layout: {
+          "text-field": ["get", "label"],
+          "text-size": 13,
+          "text-offset": [0, -1.5],
+          "text-allow-overlap": true,
+        },
+        paint: {
+          "text-color": "#a64b00",
+          "text-halo-color": "#fff",
+          "text-halo-width": 2,
+        },
       });
       addAtlasMapIcons(map);
       map.addSource("nearby-assets", {
@@ -498,6 +659,61 @@ export function NearestNetworkMap({
         filter: ["==", ["geometry-type"], "Point"],
         paint: { "circle-radius": 16, "circle-opacity": 0 },
       });
+      map.addSource("terminations", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: (result.terminations?.points ?? [])
+            .filter(
+              (point) =>
+                Number.isFinite(point.longitude) &&
+                Number.isFinite(point.latitude)
+            )
+            .map((point) => ({
+              type: "Feature",
+              geometry: {
+                type: "Point",
+                coordinates: [point.longitude, point.latitude],
+              },
+              properties: {
+                id: point.id,
+                label: point.name,
+                deviceType: point.type,
+                distance: point.distance,
+              },
+            })),
+        },
+      });
+      map.addLayer(
+        {
+          id: "termination-markers",
+          type: "circle",
+          source: "terminations",
+          paint: {
+            "circle-radius": 15,
+            "circle-color": "#e77a12",
+            "circle-opacity": 0,
+            "circle-stroke-color": "#e77a12",
+            "circle-stroke-width": 3,
+          },
+        },
+        "asset-icons"
+      );
+      map.addLayer(
+        {
+          id: "route-evidence-markers",
+          type: "circle",
+          source: "search",
+          filter: ["==", "kind", "route-evidence"],
+          paint: {
+            "circle-radius": 19,
+            "circle-opacity": 0,
+            "circle-stroke-color": "#00a6b2",
+            "circle-stroke-width": 3,
+          },
+        },
+        "asset-icons"
+      );
       const containsBounds = (outer: number[] | undefined, inner: number[]) =>
         Boolean(
           outer &&
@@ -601,6 +817,8 @@ export function NearestNetworkMap({
         className: "analysis-asset-popup",
       });
       const hitLayers = [
+        "route-evidence-markers",
+        "termination-markers",
         "asset-point-hit",
         "asset-line-hit",
         "asset-areas",
@@ -619,6 +837,16 @@ export function NearestNetworkMap({
           layers: hitLayers,
         });
         const feature =
+          hits.find(
+            (f) =>
+              f.layer.id === "locations" &&
+              (f.properties?.kind === "proposal" ||
+                f.properties?.kind === "plan" ||
+                f.properties?.kind === "connection-candidate" ||
+                f.properties?.kind === "device-candidate")
+          ) ??
+          hits.find((f) => f.layer.id === "route-evidence-markers") ??
+          hits.find((f) => f.layer.id === "termination-markers") ??
           hits.find((f) => f.layer.id === "asset-point-hit") ??
           hits.find((f) => f.layer.id === "asset-line-hit") ??
           hits.find((f) => f.layer.id === "cable-route") ??
@@ -627,7 +855,11 @@ export function NearestNetworkMap({
           return;
         }
         const asset =
-          assetsById.get(String(feature.properties?.id ?? "")) ??
+          (["termination-markers", "route-evidence-markers"].includes(
+            feature.layer.id
+          )
+            ? undefined
+            : assetsById.get(String(feature.properties?.id ?? ""))) ??
           (feature.properties?.kind === "target" && result.network?.id
             ? assetsById.get(result.network.id)
             : undefined);
@@ -637,7 +869,10 @@ export function NearestNetworkMap({
         title.textContent = asset
           ? String(asset.attributes?.name ?? asset.name)
           : feature.layer.id === "cable-route"
-            ? "Usulan jalur kabel mengikuti jalan mobil"
+            ? String(
+                feature.properties?.label ??
+                  "Usulan jalur kabel mengikuti jalan mobil"
+              )
             : String(feature.properties?.label ?? "Detail lokasi");
         content.append(title);
         const formatLength = (meters: number) =>
@@ -664,7 +899,8 @@ export function NearestNetworkMap({
           ]);
         }
         if (
-          feature.layer.id === "cable-route" ||
+          (feature.layer.id === "cable-route" &&
+            feature.properties?.kind !== "plan-route") ||
           feature.properties?.kind === "target" ||
           (asset?.id && asset.id === result.network?.id)
         ) {
@@ -710,21 +946,197 @@ export function NearestNetworkMap({
             : Object.entries(attrs).filter(
                 ([key]) => !key.startsWith("__") && key !== "name"
               )
-          : feature.layer.id === "cable-route"
+          : feature.layer.id === "route-evidence-markers"
             ? [
+                ["Jenis aset terdata", feature.properties?.deviceType],
                 [
-                  "Estimasi panjang kabel",
-                  result.distanceMeters == null
-                    ? "Belum tersedia"
-                    : Math.round(result.distanceMeters) + " m",
+                  "Jarak dari jalur",
+                  `${Math.round(Number(feature.properties?.distance))} m`,
                 ],
-                ["Acuan jalur", "Jalan yang dapat dilalui mobil"],
-                ["Tampilan", "Legenda drop: garis ungu putus-putus (usulan)"],
+                [
+                  "Kabel dengan relasi tercatat",
+                  feature.properties?.recordedCables,
+                ],
+                [
+                  "Kebutuhan sambungan",
+                  "Belum diketahui · periksa saat survei",
+                ],
+                [
+                  "Catatan",
+                  "Dekat jalur tidak memastikan aset tersambung atau memiliki kapasitas yang dapat dipakai.",
+                ],
               ]
-            : [
-                ["Latitude", event.lngLat.lat],
-                ["Longitude", event.lngLat.lng],
-              ];
+            : feature.layer.id === "termination-markers"
+              ? [
+                  ["Jenis terminasi", feature.properties?.deviceType],
+                  [
+                    "Jarak dari lokasi",
+                    `${Math.round(Number(feature.properties?.distance))} m`,
+                  ],
+                  [
+                    "Koordinat",
+                    `${event.lngLat.lat.toFixed(6)}, ${event.lngLat.lng.toFixed(6)}`,
+                  ],
+                ]
+              : feature.properties?.kind === "proposal"
+                ? [
+                    ["Jenis terminasi", feature.properties.deviceType],
+                    ["Status", "Usulan awal · perlu survei"],
+                    ["Lokasi", "Titik pelanggan"],
+                    [
+                      "Dasar",
+                      "Terminasi terdekat bukan ODP; ODP diusulkan sebagai titik distribusi ke lokasi pelanggan.",
+                    ],
+                    [
+                      "Catatan",
+                      "Belum menjadi aset aktif. Kebutuhan terminasi perlu diverifikasi.",
+                    ],
+                  ]
+                : feature.properties?.kind === "device-candidate"
+                  ? [
+                      ["Jenis usulan", feature.properties.deviceType],
+                      ["Dasar", feature.properties.reason],
+                      [
+                        "Posisi pada jalur",
+                        feature.properties.basis === "PLANNING"
+                          ? "Titik tengah jalur sebagai lokasi awal, dapat berubah setelah peninjauan"
+                          : `Titik terdekat di garis usulan; ${Math.round(Number(feature.properties.evidenceDistance))} m dari aset acuan`,
+                      ],
+                      [
+                        "Status",
+                        feature.properties.basis === "PLANNING"
+                          ? "Usulan awal, belum menjadi aset; kebutuhan dan lokasi belum dipastikan."
+                          : "Opsi berdasarkan aset terdata; kebutuhan dan sambungan belum dipastikan.",
+                      ],
+                    ]
+                  : feature.properties?.kind === "connection-candidate"
+                    ? [
+                        ["Kabel terdekat", feature.properties.cableName],
+                        [
+                          "Jarak ujung kabel ke jalur",
+                          `${Math.round(Number(feature.properties.distance))} m`,
+                        ],
+                        [
+                          "Rekomendasi",
+                          feature.properties.recommendedKind
+                            ? "Closure jika kabel disambungkan"
+                            : "Jenis belum ditentukan",
+                        ],
+                        [
+                          "Dasar",
+                          "Ujung kabel eksisting berada dekat jalur. Closure merupakan opsi untuk melindungi sambungan serat jika kabel ini dipakai; kedekatan saja tidak berarti kabel harus disambungkan.",
+                        ],
+                      ]
+                    : feature.properties?.kind === "plan"
+                      ? [
+                          ["Jenis", "Kandidat closure"],
+                          [
+                            "Status",
+                            "Usulan berdasarkan jarak jalur · perlu survei",
+                          ],
+                          [
+                            "Koordinat",
+                            `${event.lngLat.lat.toFixed(6)}, ${event.lngLat.lng.toFixed(6)}`,
+                          ],
+                          [
+                            "Catatan",
+                            "Jarak saja tidak memastikan closure dibutuhkan; periksa sambungan dan kondisi lapangan.",
+                          ],
+                        ]
+                      : feature.properties?.kind === "plan-route"
+                        ? [
+                            ["Jenis kabel", feature.properties.cableType],
+                            [
+                              "Dasar jenis kabel",
+                              feature.properties.cableType === "Distribusi"
+                                ? "Usulan kabel distribusi dari terminasi jaringan ke ODP baru."
+                                : "Usulan kabel drop dari ODP ke lokasi pelanggan.",
+                            ],
+                            ["Jumlah core", feature.properties.cores],
+                            [
+                              "Panjang usulan",
+                              `${Math.round(Number(feature.properties.distance))} m`,
+                            ],
+                            ["Tujuan", result.network?.name ?? "—"],
+                            [
+                              "Rekomendasi terminasi",
+                              result.terminationPlan?.deviceRecommendation
+                                ?.kind === "REUSE_ODP" ||
+                              result.terminationPlan?.deviceRecommendation
+                                ?.kind === "ODP_PORT_UNKNOWN"
+                                ? `Usulan menggunakan ${result.terminationPlan.deviceRecommendation.name}, ODP terdekat`
+                                : result.terminationPlan?.deviceRecommendation
+                                      ?.kind === "NEW_ODP"
+                                  ? "Usulan ODP baru"
+                                  : "Tidak tersedia pada analisis ini",
+                            ],
+                            [
+                              "Terminasi sumber",
+                              result.terminationPlan?.upstreamRecommendation
+                                ? `${result.terminationPlan.upstreamRecommendation.type} ${result.terminationPlan.upstreamRecommendation.name} · ${result.terminationPlan.upstreamRecommendation.recordedCables} kabel dengan relasi tercatat`
+                                : "Jenis sumber belum tersedia pada analisis ini",
+                            ],
+                            [
+                              "Hubungan perangkat",
+                              result.terminationPlan?.deviceRecommendation?.relatedDevices
+                                ?.map(
+                                  (device) =>
+                                    `${device.name} (${device.kind}; melalui kabel tercatat)`
+                                )
+                                .join(", ") ||
+                                "Belum ada relasi perangkat melalui kabel tercatat",
+                            ],
+
+                            [
+                              "Kabel eksisting di tujuan",
+                              result.terminationPlan
+                                ? describeSourceCable(result.terminationPlan)
+                                : "Belum dapat ditentukan",
+                            ],
+                            [
+                              "Kebutuhan",
+                              result.terminationPlan?.requirement &&
+                              !result.terminationPlan.requirement.assumed
+                                ? `${result.terminationPlan.requirement.services} layanan + ${result.terminationPlan.requirement.reserve} cadangan = ${result.terminationPlan.requirement.requiredCores} core (1 core per layanan)`
+                                : "Belum diketahui dari data analisis",
+                            ],
+                            [
+                              "Dasar",
+                              result.terminationPlan?.capacityBasis ===
+                              "VERIFIED_SOURCE"
+                                ? "Mengikuti kapasitas kabel sumber yang relasinya tercatat dan core-nya terverifikasi; kebutuhan aktual belum diketahui."
+                                : result.terminationPlan?.capacityBasis ===
+                                    "UNVERIFIED_SOURCE"
+                                  ? "Mengikuti kapasitas kabel kandidat; relasi ke tujuan atau pemakaian core belum terverifikasi."
+                                  : result.terminationPlan?.capacityBasis ===
+                                      "SOURCE_UNKNOWN"
+                                    ? "Kapasitas belum dapat ditentukan: kapasitas kandidat belum diketahui, core terverifikasi tidak mencukupi, atau kapasitasnya tidak ada dalam daftar."
+                                    : result.terminationPlan?.requirement &&
+                                        result.terminationPlan.requirement
+                                          .requiredCores > 288
+                                      ? "Kebutuhan melebihi kapasitas terbesar 288 core; desain kabel perlu ditentukan lebih lanjut."
+                                      : "Kapasitas terkecil yang cukup dari 12, 24, 48, 96, 144, 288 core; rencana perlu verifikasi",
+                            ],
+                            ["Status", "Rencana · perlu survei"],
+                          ]
+                        : feature.layer.id === "cable-route"
+                          ? [
+                              [
+                                "Estimasi panjang kabel",
+                                result.distanceMeters == null
+                                  ? "Belum tersedia"
+                                  : Math.round(result.distanceMeters) + " m",
+                              ],
+                              ["Acuan jalur", "Jalan yang dapat dilalui mobil"],
+                              [
+                                "Tampilan",
+                                "Legenda drop: garis ungu putus-putus (usulan)",
+                              ],
+                            ]
+                          : [
+                              ["Latitude", event.lngLat.lat],
+                              ["Longitude", event.lngLat.lng],
+                            ];
         const appendTableRow = (
           label: string,
           value: unknown,
@@ -743,7 +1155,94 @@ export function NearestNetworkMap({
         for (const [label, value] of rows) {
           appendTableRow(label, value);
         }
-        if (feature.layer.id === "cable-route" && result.network?.name) {
+        if (feature.layer.id === "termination-markers") {
+          const point = result.terminations?.points.find(
+            (item) => item.id === String(feature.properties?.id ?? "")
+          );
+          if (point) {
+            const upstream = result.terminationPlan?.upstreamRecommendation;
+            if (upstream?.id === point.id) {
+              appendTableRow(
+                "Rekomendasi",
+                upstream.type === "ODP"
+                  ? "Gunakan ODP terdekat sebagai tujuan kabel drop"
+                  : upstream.type === "ODC"
+                    ? "Gunakan ODC terdekat sebagai sumber ke ODP usulan"
+                    : upstream.type === "Closure"
+                      ? "Gunakan closure terdekat sebagai opsi titik sambungan ke ODP usulan"
+                      : upstream.type === "Slack / Coil"
+                        ? "Slack/coil adalah cadangan kabel; lokasi sambungan belum dapat ditentukan dari titik ini"
+                        : `Gunakan ${upstream.type} terdekat sebagai titik acuan jaringan; perangkat perantara belum ditentukan`
+              );
+              appendTableRow(
+                "Dasar",
+                `${upstream.recordedCables} kabel dengan relasi tercatat; data yang belum diverifikasi tetap dapat digunakan dalam rencana.`
+              );
+            }
+            appendTableRow(
+              "Perangkat melalui kabel tercatat",
+              point.relatedDevices
+                ?.map((device) => `${device.name} (${device.kind})`)
+                .join(", ") || "Belum ada relasi tercatat"
+            );
+            if (point.cables.length === 0) {
+              appendTableRow(
+                "Kabel",
+                "Belum ada kabel tercatat atau kandidat dalam 20 m."
+              );
+            }
+            for (const cable of uniqueTerminationCables(point.cables)) {
+              appendTableRow("Kabel", cable.name);
+              appendTableRow(
+                "Hubungan",
+                cable.recorded
+                  ? "Relasi tercatat"
+                  : `Kabel dekat pada peta · perlu verifikasi · ${Math.round(cable.distanceMeters)} m`
+              );
+              appendTableRow(
+                "Total core",
+                cable.totalCores || "Belum diketahui"
+              );
+              appendTableRow(
+                "Core terpakai",
+                `${cable.used} (nomor: ${cable.usedNumbers?.join(", ") || (cable.usedNumbers ? "—" : "jalankan analisis ulang")})`
+              );
+              appendTableRow(
+                "Core booked",
+                `${cable.booked} (nomor: ${cable.bookedNumbers?.join(", ") || (cable.bookedNumbers ? "—" : "jalankan analisis ulang")})`
+              );
+              appendTableRow(
+                "Core tersedia",
+                cable.verified && cable.totalCores > 0 && cable.available
+                  ? `${cable.available.length} (nomor: ${cable.available.join(", ") || "—"})`
+                  : "Belum terverifikasi atau kapasitas belum diketahui"
+              );
+              appendTableRow(
+                "Titik terdekat dari awal kabel",
+                cable.start
+                  ? `${cable.start.name} (${Math.round(cable.start.distanceMeters)} m)`
+                  : "Belum diketahui"
+              );
+              appendTableRow(
+                "Titik terdekat dari ujung kabel",
+                cable.end
+                  ? `${cable.end.name} (${Math.round(cable.end.distanceMeters)} m)`
+                  : "Belum diketahui"
+              );
+            }
+            if (point.cables.length > 0) {
+              appendTableRow(
+                "Catatan",
+                "Perkiraan ujung berdasarkan posisi peta, bukan arah layanan. Sambungan fisik perlu diverifikasi."
+              );
+            }
+          }
+        }
+        if (
+          feature.layer.id === "cable-route" &&
+          feature.properties?.kind !== "plan-route" &&
+          result.network?.name
+        ) {
           const display = cableDisplayDetails(result.network.name);
           const capacity = result.network.capacity;
           const recommendationHeading = document.createElement("tr");
@@ -796,6 +1295,14 @@ export function NearestNetworkMap({
         (b, point) => b.extend(point),
         new LngLatBounds()
       );
+      for (const point of result.terminations?.points ?? []) {
+        if (
+          Number.isFinite(point.longitude) &&
+          Number.isFinite(point.latitude)
+        ) {
+          bounds.extend([point.longitude, point.latitude]);
+        }
+      }
       if (result.routeGeometry?.type === "LineString") {
         for (const p of result.routeGeometry.coordinates) {
           bounds.extend([p[0], p[1]]);
@@ -837,6 +1344,17 @@ export function NearestNetworkMap({
         ditampilkan satu kali.
       </small>
       {assetError && <div className="alert alert-warning">{assetError}</div>}
+      {result.terminationPlan?.routeEvidenceIncomplete && (
+        <div className="alert alert-warning">
+          Data aset di sepanjang jalur belum lengkap; periksa di Peta Jaringan
+          dan saat survei.
+        </div>
+      )}
+      {result.terminationPlan?.connectionCandidatesIncomplete && (
+        <div className="alert alert-warning">
+          Data ujung kabel atau terminasi di sepanjang jalur belum lengkap.
+        </div>
+      )}
       <section
         aria-label="Peta jaringan terdekat dan estimasi jalur kabel mengikuti jalan mobil"
         ref={element}
@@ -877,9 +1395,14 @@ export function NearestNetworkMap({
         </section>
       )}
       <small className="d-block text-secondary mt-2">
-        Klik ikon atau kabel untuk detail KMZ. Garis ungu putus-putus adalah
-        usulan jalur penarikan; ikon dan kabel eksisting mengikuti style KMZ
-        atau fallback legend.
+        Lingkaran oranye menandai terminasi di sekitar lokasi. Penanda oranye
+        dan garis ungu putus-putus adalah rencana. Lingkaran biru kehijauan
+        menunjukkan aset terdata dalam 20 m dari jalur; kedekatan tidak
+        memastikan sambungan. Jenis dan kebutuhan perangkat tambahan belum dapat
+        dipastikan dari data ini; periksa saat survei. Klik untuk melihat
+        detail. Klik ikon atau kabel untuk detail KMZ. Garis ungu putus-putus
+        adalah usulan jalur penarikan; ikon dan kabel eksisting mengikuti style
+        KMZ atau fallback legend.
       </small>
     </>
   );

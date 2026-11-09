@@ -126,7 +126,13 @@ export class AtlasService {
       )
     ).rows;
   }
-  async createSurvey(userId: string, historyId: string, rowNumber: number) {
+  async createSurvey(
+    userId: string,
+    historyId: string,
+    rowNumber: number,
+    proposal?: unknown,
+    plan?: unknown
+  ) {
     if (
       !(/^[0-9a-f-]{36}$/iu.test(historyId) && Number.isInteger(rowNumber)) ||
       rowNumber < 0
@@ -148,7 +154,7 @@ export class AtlasService {
     }
     if (
       !(
-        candidate.analysis?.network?.id &&
+        (candidate.analysis?.network?.id || proposal) &&
         Number.isFinite(candidate.analysis.latitude) &&
         Number.isFinite(candidate.analysis.longitude)
       )
@@ -157,6 +163,134 @@ export class AtlasService {
         message:
           "Ajukan survei dari hasil yang sudah menemukan jaringan dan koordinat.",
       });
+    }
+    if (proposal !== undefined && proposal !== null) {
+      const value = proposal as Record<string, unknown>;
+      if (
+        !value ||
+        typeof value !== "object" ||
+        !["ODP", "ODC", "JOINT_CLOSURE", "OTB"].includes(String(value.kind)) ||
+        typeof value.latitude !== "number" ||
+        !Number.isFinite(value.latitude) ||
+        Math.abs(value.latitude) > 90 ||
+        typeof value.longitude !== "number" ||
+        !Number.isFinite(value.longitude) ||
+        Math.abs(value.longitude) > 180 ||
+        value.latitude !== candidate.analysis.latitude ||
+        value.longitude !== candidate.analysis.longitude ||
+        !Number.isInteger(value.cores) ||
+        Number(value.cores) < 1 ||
+        Number(value.cores) > 4096
+      ) {
+        throw new BadRequestException({
+          message: "Usulan terminasi atau jumlah core tidak valid.",
+        });
+      }
+      candidate.analysis.proposal = {
+        cores: value.cores,
+        kind: value.kind,
+        latitude: value.latitude,
+        longitude: value.longitude,
+      };
+    }
+    if (plan !== undefined && plan !== null) {
+      const value = plan as {
+        targetId?: unknown;
+        points?: unknown;
+        cables?: unknown;
+      };
+      const validPoint = (point: unknown) => {
+        if (!point || typeof point !== "object") {
+          return false;
+        }
+        const item = point as Record<string, unknown>;
+        return (
+          ["ODP", "ODC", "JOINT_CLOSURE", "OTB"].includes(String(item.kind)) &&
+          typeof item.longitude === "number" &&
+          Number.isFinite(item.longitude) &&
+          Math.abs(item.longitude) <= 180 &&
+          typeof item.latitude === "number" &&
+          Number.isFinite(item.latitude) &&
+          Math.abs(item.latitude) <= 90
+        );
+      };
+      const validCable = (cable: unknown) => {
+        if (!cable || typeof cable !== "object") {
+          return false;
+        }
+        const item = cable as Record<string, unknown>;
+        const geometry = item.geometry as
+          | { type?: unknown; coordinates?: unknown }
+          | undefined;
+        return (
+          ["Distribusi", "Feeder", "Backbone", "Drop"].includes(
+            String(item.type)
+          ) &&
+          (item.cores === null ||
+            (Number.isInteger(item.cores) &&
+              Number(item.cores) > 0 &&
+              Number(item.cores) <= 4096)) &&
+          typeof item.distanceMeters === "number" &&
+          Number.isFinite(item.distanceMeters) &&
+          item.distanceMeters >= 0 &&
+          geometry?.type === "LineString" &&
+          Array.isArray(geometry.coordinates) &&
+          geometry.coordinates.length >= 2 &&
+          geometry.coordinates.length <= 10_000 &&
+          geometry.coordinates.every(
+            (coordinate: unknown) =>
+              Array.isArray(coordinate) &&
+              coordinate.length >= 2 &&
+              typeof coordinate[0] === "number" &&
+              Number.isFinite(coordinate[0]) &&
+              Math.abs(coordinate[0]) <= 180 &&
+              typeof coordinate[1] === "number" &&
+              Number.isFinite(coordinate[1]) &&
+              Math.abs(coordinate[1]) <= 90
+          )
+        );
+      };
+      if (
+        !value ||
+        typeof value !== "object" ||
+        typeof value.targetId !== "string" ||
+        !value.targetId ||
+        value.targetId !== candidate.analysis.network?.id ||
+        !Array.isArray(value.points) ||
+        value.points.length > 8 ||
+        !value.points.every(validPoint) ||
+        !Array.isArray(value.cables) ||
+        value.cables.length !== value.points.length + 1 ||
+        !value.cables.every(validCable)
+      ) {
+        throw new BadRequestException({
+          message: "Rencana terminasi atau kabel tidak valid.",
+        });
+      }
+      const {
+        deviceCandidates: _clientDeviceCandidates,
+        upstreamRecommendation: _clientUpstreamRecommendation,
+        deviceRecommendation: _clientDeviceRecommendation,
+        sourceCable: _clientSourceCable,
+        connectionCandidates: _clientConnectionCandidates,
+        connectionCandidatesIncomplete: _clientConnectionCandidatesIncomplete,
+        routeEvidence: _clientRouteEvidence,
+        routeEvidenceIncomplete: _clientRouteEvidenceIncomplete,
+        requirement: _clientRequirement,
+        ...validatedPlan
+      } = value as typeof value & {
+        deviceCandidates?: unknown;
+        upstreamRecommendation?: unknown;
+        deviceRecommendation?: unknown;
+        sourceCable?: unknown;
+        connectionCandidates?: unknown;
+        connectionCandidatesIncomplete?: unknown;
+        routeEvidence?: unknown;
+        routeEvidenceIncomplete?: unknown;
+        requirement?: unknown;
+      };
+      const savedPlan = candidate.analysis.terminationPlan;
+      candidate.analysis.terminationPlan = savedPlan ?? validatedPlan;
     }
     return this.db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
@@ -168,7 +302,7 @@ export class AtlasService {
           userId,
           historyId,
           rowNumber,
-          candidate.analysis.network.id,
+          candidate.analysis.network?.id ?? null,
           candidate.analysis.latitude.toFixed(6),
           candidate.analysis.longitude.toFixed(6),
         ]
@@ -616,6 +750,7 @@ export class AtlasService {
         l.created_at AS "createdAt",u.name AS "actorName",u.email AS "actorEmail"
       FROM audit_logs l LEFT JOIN "user" u ON u.id=l.actor_id
       WHERE l.action='NETWORK_IMPORTED' AND l.entity_type='NETWORK_IMPORT' AND l.entity_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM network_assets a WHERE ${assetImportId}=l.entity_id)
       ORDER BY l.created_at DESC LIMIT 50`);
     return rows;
   }
@@ -2000,6 +2135,184 @@ export class AtlasService {
     );
     return { pattern };
   }
+  async nearbyTerminations(
+    longitude: number,
+    latitude: number,
+    allowExpand2km = false
+  ) {
+    const { rows } = await this.db.query<{
+      id: string;
+      name: string;
+      type: string;
+      attributes: Record<string, unknown>;
+      longitude: number;
+      latitude: number;
+      distance: number;
+    }>(
+      `WITH points AS (
+        SELECT a.id, a.name, a.geometry, a.attributes,
+          CASE
+            WHEN label ~ '(^|[^a-z0-9])olt([^a-z0-9]|$)' THEN 'OLT'
+            WHEN label ~ '(^|[^a-z0-9])otb([^a-z0-9]|$)' THEN 'OTB'
+            WHEN label ~ '(^|[^a-z0-9])odc([^a-z0-9]|$)' THEN 'ODC'
+            WHEN label ~ '(^|[^a-z0-9])(odp|fat|spl[-_ ]?1[:_-][0-9]+)([^a-z0-9]|$)' THEN 'ODP'
+            WHEN label ~ '(^|[^a-z0-9])(closure|cs[-_ ]?[0-9]+c)([^a-z0-9]|$)' THEN 'Closure'
+            WHEN label ~ '(^|[^a-z0-9])(slack|coil|slk[-_ ]?[0-9]+)([^a-z0-9]|$)' THEN 'Slack / Coil'
+          END AS type
+        FROM network_assets a
+        CROSS JOIN LATERAL (SELECT lower(concat_ws(' ',a.name,a.attributes->>'folderPath',a.attributes->>'assetKind',a.attributes->>'Tipe Perangkat',a.attributes->>'tipe_perangkat')) AS label) labels
+        WHERE a.asset_type='asset' AND GeometryType(a.geometry)='POINT'
+          AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
+      ), selected AS (
+        SELECT *, ST_Distance(geometry::geography, ST_SetSRID(ST_MakePoint($1,$2),4326)::geography) AS distance
+        FROM points WHERE type IS NOT NULL
+          AND ST_DWithin(geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,$3)
+      )
+      SELECT id,name,type,attributes,ST_X(geometry) AS longitude,ST_Y(geometry) AS latitude,distance
+      FROM selected ORDER BY distance,id`,
+      [longitude, latitude, allowExpand2km ? 2000 : 1000]
+    );
+    const radius =
+      [500, 1000, ...(allowExpand2km ? [2000] : [])].find((r) =>
+        rows.some((row) => row.distance <= r)
+      ) ?? (allowExpand2km ? 2000 : 1000);
+    const points = rows.filter((row) => row.distance <= radius);
+    if (!points.length) {
+      return { points: [], searchRadiusMeters: radius };
+    }
+    const { rows: cables } = await this.db.query(
+      `SELECT p.id AS "pointId", c.id,c.name,c.total_cores AS "totalCores",
+        EXISTS(SELECT 1 FROM network_asset_relations r WHERE r.asset_id=p.id AND r.segment_id=c.id) AS recorded,
+        ST_Distance(p.geometry::geography,c.geometry::geography) AS "distanceMeters",
+        (c.source='managed' OR c.attributes->'__coreUsageVerification'->>'verified'='true' OR c.attributes->>'__coreUsageVerified'='true') AS verified,
+        (SELECT count(*)::int FROM network_cores x WHERE x.asset_id=c.id AND x.status='Used') AS used,
+        (SELECT count(*)::int FROM network_cores x WHERE x.asset_id=c.id AND x.status='Booked') AS booked,
+        (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_cores x WHERE x.asset_id=c.id AND x.status='Used') AS "usedNumbers",
+        (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_cores x WHERE x.asset_id=c.id AND x.status='Booked') AS "bookedNumbers",
+        (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_cores x WHERE x.asset_id=c.id AND x.status='Available') AS available,
+        ST_AsGeoJSON(c.geometry)::json AS geometry
+      FROM network_assets p JOIN network_assets c ON c.asset_type='segment'
+        AND GeometryType(c.geometry) IN ('LINESTRING','MULTILINESTRING')
+        AND (ST_DWithin(p.geometry::geography,c.geometry::geography,20) OR EXISTS(SELECT 1 FROM network_asset_relations r WHERE r.asset_id=p.id AND r.segment_id=c.id))
+      WHERE p.id=ANY($1::text[]) ORDER BY p.id,recorded DESC,"distanceMeters",c.id`,
+      [points.map((point) => point.id)]
+    );
+    const { rows: related } = await this.db.query(
+      `SELECT DISTINCT origin.asset_id AS "pointId", other.asset_id AS id, a.name, other.kind, origin.segment_id AS "cableId"
+       FROM network_asset_relations origin
+       JOIN network_asset_relations other ON other.segment_id=origin.segment_id AND other.asset_id<>origin.asset_id
+       JOIN network_assets a ON a.id=other.asset_id
+       WHERE origin.asset_id=ANY($1::text[]) ORDER BY origin.asset_id,a.name,other.asset_id`,
+      [points.map((point) => point.id)]
+    );
+    // Endpoint candidates must include terminations outside the search radius.
+    const { rows: endpoints } = await this.db.query(
+      `WITH points AS (
+        SELECT a.id,a.name,a.geometry,lower(concat_ws(' ',a.name,a.attributes->>'folderPath',a.attributes->>'assetKind',a.attributes->>'Tipe Perangkat',a.attributes->>'tipe_perangkat')) AS label
+        FROM network_assets a WHERE a.asset_type='asset' AND GeometryType(a.geometry)='POINT' AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
+      ), ends AS (
+        SELECT c.id, side, CASE WHEN side='start' THEN ST_StartPoint(CASE WHEN GeometryType(c.geometry)='LINESTRING' THEN c.geometry ELSE ST_GeometryN(c.geometry,1) END)
+          ELSE ST_EndPoint(CASE WHEN GeometryType(c.geometry)='LINESTRING' THEN c.geometry ELSE ST_GeometryN(c.geometry,ST_NumGeometries(c.geometry)) END) END AS geom
+        FROM network_assets c CROSS JOIN (VALUES ('start'),('end')) v(side) WHERE c.id=ANY($1::text[])
+      )
+      SELECT e.id,e.side,p.id AS "pointId",p.name,ST_Distance(e.geom::geography,p.geometry::geography) AS "distanceMeters"
+      FROM ends e JOIN LATERAL (SELECT * FROM points p WHERE p.label ~ '(^|[^a-z0-9])(olt|otb|odc|odp|fat|closure|slack|coil|cs[-_ ]?[0-9]+c|slk[-_ ]?[0-9]+|spl[-_ ]?1[:_-][0-9]+)([^a-z0-9]|$)' AND ST_DWithin(e.geom::geography,p.geometry::geography,20) ORDER BY ST_Distance(e.geom::geography,p.geometry::geography),p.id LIMIT 1) p ON true`,
+      [[...new Set(cables.map((cable) => cable.id))]]
+    );
+    return {
+      points: points.map((point) => ({
+        ...point,
+        cables: cables
+          .filter((cable) => cable.pointId === point.id)
+          .map(({ geometry, pointId, ...cable }) => ({
+            ...cable,
+            available: cable.verified ? cable.available : null,
+            end:
+              endpoints.find(
+                (end) => end.id === cable.id && end.side === "end"
+              ) ?? null,
+            start:
+              endpoints.find(
+                (end) => end.id === cable.id && end.side === "start"
+              ) ?? null,
+          })),
+        relatedDevices: related
+          .filter((device) => device.pointId === point.id)
+          .map(({ pointId, ...device }) => device),
+      })),
+      searchRadiusMeters: radius,
+    };
+  }
+
+  async terminationsAlongRoute(geometry: unknown) {
+    const { rows } = await this.db.query<{
+      id: string;
+      name: string;
+      type: string;
+      longitude: number;
+      latitude: number;
+      distanceToRouteMeters: number;
+      recordedCables: number;
+    }>(
+      `WITH route AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON($1),4326) AS geom), points AS (
+        SELECT a.id,a.name,a.geometry,
+          CASE
+            WHEN label ~ '(^|[^a-z0-9])pop([^a-z0-9]|$)' THEN 'POP'
+            WHEN label ~ '(^|[^a-z0-9])olt([^a-z0-9]|$)' THEN 'OLT'
+            WHEN label ~ '(^|[^a-z0-9])otb([^a-z0-9]|$)' THEN 'OTB'
+            WHEN label ~ '(^|[^a-z0-9])odc([^a-z0-9]|$)' THEN 'ODC'
+            WHEN label ~ '(^|[^a-z0-9])(odp|fat|spl[-_ ]?1[:_-][0-9]+)([^a-z0-9]|$)' THEN 'ODP'
+            WHEN label ~ '(^|[^a-z0-9])(closure|cs[-_ ]?[0-9]+c)([^a-z0-9]|$)' THEN 'Closure'
+            WHEN label ~ '(^|[^a-z0-9])(slack|coil|slk[-_ ]?[0-9]+)([^a-z0-9]|$)' THEN 'Slack / Coil'
+          END AS type
+        FROM network_assets a CROSS JOIN LATERAL
+          (SELECT lower(concat_ws(' ',a.name,a.attributes->>'folderPath',a.attributes->>'assetKind',a.attributes->>'Tipe Perangkat',a.attributes->>'tipe_perangkat')) AS label) labels
+        WHERE a.asset_type='asset' AND GeometryType(a.geometry)='POINT' AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
+      )
+      SELECT p.id,p.name,p.type,ST_X(p.geometry) AS longitude,ST_Y(p.geometry) AS latitude,
+        ST_Distance(p.geometry::geography,r.geom::geography) AS "distanceToRouteMeters",
+        (SELECT count(DISTINCT rel.segment_id)::int FROM network_asset_relations rel WHERE rel.asset_id=p.id) AS "recordedCables"
+      FROM points p CROSS JOIN route r
+      WHERE p.type IS NOT NULL AND ST_DWithin(p.geometry::geography,r.geom::geography,20)
+      ORDER BY ST_LineLocatePoint(r.geom,p.geometry),p.id LIMIT 100`,
+      [JSON.stringify(geometry)]
+    );
+    return rows;
+  }
+
+  async cableEndsAlongRoute(geometry: unknown) {
+    const { rows } = await this.db.query<{
+      cableId: string;
+      cableName: string;
+      longitude: number;
+      latitude: number;
+      distanceMeters: number;
+    }>(
+      `WITH route AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON($1),4326) AS geom),
+      ends AS (
+        SELECT a.id,a.name,ST_StartPoint(part.geom) AS point
+        FROM network_assets a CROSS JOIN route r CROSS JOIN LATERAL ST_Dump(ST_CollectionExtract(a.geometry,2)) part
+        WHERE a.asset_type='segment' AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
+          AND ST_DWithin(a.geometry::geography,r.geom::geography,10)
+        UNION ALL
+        SELECT a.id,a.name,ST_EndPoint(part.geom) AS point
+        FROM network_assets a CROSS JOIN route r CROSS JOIN LATERAL ST_Dump(ST_CollectionExtract(a.geometry,2)) part
+        WHERE a.asset_type='segment' AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
+          AND ST_DWithin(a.geometry::geography,r.geom::geography,10)
+      )
+      SELECT e.id AS "cableId",e.name AS "cableName",
+        ST_X(e.point) AS longitude,ST_Y(e.point) AS latitude,
+        ST_Distance(e.point::geography,r.geom::geography) AS "distanceMeters"
+      FROM ends e CROSS JOIN route r
+      WHERE e.point IS NOT NULL AND ST_DWithin(e.point::geography,r.geom::geography,10)
+        AND NOT ST_DWithin(e.point::geography,ST_StartPoint(r.geom)::geography,20)
+        AND NOT ST_DWithin(e.point::geography,ST_EndPoint(r.geom)::geography,20)
+      ORDER BY ST_LineLocatePoint(r.geom,e.point),e.id LIMIT 100`,
+      [JSON.stringify(geometry)]
+    );
+    return rows;
+  }
+
   async nearestNetwork(
     longitude: number,
     latitude: number,
@@ -2028,14 +2341,11 @@ export class AtlasService {
         ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography) AS "straightDistanceMeters",
         $3::int AS "searchRadiusMeters"
         FROM network_assets a
-        WHERE GeometryType(a.geometry) IN ('POINT','MULTIPOINT','LINESTRING','MULTILINESTRING')
+        WHERE a.asset_type='asset' AND GeometryType(a.geometry)='POINT'
+          AND lower(concat_ws(' ',a.name,a.attributes->>'folderPath',a.attributes->>'assetKind',a.attributes->>'Tipe Perangkat',a.attributes->>'tipe_perangkat')) ~ '(^|[^a-z0-9])(olt|otb|odc|odp|fat|closure|slack|coil|cs[-_ ]?[0-9]+c|slk[-_ ]?[0-9]+|spl[-_ ]?1[:_-][0-9]+)([^a-z0-9]|$)'
           AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
           AND ST_DWithin(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,$3)
-        ORDER BY CASE
-          WHEN a.total_cores>0 AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true') AND EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available') THEN 0
-          WHEN a.total_cores>0 AND (SELECT count(*) FROM network_cores c WHERE c.asset_id=a.id AND c.status IN ('Used','Booked'))>=a.total_cores THEN 2
-          ELSE 1 END,
-        ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography),a.id LIMIT 1`,
+        ORDER BY         ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography),a.id LIMIT 1`,
         [longitude, latitude, radius]
       );
       if (rows[0]) {
@@ -2070,6 +2380,7 @@ export class AtlasService {
           verification?.verified === true ||
           attributes.__coreUsageVerified === true;
         const full =
+          asset.assetType === "segment" &&
           asset.totalCores > 0 &&
           (counts[0]?.used ?? 0) + (counts[0]?.booked ?? 0) >= asset.totalCores;
         const chamber = /handhole|manhole|^(HH|MH)$/iu.test(String(deviceType));
@@ -2077,7 +2388,10 @@ export class AtlasService {
           ? "CORE_FULL"
           : chamber && !connectedCables.length
             ? "NO_CABLE_RELATION"
-            : verified && asset.totalCores > 0 && counts[0]?.available > 0
+            : asset.assetType === "segment" &&
+                verified &&
+                asset.totalCores > 0 &&
+                counts[0]?.available > 0
               ? "CAPACITY_AVAILABLE"
               : "SURVEY_REQUIRED";
         const recommendationReason = full
@@ -2097,7 +2411,10 @@ export class AtlasService {
             fields: capacityFields,
             recommendation,
             recommendationReason,
-            totalCores: asset.totalCores > 0 ? asset.totalCores : null,
+            totalCores:
+              asset.assetType === "segment" && asset.totalCores > 0
+                ? asset.totalCores
+                : null,
             usageVerified:
               asset.source === "managed" ||
               verification?.verified === true ||

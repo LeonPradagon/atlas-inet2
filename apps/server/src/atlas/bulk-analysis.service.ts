@@ -196,8 +196,14 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
     const previous = rows[0]?.result;
     if (
       !previous ||
-      previous.status !== "NETWORK_NOT_FOUND" ||
-      previous.expansionAvailable !== true
+      (!(
+        previous.status === "NETWORK_NOT_FOUND" &&
+        previous.expansionAvailable === true
+      ) &&
+        !(
+          previous.terminations?.points?.length === 0 &&
+          previous.terminations?.searchRadiusMeters === 1000
+        ))
     ) {
       throw new BadRequestException({
         message: "Baris ini tidak memerlukan perluasan radius.",
@@ -209,7 +215,25 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
         message: "Koordinat hasil analisis tidak valid.",
       });
     }
+    if (previous.network && previous.terminations?.points?.length === 0) {
+      const terminations = await this.atlas.nearbyTerminations(
+        longitude,
+        latitude,
+        true
+      );
+      const result = { ...previous, terminations };
+      await this.db.query(
+        "UPDATE analysis_bulk_job_rows SET result=$3::jsonb WHERE job_id=$1 AND row_number=$2",
+        [jobId, row, JSON.stringify(result)]
+      );
+      return result;
+    }
     const network = await this.atlas.nearestNetwork(longitude, latitude, true);
+    const terminations = await this.atlas.nearbyTerminations(
+      longitude,
+      latitude,
+      true
+    );
     let result = {
       ...previous,
       distanceMeters: null,
@@ -218,6 +242,7 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
       routeGeometry: null,
       searchRadiusMeters: 2000,
       status: "NETWORK_NOT_FOUND",
+      terminations,
     };
     if (network?.nearestPoint?.coordinates) {
       try {
@@ -337,6 +362,10 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
           matchedStreet = geocoded.matchedStreet;
         }
         const nearest = await this.atlas.nearestNetwork(longitude!, latitude!);
+        const terminations = await this.atlas.nearbyTerminations(
+          longitude!,
+          latitude!
+        );
         if (nearest?.nearestPoint?.coordinates) {
           try {
             const route = await this.routing.previewNetwork([
@@ -354,6 +383,7 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
               network: nearest,
               routeGeometry: route.geometry,
               status: "OK",
+              terminations,
             };
           } catch {
             result = {
@@ -368,6 +398,7 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
                 "Rute jalan belum tersedia; jarak penarikan tidak ditampilkan.",
               network: nearest,
               status: "ROUTING_UNAVAILABLE",
+              terminations,
             };
           }
         } else {
@@ -383,6 +414,7 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
             network: nearest ?? null,
             searchRadiusMeters: 1000,
             status: "NETWORK_NOT_FOUND",
+            terminations,
           };
         }
         await this.finishRow(

@@ -12,6 +12,7 @@ import {
 } from "./NearestNetworkMap";
 import { NetworkCapacityDetail } from "./NetworkCapacityDetail";
 import { SubmitSurveyButton } from "./SubmitSurveyButton";
+import { TerminationDetail } from "./TerminationDetail";
 
 type AnalysisRow = {
   row: number;
@@ -219,13 +220,16 @@ export function BulkAnalysisPage() {
     setPage(1);
     setSelectedRowNumber(null);
     requestAnimationFrame(() =>
-      resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+      resultsRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      })
     );
   };
   const expand = async (row: AnalysisRow) => {
     if (
       !(await confirmAction(
-        "Belum ada jaringan dalam radius 1 km. Setujui pencarian hingga 2 km untuk lokasi ini?"
+        "Perluas pencarian jaringan atau terminasi hingga 2 km untuk lokasi ini?"
       ))
     ) {
       return;
@@ -686,13 +690,22 @@ export function BulkAnalysisPage() {
                           )}
                         </td>
                         <td>
-                          {row.network && jobQuery.data?.historyId && (
-                            <SubmitSurveyButton
-                              historyId={jobQuery.data.historyId}
-                              rowNumber={row.row}
-                            />
-                          )}
-                          {row.result?.expansionAvailable && (
+                          {row.result &&
+                            Number.isFinite(row.latitude) &&
+                            Number.isFinite(row.longitude) &&
+                            jobQuery.data?.historyId && (
+                              <SubmitSurveyButton
+                                historyId={jobQuery.data.historyId}
+                                latitude={row.latitude ?? undefined}
+                                longitude={row.longitude ?? undefined}
+                                requireProposal={!row.network}
+                                rowNumber={row.row}
+                              />
+                            )}
+                          {(row.result?.expansionAvailable ||
+                            (row.result?.terminations?.points.length === 0 &&
+                              row.result.terminations.searchRadiusMeters ===
+                                1000)) && (
                             <button
                               className="btn btn-outline-primary btn-sm"
                               disabled={expanding !== null}
@@ -742,6 +755,7 @@ export function BulkAnalysisPage() {
                   <NetworkCapacityDetail
                     capacity={selectedRow.result.network?.capacity}
                   />
+                  <TerminationDetail data={selectedRow.result.terminations} />
                   <NearestNetworkMap result={selectedRow.result} />
                   <small>
                     Klik lokasi lain di tabel untuk melihat jaringan dan
