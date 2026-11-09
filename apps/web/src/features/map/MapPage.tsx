@@ -1780,6 +1780,39 @@ export function MapPage() {
             .addTo(instance)
         );
       }
+      for (const point of survey.analysis.terminationPlan!.deviceCandidates ??
+        []) {
+        const label = document.createElement("div");
+        label.style.cssText =
+          "width:22px;height:22px;border:3px dashed #e77a12;border-radius:50%;background:white;cursor:pointer";
+        label.setAttribute("aria-label", `Opsi ${point.kind}`);
+        const content = document.createElement("div");
+        content.textContent = `Opsi ${point.kind} · ${point.reason}`;
+        markers.push(
+          new Marker({ element: label })
+            .setLngLat([point.longitude, point.latitude])
+            .setPopup(new Popup().setDOMContent(content))
+            .addTo(instance)
+        );
+      }
+      for (const point of survey.analysis.terminationPlan!
+        .connectionCandidates ?? []) {
+        const label = document.createElement("div");
+        label.style.cssText =
+          "width:22px;height:22px;border:3px dashed #e77a12;border-radius:50%;background:white;cursor:pointer";
+        label.setAttribute(
+          "aria-label",
+          `${point.recommendedKind ? "Opsi closure" : "Potensi sambungan"}: ${point.cableName}`
+        );
+        const content = document.createElement("div");
+        content.textContent = `Ujung ${point.cableName} dekat jalur. ${point.recommendedKind ? "Closure adalah opsi jika kabel ini disambungkan." : "Jenis terminasi belum ditentukan."} Kedekatan tidak memastikan sambungan diperlukan.`;
+        markers.push(
+          new Marker({ element: label })
+            .setLngLat([point.longitude, point.latitude])
+            .setPopup(new Popup().setDOMContent(content))
+            .addTo(instance)
+        );
+      }
       for (const point of survey.analysis.terminationPlan!.points) {
         const label = document.createElement("div");
         label.style.cssText =

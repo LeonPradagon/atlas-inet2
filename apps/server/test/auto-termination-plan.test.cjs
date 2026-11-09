@@ -5,6 +5,7 @@ const { AtlasController } = require("../src/atlas/atlas.controller");
 
 function controller(distance, routingFails = false) {
   const atlas = {
+    cableEndsAlongRoute: async () => [],
     nearbyTerminations: async () => ({ points: [], searchRadiusMeters: 500 }),
     nearestNetwork: async () => ({
       id: "target",
@@ -81,8 +82,8 @@ test("analysis uses demand and reserve to recommend capacity", async () => {
 
 test("nearby existing termination is reused and missing route makes no draft", async () => {
   assert.equal(
-    (await controller(10).analyzeCoordinates(106, -6)).proposal,
-    undefined
+    (await controller(10).analyzeCoordinates(106, -6)).proposal.kind,
+    "ODP"
   );
   const unavailable = await controller(100, true).analyzeCoordinates(106, -6);
   assert.equal(unavailable.status, "ROUTING_UNAVAILABLE");
@@ -142,6 +143,7 @@ test("unverified recorded cable can inform capacity without claiming a free core
     verified: false,
   };
   assert.deepEqual(recommendSourceCable([close]), {
+    availableCount: null,
     coreNumber: null,
     coreNumbers: [],
     id: "1",
@@ -152,6 +154,7 @@ test("unverified recorded cable can inform capacity without claiming a free core
   });
   assert.equal(recommendSourceCable([{ ...close, distanceMeters: 21 }]), null);
   assert.deepEqual(recommendSourceCable([unknown]), {
+    availableCount: null,
     coreNumber: null,
     coreNumbers: [],
     id: "2",
@@ -237,7 +240,7 @@ test("analysis rejects malformed demand before processing", async () => {
   }
 });
 
-test("single address defaults to a visible one-service assumption while explicit needs still work", async () => {
+test("single address leaves demand unknown while explicit needs still work", async () => {
   const instance = controller(1000);
   instance.auth = { requireUser: async () => ({ id: "presales" }) };
   instance.atlas.saveAnalysisHistory = async () => "history-id";
@@ -247,12 +250,7 @@ test("single address defaults to a visible one-service assumption while explicit
     coordinates: { latitude: -6, longitude: 106 },
   };
   const automatic = await instance.analyzeAddress({}, body);
-  assert.deepEqual(automatic.terminationPlan.requirement, {
-    assumed: true,
-    requiredCores: 1,
-    reserve: 0,
-    services: 1,
-  });
+  assert.equal(automatic.terminationPlan.requirement, null);
   assert.equal(automatic.terminationPlan.cables[0].cores, null);
   assert.equal(automatic.terminationPlan.capacityBasis, "SOURCE_UNKNOWN");
   const explicit = await instance.analyzeAddress(
@@ -292,6 +290,10 @@ test("automatic capacity follows recorded sources with explicit verification sta
   assert.equal(result.terminationPlan.cables[0].cores, 24);
   assert.equal(result.terminationPlan.capacityBasis, "VERIFIED_SOURCE");
   assert.equal(result.terminationPlan.sourceCable.totalCores, 24);
+  assert.equal(result.terminationPlan.requirement, null);
+  assert.equal(result.terminationPlan.sourceCable.coreNumber, null);
+  assert.deepEqual(result.terminationPlan.sourceCable.coreNumbers, []);
+  assert.equal(result.terminationPlan.sourceCable.availableCount, 2);
   instance.atlas.nearbyTerminations = async () => ({
     points: [
       {
@@ -328,4 +330,255 @@ test("automatic capacity follows recorded sources with explicit verification sta
   const unsupported = await instance.analyzeAddress({}, body);
   assert.equal(unsupported.terminationPlan.cables[0].cores, null);
   assert.equal(unsupported.terminationPlan.capacityBasis, "SOURCE_UNKNOWN");
+});
+
+test("cable ends recommend closure only as a conditional connection option", async () => {
+  const instance = controller(1000);
+  instance.atlas.cableEndsAlongRoute = async () => [
+    {
+      cableId: "c1",
+      cableName: "Kabel A",
+      distanceMeters: 2,
+      latitude: -6,
+      longitude: 106.007,
+    },
+    {
+      cableId: "c2",
+      cableName: "Kabel B",
+      distanceMeters: 3,
+      latitude: -6,
+      longitude: 106.007_01,
+    },
+    {
+      cableId: "c3",
+      cableName: "Kabel C",
+      distanceMeters: 0,
+      latitude: -6,
+      longitude: 106.005,
+    },
+  ];
+  const result = await instance.analyzeCoordinates(106, -6);
+  assert.equal(result.terminationPlan.connectionCandidates.length, 1);
+  assert.equal(
+    result.terminationPlan.connectionCandidates[0].cableName,
+    "Kabel A"
+  );
+  assert.equal(result.terminationPlan.points.length, 0);
+  assert.equal(
+    result.terminationPlan.connectionCandidates[0].recommendedKind,
+    "Closure"
+  );
+  assert.equal(result.terminationPlan.connectionCandidatesIncomplete, false);
+});
+
+test("analysis reuses the nearest ODP and retains recorded device relations", async () => {
+  const instance = controller(1000);
+  instance.atlas.nearbyTerminations = async () => ({
+    points: [
+      {
+        cables: [],
+        id: "target",
+        name: "ODP A",
+        relatedDevices: [
+          { cableId: "c1", id: "odc", kind: "ODC", name: "ODC A" },
+        ],
+        type: "ODP",
+      },
+    ],
+    searchRadiusMeters: 500,
+  });
+  const result = await instance.analyzeCoordinates(106, -6);
+  assert.equal(result.terminationPlan.deviceRecommendation.kind, "REUSE_ODP");
+  assert.equal(
+    result.terminationPlan.deviceRecommendation.relatedDevices[0].name,
+    "ODC A"
+  );
+  assert.equal(result.proposal, undefined);
+});
+
+test("planner proposes distribution cable to a new ODP and drop from an existing ODP", () => {
+  const {
+    buildTerminationPlan,
+    recommendSourceCable,
+  } = require("../src/atlas/termination-plan");
+  const geometry = {
+    coordinates: [
+      [106, -6],
+      [106.01, -6],
+    ],
+    type: "LineString",
+  };
+  const source = recommendSourceCable([
+    {
+      available: null,
+      distanceMeters: 2,
+      id: "c",
+      name: "Cable",
+      recorded: false,
+      totalCores: 96,
+      verified: false,
+    },
+  ]);
+  const distribution = buildTerminationPlan(
+    "target",
+    geometry,
+    500,
+    undefined,
+    source,
+    "Closure"
+  );
+  assert.equal(distribution.cables[0].type, "Distribusi");
+  assert.equal(distribution.cables[0].cores, 96);
+  assert.equal(distribution.capacityBasis, "UNVERIFIED_SOURCE");
+  assert.equal(
+    buildTerminationPlan("target", geometry, 500, undefined, source, "ODP")
+      .cables[0].type,
+    "Drop"
+  );
+});
+
+test("planning identifies all supported network asset types without requiring verification", async () => {
+  for (const type of ["OLT", "OTB", "ODP", "ODC", "Closure", "Slack / Coil"]) {
+    const instance = controller(1000);
+    instance.atlas.nearbyTerminations = async () => ({
+      points: [
+        {
+          cables: [
+            {
+              available: null,
+              id: "c",
+              name: "Cable",
+              recorded: true,
+              totalCores: 24,
+              verified: false,
+            },
+          ],
+          id: "target",
+          name: `${type} A`,
+          relatedDevices: [],
+          type,
+        },
+      ],
+      searchRadiusMeters: 500,
+    });
+    const result = await instance.analyzeCoordinates(106, -6);
+    assert.equal(result.terminationPlan.upstreamRecommendation.type, type);
+    assert.equal(
+      result.terminationPlan.upstreamRecommendation.recordedCables,
+      1
+    );
+    assert.equal(result.terminationPlan.cables[0].cores, 24);
+    assert.equal(
+      result.terminationPlan.cables[0].type,
+      type === "ODP" ? "Drop" : "Distribusi"
+    );
+    assert.equal(result.proposal?.kind, type === "ODP" ? undefined : "ODP");
+  }
+});
+
+test("device candidates use mapped evidence, suppress existing devices and avoid incomplete data", () => {
+  const {
+    recommendDeviceCandidates,
+  } = require("../src/atlas/termination-plan");
+  const point = (type, longitude) => ({
+    latitude: 0,
+    longitude,
+    name: type,
+    type,
+  });
+  const evidence = [
+    point("POP", 0.001),
+    point("OLT", 0.003),
+    point("Closure", 0.005),
+  ];
+  const ends = [
+    { cableId: "a", cableName: "A", latitude: 0, longitude: 0.007 },
+    { cableId: "b", cableName: "B", latitude: 0, longitude: 0.007_01 },
+  ];
+  const candidates = recommendDeviceCandidates(evidence, ends, false);
+  assert.deepEqual(
+    candidates.map((item) => item.kind).sort(),
+    ["ODC", "OLT", "OTB", "Slack / Coil"].sort()
+  );
+  assert.ok(
+    candidates.every(
+      (item) => item.reason.includes("Opsi") || item.reason.includes("opsi")
+    )
+  );
+  assert.deepEqual(recommendDeviceCandidates([], [], false), []);
+  assert.deepEqual(recommendDeviceCandidates(evidence, ends, true), []);
+  assert.ok(
+    !recommendDeviceCandidates(
+      [...evidence, point("OTB", 0.003_01)],
+      ends,
+      false
+    ).some((item) => item.kind === "OTB")
+  );
+  assert.ok(
+    !recommendDeviceCandidates([], [ends[0], { ...ends[0] }], false).some(
+      (item) => item.kind === "ODC"
+    )
+  );
+});
+
+test("device suggestions are placed on the route and exclude its endpoints", () => {
+  const { placeAlongRoute } = require("../src/atlas/termination-plan");
+  const route = {
+    coordinates: [
+      [0, 0],
+      [0.005, 0],
+      [0.005, 0.005],
+    ],
+    type: "LineString",
+  };
+  const points = [
+    { kind: "OTB", latitude: 0.000_05, longitude: 0.002 },
+    { kind: "ODC", latitude: 0.003, longitude: 0.005_05 },
+    { kind: "Slack / Coil", latitude: 0.005, longitude: 0.005 },
+  ];
+  const result = placeAlongRoute(points, route);
+  assert.equal(result.length, 2);
+  assert.equal(result[0].latitude, 0);
+  assert.equal(result[1].longitude, 0.005);
+  assert.ok(result[0].distanceToEvidenceMeters > 5);
+  assert.deepEqual(
+    placeAlongRoute(points, { coordinates: [[0, 0]], type: "LineString" }),
+    []
+  );
+});
+
+test("initial slack suggestion follows route midpoint without inventing a splice", () => {
+  const { initialSlackCandidate } = require("../src/atlas/termination-plan");
+  const route = {
+    coordinates: [
+      [0, 0],
+      [0.004, 0],
+      [0.004, 0.002],
+    ],
+    type: "LineString",
+  };
+  const candidate = initialSlackCandidate(route, []);
+  assert.equal(candidate.kind, "Slack / Coil");
+  assert.equal(candidate.basis, "PLANNING");
+  assert.ok(Math.abs(candidate.longitude - 0.003) < 0.000_01);
+  assert.equal(candidate.latitude, 0);
+  assert.equal(
+    initialSlackCandidate(route, [
+      { latitude: 0, longitude: 0.003, type: "Slack / Coil" },
+    ]),
+    null
+  );
+  assert.equal(
+    initialSlackCandidate(
+      {
+        coordinates: [
+          [0, 0],
+          [0.0001, 0],
+        ],
+        type: "LineString",
+      },
+      []
+    ),
+    null
+  );
 });

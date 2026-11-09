@@ -268,33 +268,29 @@ export class AtlasService {
         });
       }
       const {
+        deviceCandidates: _clientDeviceCandidates,
+        upstreamRecommendation: _clientUpstreamRecommendation,
+        deviceRecommendation: _clientDeviceRecommendation,
         sourceCable: _clientSourceCable,
+        connectionCandidates: _clientConnectionCandidates,
+        connectionCandidatesIncomplete: _clientConnectionCandidatesIncomplete,
         routeEvidence: _clientRouteEvidence,
         routeEvidenceIncomplete: _clientRouteEvidenceIncomplete,
         requirement: _clientRequirement,
         ...validatedPlan
       } = value as typeof value & {
+        deviceCandidates?: unknown;
+        upstreamRecommendation?: unknown;
+        deviceRecommendation?: unknown;
         sourceCable?: unknown;
+        connectionCandidates?: unknown;
+        connectionCandidatesIncomplete?: unknown;
         routeEvidence?: unknown;
         routeEvidenceIncomplete?: unknown;
         requirement?: unknown;
       };
       const savedPlan = candidate.analysis.terminationPlan;
-      candidate.analysis.terminationPlan =
-        savedPlan && savedPlan.requirement
-          ? savedPlan
-          : {
-              ...validatedPlan,
-              ...(savedPlan && "sourceCable" in savedPlan
-                ? { sourceCable: savedPlan.sourceCable }
-                : {}),
-              ...(savedPlan && "routeEvidence" in savedPlan
-                ? { routeEvidence: savedPlan.routeEvidence }
-                : {}),
-              ...(savedPlan && "routeEvidenceIncomplete" in savedPlan
-                ? { routeEvidenceIncomplete: savedPlan.routeEvidenceIncomplete }
-                : {}),
-            };
+      candidate.analysis.terminationPlan = savedPlan ?? validatedPlan;
     }
     return this.db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
@@ -2082,9 +2078,17 @@ export class AtlasService {
     latitude: number,
     allowExpand2km = false
   ) {
-    const { rows } = await this.db.query(
+    const { rows } = await this.db.query<{
+      id: string;
+      name: string;
+      type: string;
+      attributes: Record<string, unknown>;
+      longitude: number;
+      latitude: number;
+      distance: number;
+    }>(
       `WITH points AS (
-        SELECT a.id, a.name, a.geometry,
+        SELECT a.id, a.name, a.geometry, a.attributes,
           CASE
             WHEN label ~ '(^|[^a-z0-9])olt([^a-z0-9]|$)' THEN 'OLT'
             WHEN label ~ '(^|[^a-z0-9])otb([^a-z0-9]|$)' THEN 'OTB'
@@ -2102,7 +2106,7 @@ export class AtlasService {
         FROM points WHERE type IS NOT NULL
           AND ST_DWithin(geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,$3)
       )
-      SELECT id,name,type,ST_X(geometry) AS longitude,ST_Y(geometry) AS latitude,distance
+      SELECT id,name,type,attributes,ST_X(geometry) AS longitude,ST_Y(geometry) AS latitude,distance
       FROM selected ORDER BY distance,id`,
       [longitude, latitude, allowExpand2km ? 2000 : 1000]
     );
@@ -2129,6 +2133,14 @@ export class AtlasService {
         AND GeometryType(c.geometry) IN ('LINESTRING','MULTILINESTRING')
         AND (ST_DWithin(p.geometry::geography,c.geometry::geography,20) OR EXISTS(SELECT 1 FROM network_asset_relations r WHERE r.asset_id=p.id AND r.segment_id=c.id))
       WHERE p.id=ANY($1::text[]) ORDER BY p.id,recorded DESC,"distanceMeters",c.id`,
+      [points.map((point) => point.id)]
+    );
+    const { rows: related } = await this.db.query(
+      `SELECT DISTINCT origin.asset_id AS "pointId", other.asset_id AS id, a.name, other.kind, origin.segment_id AS "cableId"
+       FROM network_asset_relations origin
+       JOIN network_asset_relations other ON other.segment_id=origin.segment_id AND other.asset_id<>origin.asset_id
+       JOIN network_assets a ON a.id=other.asset_id
+       WHERE origin.asset_id=ANY($1::text[]) ORDER BY origin.asset_id,a.name,other.asset_id`,
       [points.map((point) => point.id)]
     );
     // Endpoint candidates must include terminations outside the search radius.
@@ -2162,16 +2174,28 @@ export class AtlasService {
                 (end) => end.id === cable.id && end.side === "start"
               ) ?? null,
           })),
+        relatedDevices: related
+          .filter((device) => device.pointId === point.id)
+          .map(({ pointId, ...device }) => device),
       })),
       searchRadiusMeters: radius,
     };
   }
 
   async terminationsAlongRoute(geometry: unknown) {
-    const { rows } = await this.db.query(
+    const { rows } = await this.db.query<{
+      id: string;
+      name: string;
+      type: string;
+      longitude: number;
+      latitude: number;
+      distanceToRouteMeters: number;
+      recordedCables: number;
+    }>(
       `WITH route AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON($1),4326) AS geom), points AS (
         SELECT a.id,a.name,a.geometry,
           CASE
+            WHEN label ~ '(^|[^a-z0-9])pop([^a-z0-9]|$)' THEN 'POP'
             WHEN label ~ '(^|[^a-z0-9])olt([^a-z0-9]|$)' THEN 'OLT'
             WHEN label ~ '(^|[^a-z0-9])otb([^a-z0-9]|$)' THEN 'OTB'
             WHEN label ~ '(^|[^a-z0-9])odc([^a-z0-9]|$)' THEN 'ODC'
@@ -2189,6 +2213,39 @@ export class AtlasService {
       FROM points p CROSS JOIN route r
       WHERE p.type IS NOT NULL AND ST_DWithin(p.geometry::geography,r.geom::geography,20)
       ORDER BY ST_LineLocatePoint(r.geom,p.geometry),p.id LIMIT 100`,
+      [JSON.stringify(geometry)]
+    );
+    return rows;
+  }
+
+  async cableEndsAlongRoute(geometry: unknown) {
+    const { rows } = await this.db.query<{
+      cableId: string;
+      cableName: string;
+      longitude: number;
+      latitude: number;
+      distanceMeters: number;
+    }>(
+      `WITH route AS (SELECT ST_SetSRID(ST_GeomFromGeoJSON($1),4326) AS geom),
+      ends AS (
+        SELECT a.id,a.name,ST_StartPoint(part.geom) AS point
+        FROM network_assets a CROSS JOIN route r CROSS JOIN LATERAL ST_Dump(ST_CollectionExtract(a.geometry,2)) part
+        WHERE a.asset_type='segment' AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
+          AND ST_DWithin(a.geometry::geography,r.geom::geography,10)
+        UNION ALL
+        SELECT a.id,a.name,ST_EndPoint(part.geom) AS point
+        FROM network_assets a CROSS JOIN route r CROSS JOIN LATERAL ST_Dump(ST_CollectionExtract(a.geometry,2)) part
+        WHERE a.asset_type='segment' AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
+          AND ST_DWithin(a.geometry::geography,r.geom::geography,10)
+      )
+      SELECT e.id AS "cableId",e.name AS "cableName",
+        ST_X(e.point) AS longitude,ST_Y(e.point) AS latitude,
+        ST_Distance(e.point::geography,r.geom::geography) AS "distanceMeters"
+      FROM ends e CROSS JOIN route r
+      WHERE e.point IS NOT NULL AND ST_DWithin(e.point::geography,r.geom::geography,10)
+        AND NOT ST_DWithin(e.point::geography,ST_StartPoint(r.geom)::geography,20)
+        AND NOT ST_DWithin(e.point::geography,ST_EndPoint(r.geom)::geography,20)
+      ORDER BY ST_LineLocatePoint(r.geom,e.point),e.id LIMIT 100`,
       [JSON.stringify(geometry)]
     );
     return rows;

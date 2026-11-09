@@ -10,6 +10,7 @@ import {
   NearestNetworkMap,
   type NetworkSearchResult,
 } from "./NearestNetworkMap";
+import { describeSourceCable } from "./terminationPlan";
 
 type Survey = {
   id: string;
@@ -341,6 +342,26 @@ export function SurveysPage() {
                     </li>
                   ))}
                 </ol>
+                {selected.analysis.terminationPlan.upstreamRecommendation && (
+                  <div>
+                    Terminasi sumber:{" "}
+                    {
+                      selected.analysis.terminationPlan.upstreamRecommendation
+                        .type
+                    }{" "}
+                    ·{" "}
+                    {
+                      selected.analysis.terminationPlan.upstreamRecommendation
+                        .name
+                    }{" "}
+                    ·{" "}
+                    {
+                      selected.analysis.terminationPlan.upstreamRecommendation
+                        .recordedCables
+                    }{" "}
+                    relasi kabel tercatat.
+                  </div>
+                )}
                 {selected.analysis.terminationPlan.routeEvidence && (
                   <div>
                     Aset terdata dekat jalur:{" "}
@@ -359,6 +380,28 @@ export function SurveysPage() {
                       " Data aset di sepanjang jalur belum lengkap."}
                   </div>
                 )}
+                {selected.analysis.terminationPlan.deviceCandidates?.map(
+                  (point) => (
+                    <div
+                      key={`${point.kind}-${point.latitude}-${point.longitude}`}
+                    >
+                      Opsi {point.kind}: {point.reason}
+                    </div>
+                  )
+                )}
+                {selected.analysis.terminationPlan.connectionCandidates?.map(
+                  (point) => (
+                    <div
+                      key={`${point.cableId}-${point.longitude}-${point.latitude}`}
+                    >
+                      Potensi sambungan: ujung {point.cableName} ·{" "}
+                      {point.recommendedKind
+                        ? "opsi closure jika kabel disambungkan"
+                        : "jenis terminasi belum ditentukan"}
+                      ; kedekatan tidak memastikan sambungan diperlukan.
+                    </div>
+                  )
+                )}
                 {selected.analysis.terminationPlan.cables.map(
                   (cable, index) => (
                     <div key={JSON.stringify(cable.geometry)}>
@@ -373,10 +416,7 @@ export function SurveysPage() {
                 <small>
                   Tujuan: {selected.analysis.network?.name}. Kabel eksisting di
                   tujuan:{" "}
-                  {selected.analysis.terminationPlan.sourceCable
-                    ? `${selected.analysis.terminationPlan.sourceCable.name} · ${selected.analysis.terminationPlan.sourceCable.recorded === false ? "kandidat dekat tujuan, relasi belum tercatat · " : ""}${selected.analysis.terminationPlan.sourceCable.verified === false ? "pemakaian core belum terverifikasi" : `core ${(selected.analysis.terminationPlan.sourceCable.coreNumbers ?? [selected.analysis.terminationPlan.sourceCable.coreNumber]).join(", ")} (belum dibooking)`}`
-                    : "belum dapat ditentukan; perlu verifikasi relasi dan core"}
-                  .{" "}
+                  {describeSourceCable(selected.analysis.terminationPlan)}.{" "}
                   {selected.analysis.terminationPlan.capacityBasis ===
                   "VERIFIED_SOURCE"
                     ? "Kapasitas mengikuti kabel sumber terverifikasi; kebutuhan aktual belum diketahui. "
@@ -387,9 +427,10 @@ export function SurveysPage() {
                           "SOURCE_UNKNOWN"
                         ? "Kapasitas kabel belum dapat ditentukan dari data sumber. "
                         : ""}
-                  {selected.analysis.terminationPlan.requirement
-                    ? `${selected.analysis.terminationPlan.requirement.assumed ? "Asumsi otomatis: " : "Kebutuhan: "}${selected.analysis.terminationPlan.requirement.services} layanan + ${selected.analysis.terminationPlan.requirement.reserve} core cadangan = ${selected.analysis.terminationPlan.requirement.requiredCores} core (1 core per layanan; kebutuhan aktual belum diketahui).`
-                    : "Kebutuhan core belum diisi."}{" "}
+                  {selected.analysis.terminationPlan.requirement &&
+                  !selected.analysis.terminationPlan.requirement.assumed
+                    ? `Kebutuhan: ${selected.analysis.terminationPlan.requirement.services} layanan + ${selected.analysis.terminationPlan.requirement.reserve} core cadangan = ${selected.analysis.terminationPlan.requirement.requiredCores} core (1 core per layanan; kebutuhan aktual belum diketahui).`
+                    : "Kebutuhan core belum diketahui dari data analisis."}{" "}
                   Periksa spesifikasi kabel, sambungan, dan jalur saat survei.
                 </small>
               </section>

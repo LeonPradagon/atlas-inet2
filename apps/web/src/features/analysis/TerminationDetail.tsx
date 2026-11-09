@@ -7,6 +7,12 @@ export type TerminationResults = {
     latitude: number;
     longitude: number;
     distance: number;
+    relatedDevices?: {
+      id: string;
+      name: string;
+      kind: string;
+      cableId: string;
+    }[];
     cables: {
       id: string;
       name: string;
@@ -78,6 +84,14 @@ export function TerminationDetail({ data }: { data?: TerminationResults }) {
           <small className="text-secondary d-block">
             Koordinat: {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}
           </small>
+          {point.relatedDevices && point.relatedDevices.length > 0 && (
+            <div className="small">
+              Perangkat melalui kabel tercatat:{" "}
+              {point.relatedDevices
+                .map((device) => `${device.name} (${device.kind})`)
+                .join(", ")}
+            </div>
+          )}
           {point.cables.length === 0 && (
             <small>Belum ada kabel tercatat atau kandidat dalam 20 m.</small>
           )}

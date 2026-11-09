@@ -94,6 +94,25 @@ async function main() {
     console.log(
       "PASS: route evidence uses existing nearby devices and recorded cable relations"
     );
+    await q(`INSERT INTO network_assets(id,name,asset_type,source,geometry,attributes) VALUES
+      ('test-pop','POP A','asset','kml',ST_SetSRID(ST_MakePoint(0.0005,0.00002),4326),'{}')`);
+    const routeWithPop = await atlas.terminationsAlongRoute({ type: "LineString", coordinates: [[0,0], [0.001,0]] });
+    assert.equal(routeWithPop.find((point) => point.id === 'test-pop').type, 'POP');
+    await q("DELETE FROM network_assets WHERE id='test-pop'");
+    console.log("PASS: POP evidence is read from the network map");
+    await q(`INSERT INTO network_assets(id,name,asset_type,source,total_cores,geometry,attributes) VALUES
+      ('candidate-end','Kabel kandidat','segment','kml',12,ST_GeomFromText('LINESTRING(0.0005 0.00003,0.0005 0.001)',4326),'{}')`);
+    const cableEnds = await atlas.cableEndsAlongRoute({ type: "LineString", coordinates: [[0, 0], [0.001, 0]] });
+    assert.equal(cableEnds.length, 1);
+    assert.equal(cableEnds[0].cableId, "candidate-end");
+    await q("DELETE FROM network_assets WHERE id='candidate-end'");
+    console.log("PASS: cable-end evidence uses real segment geometry");
+    await q("INSERT INTO network_asset_relations(segment_id,asset_id,kind) VALUES('cable-a','term-b','ODP')");
+    const withRelation = await atlas.nearbyTerminations(0, 0);
+    const odpWithRelation = withRelation.points.find((point) => point.id === "term-b");
+    assert.equal(odpWithRelation.relatedDevices[0].id, "term-a");
+    await q("DELETE FROM network_asset_relations WHERE segment_id='cable-a' AND asset_id='term-b'");
+    console.log("PASS: recorded device relations through shared cable");
     const found = await atlas.nearbyTerminations(0, 0);
     assert.equal(found.searchRadiusMeters, 500);
     assert.deepEqual(
