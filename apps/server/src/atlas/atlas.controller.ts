@@ -26,6 +26,11 @@ import { RoutingService } from "../geospatial/routing.service";
 import { NetworkImportService } from "../network/network-import.service";
 import { AtlasService } from "./atlas.service";
 import { BulkAnalysisService } from "./bulk-analysis.service";
+import {
+  buildTerminationPlan,
+  type CoreRequirement,
+  recommendSourceCable,
+} from "./termination-plan";
 
 function queryValues(query: Record<string, unknown>, key: string) {
   const value = query[key];
@@ -555,9 +560,32 @@ export class AtlasController {
       };
       coordinateConfirmed?: boolean;
       allowExpand2km?: boolean;
+      coreRequirement?: CoreRequirement;
     }
   ) {
     const user = await this.auth.requireUser(req);
+    const suppliedRequirement = body.coreRequirement;
+    if (
+      suppliedRequirement !== undefined &&
+      (!suppliedRequirement ||
+        !Number.isInteger(suppliedRequirement.services) ||
+        suppliedRequirement.services < 1 ||
+        !Number.isInteger(suppliedRequirement.reserve) ||
+        suppliedRequirement.reserve < 0 ||
+        suppliedRequirement.services + suppliedRequirement.reserve > 4096)
+    ) {
+      throw new BadRequestException({
+        message:
+          "Kebutuhan layanan, cadangan, atau kapasitas kabel tidak valid.",
+      });
+    }
+    const requirement: CoreRequirement = suppliedRequirement
+      ? {
+          assumed: false,
+          reserve: suppliedRequirement.reserve,
+          services: suppliedRequirement.services,
+        }
+      : { assumed: true, reserve: 0, services: 1 };
     if (!body.address?.trim()) {
       throw new BadRequestException({ message: "Alamat wajib diisi." });
     }
@@ -595,7 +623,8 @@ export class AtlasController {
         provider,
         matchQuality,
         matchedStreet,
-        body.allowExpand2km === true
+        body.allowExpand2km === true,
+        requirement
       );
       const historyId = await this.atlas.saveAnalysisHistory(
         user.id,
@@ -605,6 +634,7 @@ export class AtlasController {
           address: body.address,
           coordinateConfirmed: true,
           coordinates: body.coordinates,
+          coreRequirement: requirement,
           structured: body.structured,
         },
         result
@@ -621,13 +651,18 @@ export class AtlasController {
         result.provider,
         result.matchQuality,
         result.matchedStreet,
-        body.allowExpand2km === true
+        body.allowExpand2km === true,
+        requirement
       );
       const historyId = await this.atlas.saveAnalysisHistory(
         user.id,
         "ADDRESS",
         body.address.trim(),
-        { address: body.address, structured: body.structured },
+        {
+          address: body.address,
+          coreRequirement: requirement,
+          structured: body.structured,
+        },
         analysis
       );
       return { ...analysis, historyId };
@@ -868,13 +903,20 @@ export class AtlasController {
   @Post("surveys")
   async createSurvey(
     @Req() req: IncomingMessage,
-    @Body() body: { historyId?: string; rowNumber?: number }
+    @Body() body: {
+      historyId?: string;
+      rowNumber?: number;
+      proposal?: unknown;
+      plan?: unknown;
+    }
   ) {
     const user = await this.auth.requireUser(req);
     return this.atlas.createSurvey(
       user.id,
       String(body.historyId ?? ""),
-      Number(body.rowNumber ?? 0)
+      Number(body.rowNumber ?? 0),
+      body.proposal,
+      body.plan
     );
   }
 
@@ -919,7 +961,8 @@ export class AtlasController {
     geocodingProvider?: "photon" | "nominatim" | "manual",
     geocodingMatch?: "approximate",
     matchedStreet?: string,
-    allowExpand2km = false
+    allowExpand2km = false,
+    coreRequirement?: CoreRequirement
   ) {
     if (
       !(Number.isFinite(longitude) && Number.isFinite(latitude)) ||
@@ -929,6 +972,11 @@ export class AtlasController {
       throw new BadRequestException({ message: "Koordinat tidak valid." });
     }
     const nearest = await this.atlas.nearestNetwork(
+      longitude,
+      latitude,
+      allowExpand2km
+    );
+    const terminations = await this.atlas.nearbyTerminations(
       longitude,
       latitude,
       allowExpand2km
@@ -946,6 +994,7 @@ export class AtlasController {
         network: null,
         searchRadiusMeters: allowExpand2km ? 2000 : 1000,
         status: "NETWORK_NOT_FOUND",
+        terminations,
       };
     }
     const target = nearest.nearestPoint?.coordinates as
@@ -962,6 +1011,7 @@ export class AtlasController {
         matchedStreet,
         network: nearest,
         status: "NETWORK_NOT_FOUND",
+        terminations,
       };
     }
     try {
@@ -969,6 +1019,56 @@ export class AtlasController {
         [longitude, latitude],
         target,
       ]);
+      let routeEvidence: Awaited<
+        ReturnType<AtlasService["terminationsAlongRoute"]>
+      > = [];
+      let routeEvidenceIncomplete = false;
+      try {
+        routeEvidence = await this.atlas.terminationsAlongRoute(route.geometry);
+        routeEvidenceIncomplete = routeEvidence.length >= 100;
+      } catch {
+        routeEvidenceIncomplete = true;
+      }
+      const nearExisting = nearest.straightDistanceMeters <= 20;
+      const sourceCable = coreRequirement
+        ? recommendSourceCable(
+            (
+              terminations.points as unknown as {
+                id: string;
+                cables: {
+                  id: string;
+                  name: string;
+                  recorded: boolean;
+                  verified: boolean;
+                  available: number[] | null;
+                  totalCores: number;
+                }[];
+              }[]
+            ).find((point) => point.id === nearest.id)?.cables ?? [],
+            coreRequirement.services + coreRequirement.reserve
+          )
+        : null;
+      const calculatedPlan = buildTerminationPlan(
+        nearest.id,
+        route.geometry,
+        route.distanceMeters,
+        coreRequirement,
+        sourceCable
+      );
+      const proposal = nearExisting
+        ? undefined
+        : {
+            cores: calculatedPlan.cables[0].cores,
+            kind: "ODP",
+            latitude,
+            longitude,
+          };
+      const terminationPlan = {
+        ...calculatedPlan,
+        routeEvidence,
+        routeEvidenceIncomplete,
+        sourceCable,
+      };
       return {
         address,
         distanceMeters: route.distanceMeters,
@@ -978,8 +1078,11 @@ export class AtlasController {
         longitude,
         matchedStreet,
         network: nearest,
+        proposal,
         routeGeometry: route.geometry,
         status: "OK",
+        terminationPlan,
+        terminations,
       };
     } catch {
       return {
@@ -994,6 +1097,7 @@ export class AtlasController {
           "Rute jalan belum tersedia; jarak penarikan tidak ditampilkan.",
         network: nearest,
         status: "ROUTING_UNAVAILABLE",
+        terminations,
       };
     }
   }

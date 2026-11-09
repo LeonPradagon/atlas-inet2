@@ -52,6 +52,102 @@ async function main() {
     const bookings = new BookingService(db);
     const atlas = new AtlasService(db, bookings);
     const q = (sql, values) => db.query(sql, values);
+    await q(`INSERT INTO audit_logs(action,entity_type,entity_id,details) VALUES
+      ('NETWORK_IMPORTED','NETWORK_IMPORT','import-active','{"fileName":"active.kmz"}'),
+      ('NETWORK_IMPORTED','NETWORK_IMPORT','import-empty','{"fileName":"deleted.kmz"}')`);
+    await q(`INSERT INTO network_assets(id,name,asset_type,source,attributes) VALUES
+      ('imported-asset','Imported','asset','kml','{"__atlasImportId":"import-active","Company":"THC"}')`);
+    const imports = await atlas.listAssetImports();
+    assert.deepEqual(
+      imports.map((item) => item.id),
+      ["import-active"]
+    );
+    assert.deepEqual(imports[0].companies, ["THC"]);
+    console.log("PASS: map imports exclude empty packages and retain company");
+    await q(`INSERT INTO network_assets(id,name,asset_type,source,total_cores,geometry,attributes) VALUES
+      ('term-a','ODC A','asset','kml',0,ST_SetSRID(ST_MakePoint(0,0),4326),'{}'),
+      ('term-b','ODP B','asset','kml',0,ST_SetSRID(ST_MakePoint(0.001,0),4326),'{}'),
+      ('term-far','Closure C','asset','kml',0,ST_SetSRID(ST_MakePoint(0.006,0),4326),'{}'),
+      ('term-non','Tiang','asset','kml',0,ST_SetSRID(ST_MakePoint(0.00001,0),4326),'{}'),
+      ('cable-a','Kabel A','segment','managed',3,ST_GeomFromText('LINESTRING(0 0,0.001 0)',4326),'{}'),
+      ('cable-b','Kabel B','segment','kml',1,ST_GeomFromText('LINESTRING(0 0,0.002 0)',4326),'{}')`);
+    await q(`INSERT INTO network_cores(asset_id,core_number,status) VALUES
+      ('cable-a',1,'Used'),('cable-a',2,'Booked'),('cable-a',3,'Available'),('cable-b',1,'Available')`);
+    await q(
+      "INSERT INTO network_asset_relations(segment_id,asset_id,kind) VALUES('cable-a','term-a','ODC')"
+    );
+    const along = await atlas.terminationsAlongRoute({
+      coordinates: [
+        [0, 0],
+        [0.001, 0],
+      ],
+      type: "LineString",
+    });
+    assert.deepEqual(
+      along.map((p) => p.id),
+      ["term-a", "term-b"]
+    );
+    assert.equal(along[0].type, "ODC");
+    assert.equal(along[0].recordedCables, 1);
+    assert.equal(along[1].type, "ODP");
+    assert.equal(along[1].recordedCables, 0);
+    console.log(
+      "PASS: route evidence uses existing nearby devices and recorded cable relations"
+    );
+    const found = await atlas.nearbyTerminations(0, 0);
+    assert.equal(found.searchRadiusMeters, 500);
+    assert.deepEqual(
+      found.points.map((p) => p.id),
+      ["term-a", "term-b"]
+    );
+    const recorded = found.points[0].cables.find((c) => c.id === "cable-a");
+    assert.equal(recorded.recorded, true);
+    assert.deepEqual(recorded.available, [3]);
+    assert.equal(recorded.used, 1);
+    assert.deepEqual(recorded.usedNumbers, [1]);
+    assert.deepEqual(recorded.bookedNumbers, [2]);
+    assert.equal(recorded.booked, 1);
+    assert.equal(recorded.start.pointId, "term-a");
+    assert.equal(recorded.end.pointId, "term-b");
+    const candidate = found.points[0].cables.find((c) => c.id === "cable-b");
+    assert.equal(candidate.recorded, false);
+    assert.equal(candidate.available, null);
+    assert.equal(candidate.end, null);
+    await q(
+      `INSERT INTO network_assets(id,name,asset_type,source,total_cores,geometry) VALUES ('near-unverified-source','Kabel 24C','segment','kml',24,ST_GeomFromText('LINESTRING(0 0,0.001 0)',4326))`
+    );
+    await q(
+      `INSERT INTO network_cores(asset_id,core_number) SELECT 'near-unverified-source', generate_series(1,24)`
+    );
+    const unverifiedTarget = (await atlas.nearbyTerminations(0, 0)).points.find(
+      (p) => p.id === "term-a"
+    );
+    const { recommendSourceCable } = require("../dist/atlas/termination-plan");
+    const sourceCandidate = recommendSourceCable(unverifiedTarget.cables, 1);
+    assert.equal(sourceCandidate.id, "near-unverified-source");
+    assert.equal(sourceCandidate.totalCores, 24);
+    assert.equal(sourceCandidate.verified, false);
+    assert.equal(sourceCandidate.recorded, false);
+    assert.equal(sourceCandidate.coreNumber, null);
+    console.log(
+      "PASS: nearby unverified cable provides capacity without claiming an available core"
+    );
+    assert.equal(
+      (await atlas.nearbyTerminations(0.01, 0)).searchRadiusMeters,
+      500
+    );
+    assert.equal(
+      (await atlas.nearbyTerminations(0.015, 0)).searchRadiusMeters,
+      1000
+    );
+    assert.equal(
+      (await atlas.nearbyTerminations(0.025, 0, true)).searchRadiusMeters,
+      2000
+    );
+    assert.equal((await atlas.nearbyTerminations(10, 10)).points.length, 0);
+    console.log(
+      "PASS: nearby terminations, cables, verified cores, endpoints and radius"
+    );
     const savedDesign = await atlas.saveFtthDesign(
       [
         {
@@ -403,13 +499,219 @@ async function main() {
       await atlas.updateAsset(id, { totalCores: 2 }, "admin");
     }
     await atlas.verifyCoreUsage("far-verified", "Survei lapangan", "", "admin");
-    assert.equal(
-      (await atlas.nearestNetwork(110, -7.005)).id,
-      "far-verified",
-      "a verified segment with idle cores outranks a closer unverified one"
-    );
+    await q(`INSERT INTO network_assets(id,name,asset_type,source,geometry) VALUES
+      ('near-point','ODP Terdekat','asset','kml',ST_SetSRID(ST_MakePoint(110.001,-7.005),4326)),
+      ('far-point','ODC Jauh','asset','kml',ST_SetSRID(ST_MakePoint(110.003,-7.005),4326))`);
+    assert.equal((await atlas.nearestNetwork(110, -7.005)).id, "near-point");
     console.log(
-      "PASS: nearest network prefers segments whose core usage is verified"
+      "PASS: nearest analysis selects the nearest termination rather than a cable"
+    );
+    const proposalHistory = await atlas.saveAnalysisHistory(
+      "presales",
+      "ADDRESS",
+      "Test proposal",
+      {},
+      { latitude: -7.005, longitude: 110, network: { id: "near-point" } }
+    );
+    await assert.rejects(() =>
+      atlas.createSurvey("presales", proposalHistory, 0, {
+        cores: 0,
+        kind: "ODP",
+        latitude: -7.005,
+        longitude: 110,
+      })
+    );
+    const createdSurvey = await atlas.createSurvey(
+      "presales",
+      proposalHistory,
+      0,
+      { cores: 24, kind: "ODP", latitude: -7.005, longitude: 110 }
+    );
+    const savedSurvey = await q(
+      "SELECT analysis FROM network_surveys WHERE id=$1",
+      [createdSurvey.id]
+    );
+    assert.deepEqual(savedSurvey.rows[0].analysis.proposal, {
+      cores: 24,
+      kind: "ODP",
+      latitude: -7.005,
+      longitude: 110,
+    });
+    assert.equal(
+      (
+        await q(
+          "SELECT count(*)::int AS n FROM network_assets WHERE attributes->>'surveyId'=$1",
+          [createdSurvey.id]
+        )
+      ).rows[0].n,
+      0
+    );
+    const planHistory = await atlas.saveAnalysisHistory(
+      "admin",
+      "ADDRESS",
+      "Rencana",
+      {},
+      { latitude: -7.005, longitude: 110, network: { id: "near-point" } }
+    );
+    const plan = {
+      cables: [
+        {
+          cores: null,
+          distanceMeters: 55,
+          geometry: {
+            coordinates: [
+              [110, -7.005],
+              [110.0005, -7.005],
+            ],
+            type: "LineString",
+          },
+          type: "Drop",
+        },
+        {
+          cores: 24,
+          distanceMeters: 55,
+          geometry: {
+            coordinates: [
+              [110.0005, -7.005],
+              [110.001, -7.005],
+            ],
+            type: "LineString",
+          },
+          type: "Distribusi",
+        },
+      ],
+      points: [{ kind: "ODP", latitude: -7.005, longitude: 110.0005 }],
+      targetId: "near-point",
+    };
+    await assert.rejects(() =>
+      atlas.createSurvey("admin", planHistory, 0, undefined, {
+        ...plan,
+        targetId: "wrong",
+      })
+    );
+    await assert.rejects(() =>
+      atlas.createSurvey("admin", planHistory, 0, undefined, {
+        ...plan,
+        cables: plan.cables.slice(1),
+      })
+    );
+    const plannedSurvey = await atlas.createSurvey(
+      "admin",
+      planHistory,
+      0,
+      undefined,
+      plan
+    );
+    const plannedResult = await q(
+      "SELECT analysis FROM network_surveys WHERE id=$1",
+      [plannedSurvey.id]
+    );
+    assert.deepEqual(plannedResult.rows[0].analysis.terminationPlan, plan);
+    const canonicalSource = { coreNumber: 3, id: "cable-a", name: "Kabel A" };
+    const sourceHistory = await atlas.saveAnalysisHistory(
+      "admin",
+      "ADDRESS",
+      "Rencana sumber",
+      {},
+      {
+        latitude: -7.006,
+        longitude: 110,
+        network: { id: "near-point" },
+        terminationPlan: {
+          ...plan,
+          routeEvidence: [{ id: "term-a", type: "ODC" }],
+          routeEvidenceIncomplete: false,
+          sourceCable: canonicalSource,
+        },
+      }
+    );
+    const sourceSurvey = await atlas.createSurvey(
+      "admin",
+      sourceHistory,
+      0,
+      undefined,
+      {
+        ...plan,
+        routeEvidence: [{ id: "fake" }],
+        routeEvidenceIncomplete: true,
+        sourceCable: { coreNumber: 99, id: "fake", name: "fake" },
+      }
+    );
+    const sourceResult = await q(
+      "SELECT analysis FROM network_surveys WHERE id=$1",
+      [sourceSurvey.id]
+    );
+    assert.deepEqual(
+      sourceResult.rows[0].analysis.terminationPlan.sourceCable,
+      canonicalSource
+    );
+    assert.deepEqual(
+      sourceResult.rows[0].analysis.terminationPlan.routeEvidence,
+      [{ id: "term-a", type: "ODC" }]
+    );
+    assert.equal(
+      sourceResult.rows[0].analysis.terminationPlan.routeEvidenceIncomplete,
+      false
+    );
+    const requirement = { requiredCores: 6, reserve: 2, services: 4 };
+    const canonicalPlan = {
+      ...plan,
+      requirement,
+      sourceCable: canonicalSource,
+    };
+    const demandHistory = await atlas.saveAnalysisHistory(
+      "admin",
+      "ADDRESS",
+      "Kebutuhan core",
+      {},
+      {
+        latitude: -7.007,
+        longitude: 110,
+        network: { id: "near-point" },
+        terminationPlan: canonicalPlan,
+      }
+    );
+    const forged = {
+      ...canonicalPlan,
+      cables: canonicalPlan.cables.map((cable) => ({ ...cable, cores: 1 })),
+      requirement: { requiredCores: 1, reserve: 0, services: 1 },
+    };
+    const demandSurvey = await atlas.createSurvey(
+      "admin",
+      demandHistory,
+      0,
+      undefined,
+      forged
+    );
+    const demandResult = await q(
+      "SELECT analysis FROM network_surveys WHERE id=$1",
+      [demandSurvey.id]
+    );
+    assert.deepEqual(
+      demandResult.rows[0].analysis.terminationPlan,
+      canonicalPlan
+    );
+
+    console.log("PASS: survey retains a validated termination and cable plan");
+    console.log(
+      "PASS: survey proposal persists validated core count without creating active assets"
+    );
+    const emptyHistory = await atlas.saveAnalysisHistory(
+      "presales",
+      "ADDRESS",
+      "No termination",
+      {},
+      { latitude: -7.1, longitude: 110, network: null }
+    );
+    const emptySurvey = await atlas.createSurvey("presales", emptyHistory, 0, {
+      cores: 12,
+      kind: "ODC",
+      latitude: -7.1,
+      longitude: 110,
+    });
+    assert.ok(
+      emptySurvey.id,
+      "proposal can be submitted without an existing termination"
     );
 
     // Exercise real controller routes and RBAC with isolated test sessions, not application accounts.

@@ -17,6 +17,7 @@ import {
 } from "./NearestNetworkMap";
 import { NetworkCapacityDetail } from "./NetworkCapacityDetail";
 import { SubmitSurveyButton } from "./SubmitSurveyButton";
+import { TerminationDetail } from "./TerminationDetail";
 
 type Result = NetworkSearchResult & {
   address: string;
@@ -1691,7 +1692,7 @@ export function AddressAnalysisPage() {
                   </small>
                 )}
                 <hr />
-                <div className="detail-label">JARINGAN TERDEKAT</div>
+                <div className="detail-label">TERMINASI TERDEKAT</div>
                 {analyze.data.network ? (
                   <>
                     <div className="nearest-network">
@@ -1708,10 +1709,6 @@ export function AddressAnalysisPage() {
                     </div>
                     <NetworkCapacityDetail
                       capacity={analyze.data.network.capacity}
-                    />
-                    <SubmitSurveyButton
-                      historyId={analyze.data.historyId}
-                      key={analyze.data.historyId}
                     />
                     <small className="d-block mt-2">
                       Ditemukan dalam radius{" "}
@@ -1764,6 +1761,26 @@ export function AddressAnalysisPage() {
                     )}
                   </div>
                 )}
+                <TerminationDetail data={analyze.data.terminations} />
+                {analyze.data.network &&
+                  analyze.data.terminations?.points.length === 0 &&
+                  analyze.data.terminations.searchRadiusMeters === 1000 && (
+                    <button
+                      className="btn btn-outline-primary btn-sm mt-2"
+                      disabled={analyze.isPending}
+                      onClick={() => {
+                        if (analyze.variables) {
+                          analyze.mutate({
+                            ...analyze.variables,
+                            allowExpand2km: true,
+                          });
+                        }
+                      }}
+                      type="button"
+                    >
+                      Cari terminasi hingga 2 km
+                    </button>
+                  )}
                 <Link
                   className="btn btn-outline-primary mt-3 w-100"
                   to="/peta-jaringan"
@@ -1807,6 +1824,15 @@ export function AddressAnalysisPage() {
           </div>
           <div className="card-body">
             <NearestNetworkMap result={analyze.data} />
+            <SubmitSurveyButton
+              historyId={analyze.data.historyId}
+              key={analyze.data.historyId}
+              latitude={analyze.data.latitude}
+              longitude={analyze.data.longitude}
+              plan={analyze.data.terminationPlan}
+              planRequired={Boolean(analyze.data.terminationPlan)}
+              requireProposal={!analyze.data.network}
+            />
             <small className="d-block text-secondary mt-2">
               Lingkaran: radius pencarian. Klik aset atau jalur untuk melihat
               detail.

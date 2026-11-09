@@ -22,6 +22,7 @@ import {
   type NetworkSearchResult,
 } from "./NearestNetworkMap";
 import { NetworkCapacityDetail } from "./NetworkCapacityDetail";
+import { TerminationDetail } from "./TerminationDetail";
 
 type HistoryItem = {
   id: string;
@@ -73,6 +74,7 @@ type BulkRow = {
   distanceMeters?: number | null;
   status: string;
   message?: string;
+  result?: NetworkSearchResult | null;
 };
 type SavedMapPoint = {
   latitude: number;
@@ -604,6 +606,10 @@ function BulkHistoryDetail({
                   <small className="d-block text-secondary">
                     {row.message}
                   </small>
+                  <details>
+                    <summary>Terminasi</summary>
+                    <TerminationDetail data={row.result?.terminations} />
+                  </details>
                 </td>
               </tr>
             ))}
@@ -1224,6 +1230,15 @@ export function AnalysisHistoryPage() {
                         ))}
                       </section>
                     )}
+                    {typeof result.latitude === "number" &&
+                      typeof result.longitude === "number" && (
+                        <TerminationDetail
+                          data={
+                            (result as unknown as NetworkSearchResult)
+                              .terminations
+                          }
+                        />
+                      )}
                     {Boolean(result.routeGeometry) &&
                       typeof result.latitude === "number" &&
                       typeof result.longitude === "number" && (

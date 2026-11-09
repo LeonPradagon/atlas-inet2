@@ -325,6 +325,86 @@ export function SurveysPage() {
                   />
                 </div>
               )}
+            {selected.analysis.terminationPlan && (
+              <section className="alert alert-warning">
+                <b>Rencana terminasi dan kabel · belum menjadi aset</b>
+                <ol>
+                  {selected.analysis.terminationPlan.points.map((point) => (
+                    <li
+                      key={`${point.kind}:${point.latitude}:${point.longitude}`}
+                    >
+                      {point.kind === "JOINT_CLOSURE"
+                        ? "Kandidat closure · perlu survei"
+                        : point.kind}{" "}
+                      · {point.latitude.toFixed(6)},{" "}
+                      {point.longitude.toFixed(6)}
+                    </li>
+                  ))}
+                </ol>
+                {selected.analysis.terminationPlan.routeEvidence && (
+                  <div>
+                    Aset terdata dekat jalur:{" "}
+                    {selected.analysis.terminationPlan.routeEvidence.length
+                      ? selected.analysis.terminationPlan.routeEvidence
+                          .map(
+                            (point) =>
+                              `${point.name} (${point.type}, ${Math.round(point.distanceToRouteMeters)} m dari jalur)`
+                          )
+                          .join("; ")
+                      : "tidak ditemukan"}
+                    . Kedekatan dan jenis aset belum memastikan sambungan;
+                    periksa saat survei.
+                    {selected.analysis.terminationPlan
+                      .routeEvidenceIncomplete &&
+                      " Data aset di sepanjang jalur belum lengkap."}
+                  </div>
+                )}
+                {selected.analysis.terminationPlan.cables.map(
+                  (cable, index) => (
+                    <div key={JSON.stringify(cable.geometry)}>
+                      Kabel {index + 1}: {cable.type} ·{" "}
+                      {cable.cores === null
+                        ? "core belum ditentukan"
+                        : `${cable.cores} core`}{" "}
+                      · {Math.round(cable.distanceMeters)} m
+                    </div>
+                  )
+                )}
+                <small>
+                  Tujuan: {selected.analysis.network?.name}. Kabel eksisting di
+                  tujuan:{" "}
+                  {selected.analysis.terminationPlan.sourceCable
+                    ? `${selected.analysis.terminationPlan.sourceCable.name} · ${selected.analysis.terminationPlan.sourceCable.recorded === false ? "kandidat dekat tujuan, relasi belum tercatat · " : ""}${selected.analysis.terminationPlan.sourceCable.verified === false ? "pemakaian core belum terverifikasi" : `core ${(selected.analysis.terminationPlan.sourceCable.coreNumbers ?? [selected.analysis.terminationPlan.sourceCable.coreNumber]).join(", ")} (belum dibooking)`}`
+                    : "belum dapat ditentukan; perlu verifikasi relasi dan core"}
+                  .{" "}
+                  {selected.analysis.terminationPlan.capacityBasis ===
+                  "VERIFIED_SOURCE"
+                    ? "Kapasitas mengikuti kabel sumber terverifikasi; kebutuhan aktual belum diketahui. "
+                    : selected.analysis.terminationPlan.capacityBasis ===
+                        "UNVERIFIED_SOURCE"
+                      ? "Kapasitas mengikuti kabel kandidat; relasi ke tujuan atau pemakaian core belum terverifikasi. "
+                      : selected.analysis.terminationPlan.capacityBasis ===
+                          "SOURCE_UNKNOWN"
+                        ? "Kapasitas kabel belum dapat ditentukan dari data sumber. "
+                        : ""}
+                  {selected.analysis.terminationPlan.requirement
+                    ? `${selected.analysis.terminationPlan.requirement.assumed ? "Asumsi otomatis: " : "Kebutuhan: "}${selected.analysis.terminationPlan.requirement.services} layanan + ${selected.analysis.terminationPlan.requirement.reserve} core cadangan = ${selected.analysis.terminationPlan.requirement.requiredCores} core (1 core per layanan; kebutuhan aktual belum diketahui).`
+                    : "Kebutuhan core belum diisi."}{" "}
+                  Periksa spesifikasi kabel, sambungan, dan jalur saat survei.
+                </small>
+              </section>
+            )}
+            {selected.analysis.proposal && (
+              <div className="alert alert-warning">
+                Usulan terminasi {selected.analysis.proposal.kind} · kabel{" "}
+                {selected.analysis.proposal.cores === null
+                  ? "core belum ditentukan"
+                  : `${selected.analysis.proposal.cores} core`}{" "}
+                · lokasi {selected.analysis.proposal.latitude},{" "}
+                {selected.analysis.proposal.longitude}. Rencana belum menjadi
+                aset aktif.
+              </div>
+            )}
             <h4 className="h6 mb-3">Hasil pemeriksaan lapangan</h4>
             <div className="row g-3">
               {fields.map(([key, label]) => (
@@ -363,20 +443,45 @@ export function SurveysPage() {
                       const readId = ++imageReadId.current;
                       setImageError("");
                       setReadingImage(false);
-                      if (!file) return;
-                      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 2 * 1024 * 1024) {
-                        setImageError("Pilih gambar JPG, PNG, atau WebP dengan ukuran maksimal 2 MB.");
+                      if (!file) {
+                        return;
+                      }
+                      if (
+                        !["image/jpeg", "image/png", "image/webp"].includes(
+                          file.type
+                        ) ||
+                        file.size > 2 * 1024 * 1024
+                      ) {
+                        setImageError(
+                          "Pilih gambar JPG, PNG, atau WebP dengan ukuran maksimal 2 MB."
+                        );
                         return;
                       }
                       const reader = new FileReader();
                       setReadingImage(true);
                       reader.onload = async () => {
                         const location = await gps(file).catch(() => undefined);
-                        if (readId !== imageReadId.current) return;
-                        if (!location || !Number.isFinite(location.latitude) || !Number.isFinite(location.longitude) || Math.abs(location.latitude) > 90 || Math.abs(location.longitude) > 180 || typeof reader.result !== "string") {
-                          setImageError("Foto tidak memiliki koordinat GPS. Aktifkan lokasi pada kamera dan pilih foto asli.");
+                        if (readId !== imageReadId.current) {
+                          return;
+                        }
+                        if (
+                          !location ||
+                          !Number.isFinite(location.latitude) ||
+                          !Number.isFinite(location.longitude) ||
+                          Math.abs(location.latitude) > 90 ||
+                          Math.abs(location.longitude) > 180 ||
+                          typeof reader.result !== "string"
+                        ) {
+                          setImageError(
+                            "Foto tidak memiliki koordinat GPS. Aktifkan lokasi pada kamera dan pilih foto asli."
+                          );
                         } else {
-                          setForm((current) => ({ ...current, image: reader.result as string, imageLatitude: String(location.latitude), imageLongitude: String(location.longitude) }));
+                          setForm((current) => ({
+                            ...current,
+                            image: reader.result as string,
+                            imageLatitude: String(location.latitude),
+                            imageLongitude: String(location.longitude),
+                          }));
                         }
                         setReadingImage(false);
                       };
@@ -390,26 +495,64 @@ export function SurveysPage() {
                     }}
                     type="file"
                   />
-                  <small className="text-secondary">JPG, PNG, atau WebP, maksimal 2 MB. Foto harus memiliki koordinat GPS.</small>
+                  <small className="text-secondary">
+                    JPG, PNG, atau WebP, maksimal 2 MB. Foto harus memiliki
+                    koordinat GPS.
+                  </small>
                 </>
               )}
-              {imageError && <p className="text-danger" role="alert">{imageError}</p>}
+              {imageError && (
+                <p className="text-danger" role="alert">
+                  {imageError}
+                </p>
+              )}
               {form.image && (
                 <div className="mt-2">
-                  <a href={form.image} target="_blank" rel="noreferrer">
-                    <img alt="Bukti survei" src={form.image} style={{ maxWidth: "100%", maxHeight: 240, objectFit: "contain" }} />
+                  <a href={form.image} rel="noreferrer" target="_blank">
+                    {/* biome-ignore lint/correctness/useImageSize: foto survei memiliki rasio yang berbeda */}
+                    <img
+                      alt="Bukti survei"
+                      src={form.image}
+                      style={{
+                        maxWidth: "100%",
+                        maxHeight: 240,
+                        objectFit: "contain",
+                      }}
+                    />
                   </a>
                   {form.imageLatitude && form.imageLongitude ? (
-                    <p className="mt-2 mb-1">Koordinat foto: {form.imageLatitude}, {form.imageLongitude}</p>
+                    <p className="mt-2 mb-1">
+                      Koordinat foto: {form.imageLatitude},{" "}
+                      {form.imageLongitude}
+                    </p>
                   ) : (
-                    <p className="text-secondary mt-2 mb-1">Koordinat foto tidak tersedia.</p>
+                    <p className="text-secondary mt-2 mb-1">
+                      Koordinat foto tidak tersedia.
+                    </p>
                   )}
                   {selected.status === "IN_PROGRESS" && (
-                    <button className="btn btn-sm btn-outline-danger d-block mt-2" onClick={() => { imageReadId.current++; setReadingImage(false); setForm((current) => ({ ...current, image: "", imageLatitude: "", imageLongitude: "" })); }} type="button">Hapus gambar</button>
+                    <button
+                      className="btn btn-sm btn-outline-danger d-block mt-2"
+                      onClick={() => {
+                        imageReadId.current++;
+                        setReadingImage(false);
+                        setForm((current) => ({
+                          ...current,
+                          image: "",
+                          imageLatitude: "",
+                          imageLongitude: "",
+                        }));
+                      }}
+                      type="button"
+                    >
+                      Hapus gambar
+                    </button>
                   )}
                 </div>
               )}
-              {!form.image && selected.status !== "IN_PROGRESS" && <p className="text-secondary">Tidak ada gambar.</p>}
+              {!form.image && selected.status !== "IN_PROGRESS" && (
+                <p className="text-secondary">Tidak ada gambar.</p>
+              )}
             </div>
             <div className="d-flex mt-3 gap-2">
               {selected.status === "IN_PROGRESS" && (

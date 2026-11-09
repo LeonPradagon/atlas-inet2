@@ -16,6 +16,7 @@ import {
   type GeoJSONSource,
   LngLatBounds,
   Map as MapLibreMap,
+  Marker,
   NavigationControl,
   Popup,
   setWorkerUrl,
@@ -30,6 +31,7 @@ import {
   type NetworkAssetPage,
   networkQueryKeys,
 } from "../../lib/api";
+import type { TerminationPlan } from "../analysis/terminationPlan";
 import {
   addAtlasMapIcons,
   assetFeatures,
@@ -564,6 +566,27 @@ function VerificationStatus({ asset }: { asset: NetworkAsset }) {
   );
 }
 export function MapPage() {
+  const proposalSurveys = useQuery({
+    queryKey: ["surveys"],
+    queryFn: () =>
+      api<
+        {
+          id: string;
+          address: string;
+          status: string;
+          analysis: {
+            proposal?: {
+              kind: string;
+              cores: number | null;
+              latitude: number;
+              longitude: number;
+            };
+            routeGeometry?: Geometry | null;
+            terminationPlan?: TerminationPlan;
+          };
+        }[]
+      >("/surveys"),
+  });
   const mapImportsQuery = useQuery({
     queryKey: ["network-map-imports"],
     queryFn: () => api<MapImportPackage[]>("/assets/imports"),
@@ -605,7 +628,8 @@ export function MapPage() {
       : selectedCompanyValue === "__multiple__"
         ? selectedImportIds.includes(item.id)
         : Boolean(
-            selectedCompanyValue && item.companies?.includes(selectedCompanyValue)
+            selectedCompanyValue &&
+              item.companies?.includes(selectedCompanyValue)
           )
   );
   const hasUnassignedCompanyPackages = importPackages.some(
@@ -1708,6 +1732,120 @@ export function MapPage() {
     };
   }, []);
   useEffect(() => {
+    const instance = map.current;
+    if (!instance || !mapReady) {
+      return;
+    }
+    const surveys = (proposalSurveys.data ?? []).filter(
+      (survey) => survey.analysis.proposal
+    );
+    const plans = (proposalSurveys.data ?? []).filter(
+      (survey) => survey.analysis.terminationPlan
+    );
+    const markers = surveys.map((survey) => {
+      const proposal = survey.analysis.proposal!;
+      const label = document.createElement("div");
+      label.style.cssText =
+        "width:22px;height:22px;border:3px dashed #e77a12;border-radius:50%;background:white;cursor:pointer";
+      label.setAttribute(
+        "aria-label",
+        `Usulan ${proposal.kind}, ${proposal.cores === null ? "core belum ditentukan" : `${proposal.cores} core`}`
+      );
+      const content = document.createElement("div");
+      content.textContent = `Rencana / belum menjadi aset · ${proposal.kind} · ${proposal.cores === null ? "core belum ditentukan" : `${proposal.cores} core`} · ${survey.address} · ${survey.status}`;
+      return new Marker({ element: label })
+        .setLngLat([proposal.longitude, proposal.latitude])
+        .setPopup(new Popup().setDOMContent(content))
+        .addTo(instance);
+    });
+    for (const survey of plans) {
+      for (const point of survey.analysis.terminationPlan!.routeEvidence ??
+        []) {
+        if (point.id === survey.analysis.terminationPlan!.targetId) {
+          continue;
+        }
+        const label = document.createElement("div");
+        label.style.cssText =
+          "width:32px;height:32px;border:3px solid #00a6b2;border-radius:50%;background:transparent;cursor:pointer";
+        label.setAttribute(
+          "aria-label",
+          `Aset ${point.type} dekat jalur: ${point.name}`
+        );
+        const content = document.createElement("div");
+        content.textContent = `${point.name} · ${point.type} · ${Math.round(point.distanceToRouteMeters)} m dari jalur · ${point.recordedCables} relasi kabel tercatat. Sambungan ke rencana perlu survei.`;
+        markers.push(
+          new Marker({ element: label })
+            .setLngLat([point.longitude, point.latitude])
+            .setPopup(new Popup().setDOMContent(content))
+            .addTo(instance)
+        );
+      }
+      for (const point of survey.analysis.terminationPlan!.points) {
+        const label = document.createElement("div");
+        label.style.cssText =
+          "width:22px;height:22px;border:3px dashed #e77a12;border-radius:50%;background:white;cursor:pointer";
+        label.setAttribute(
+          "aria-label",
+          `Kandidat ${point.kind === "JOINT_CLOSURE" ? "closure" : point.kind} · perlu survei`
+        );
+        const content = document.createElement("div");
+        content.textContent = `Kandidat ${point.kind === "JOINT_CLOSURE" ? "closure" : point.kind} · ${survey.address} · ${survey.status} · perlu survei, belum menjadi aset`;
+        markers.push(
+          new Marker({ element: label })
+            .setLngLat([point.longitude, point.latitude])
+            .setPopup(new Popup().setDOMContent(content))
+            .addTo(instance)
+        );
+      }
+    }
+    const features: Feature[] = [
+      ...surveys.flatMap((survey) =>
+        survey.analysis.routeGeometry && !survey.analysis.terminationPlan
+          ? [
+              {
+                type: "Feature" as const,
+                geometry: survey.analysis.routeGeometry,
+                properties: {},
+              },
+            ]
+          : []
+      ),
+      ...plans.flatMap((survey) =>
+        survey.analysis.terminationPlan!.cables.map((cable) => ({
+          type: "Feature" as const,
+          geometry: cable.geometry,
+          properties: {},
+        }))
+      ),
+    ];
+    if (instance.getSource("survey-proposal-routes")) {
+      (instance.getSource("survey-proposal-routes") as GeoJSONSource).setData({
+        type: "FeatureCollection",
+        features,
+      });
+    } else {
+      instance.addSource("survey-proposal-routes", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features },
+      });
+      instance.addLayer({
+        id: "survey-proposal-routes",
+        type: "line",
+        source: "survey-proposal-routes",
+        paint: {
+          "line-color": "#e77a12",
+          "line-width": 3,
+          "line-dasharray": [2, 2],
+        },
+      });
+    }
+    return () => {
+      for (const marker of markers) {
+        marker.remove();
+      }
+    };
+  }, [mapReady, proposalSurveys.data]);
+  useEffect(() => {
     const province = provincesRef.current.find(
       (item) => item.code === provinceCode
     );
@@ -2589,6 +2727,18 @@ export function MapPage() {
                   </button>
                 </footer>
               </section>
+            </div>
+          )}
+          {Boolean(
+            proposalSurveys.data?.some(
+              (survey) =>
+                survey.analysis.proposal || survey.analysis.terminationPlan
+            )
+          ) && (
+            <div className="alert alert-warning small">
+              Lingkaran dan garis oranye putus-putus adalah usulan survei, belum
+              menjadi aset aktif. Lingkaran biru kehijauan menandai aset terdata
+              dekat jalur, bukan bukti sambungan.
             </div>
           )}
           {((!mapReady && !mapError) ||
