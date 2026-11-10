@@ -41,6 +41,7 @@ import {
   loadNetworkMapIcons,
 } from "./networkMap";
 import { SegmentRelations } from "./SegmentRelations";
+import { CoreMappingPanel } from "./CoreMappingPanel";
 import { registerSatelliteTiles } from "./satelliteTiles";
 
 type Coordinate = [number, number];
@@ -4286,24 +4287,7 @@ export function MapPage() {
                   key={selectedSegment.id}
                   segmentId={selectedSegment.id}
                 />
-                {selectedSegment.source !== "managed" && (
-                  <details className="admin-settings mt-3">
-                    <summary>Metadata impor</summary>
-                    <small className="d-block text-secondary mt-1">
-                      Field asli dari file sumber, untuk pemeriksaan lanjutan.
-                    </small>
-                    <div className="import-detail-list mt-2">
-                      {Object.entries(selectedSegment.attributes ?? {})
-                        .filter(([key]) => key !== "__kmlStyle")
-                        .map(([key, value]) => (
-                          <div key={key}>
-                            <span>{key}</span>
-                            <b>{String(value)}</b>
-                          </div>
-                        ))}
-                    </div>
-                  </details>
-                )}
+                <CoreMappingPanel key={selectedSegment.id} segmentId={selectedSegment.id} isAdmin={user?.role === "ADMIN"} />
                 <details className="admin-settings mt-4">
                   <summary>
                     <i className="bi bi-pencil-square me-2" />

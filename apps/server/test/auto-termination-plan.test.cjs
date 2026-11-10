@@ -6,6 +6,7 @@ const { AtlasController } = require("../src/atlas/atlas.controller");
 function controller(distance, routingFails = false) {
   const atlas = {
     cableEndsAlongRoute: async () => [],
+    terminationPatterns: async () => [{ type: "ODP", sampleSize: 10, medianMeters: 31 }],
     nearbyTerminations: async () => ({ points: [], searchRadiusMeters: 500 }),
     nearestNetwork: async () => ({
       id: "target",
@@ -44,7 +45,7 @@ function controller(distance, routingFails = false) {
   return new AtlasController(atlas, {}, {}, routing, {}, {});
 }
 
-test("analysis uses demand and reserve to recommend capacity", async () => {
+test("service demand alone does not determine distribution core capacity", async () => {
   const result = await controller(1000).analyzeCoordinates(
     106,
     -6,
@@ -56,12 +57,12 @@ test("analysis uses demand and reserve to recommend capacity", async () => {
     { reserve: 2, services: 4 }
   );
   assert.equal(result.proposal.kind, "ODP");
-  assert.equal(result.proposal.cores, 12);
+  assert.equal(result.proposal.cores, null);
   assert.equal(result.terminationPlan.targetId, "target");
-  assert.equal(result.terminationPlan.cables[0].cores, 12);
+  assert.equal(result.terminationPlan.cables[0].cores, null);
   assert.deepEqual(result.terminationPlan.requirement, {
     assumed: false,
-    requiredCores: 6,
+    requiredCores: null,
     reserve: 2,
     services: 4,
   });
@@ -193,7 +194,7 @@ test("unavailable route evidence does not falsely remove the road route", async 
   assert.equal(result.terminationPlan.points.length, 0);
 });
 
-test("capacity rounds demand to the supplied company sizes without exceeding the list", () => {
+test("service count does not imply a cable capacity without topology", () => {
   const { buildTerminationPlan } = require("../src/atlas/termination-plan");
   const geometry = {
     coordinates: [
@@ -202,21 +203,13 @@ test("capacity rounds demand to the supplied company sizes without exceeding the
     ],
     type: "LineString",
   };
-  for (const [services, reserve, expected] of [
-    [1, 0, 12],
-    [5, 0, 12],
-    [12, 0, 12],
-    [12, 1, 24],
-    [24, 1, 48],
-    [48, 1, 96],
-    [96, 1, 144],
-    [144, 1, 288],
-    [288, 1, null],
+  for (const [services, reserve] of [
+    [1, 0], [5, 0], [12, 1], [48, 1], [288, 1],
   ]) {
     assert.equal(
       buildTerminationPlan("target", geometry, 100, { reserve, services })
         .cables[0].cores,
-      expected
+      null
     );
   }
   assert.equal(
@@ -240,7 +233,7 @@ test("analysis rejects malformed demand before processing", async () => {
   }
 });
 
-test("single address leaves demand unknown while explicit needs still work", async () => {
+test("service demand is retained without inferring distribution cores", async () => {
   const instance = controller(1000);
   instance.auth = { requireUser: async () => ({ id: "presales" }) };
   instance.atlas.saveAnalysisHistory = async () => "history-id";
@@ -259,11 +252,11 @@ test("single address leaves demand unknown while explicit needs still work", asy
   );
   assert.deepEqual(explicit.terminationPlan.requirement, {
     assumed: false,
-    requiredCores: 14,
+    requiredCores: null,
     reserve: 1,
     services: 13,
   });
-  assert.equal(explicit.terminationPlan.cables[0].cores, 24);
+  assert.equal(explicit.terminationPlan.cables[0].cores, null);
 });
 
 test("automatic capacity follows recorded sources with explicit verification state", async () => {
@@ -430,6 +423,10 @@ test("planner proposes distribution cable to a new ODP and drop from an existing
   assert.equal(distribution.cables[0].type, "Distribusi");
   assert.equal(distribution.cables[0].cores, 96);
   assert.equal(distribution.capacityBasis, "UNVERIFIED_SOURCE");
+  const withDemand = buildTerminationPlan("target", geometry, 500, { services: 2, reserve: 0 }, source, "Closure");
+  assert.equal(withDemand.cables[0].cores, 96);
+  assert.equal(withDemand.requirement.requiredCores, null);
+  assert.equal(withDemand.capacityBasis, "UNVERIFIED_SOURCE");
   assert.equal(
     buildTerminationPlan("target", geometry, 500, undefined, source, "ODP")
       .cables[0].type,
@@ -547,38 +544,37 @@ test("device suggestions are placed on the route and exclude its endpoints", () 
   );
 });
 
-test("initial slack suggestion follows route midpoint without inventing a splice", () => {
-  const { initialSlackCandidate } = require("../src/atlas/termination-plan");
-  const route = {
-    coordinates: [
-      [0, 0],
-      [0.004, 0],
-      [0.004, 0.002],
-    ],
-    type: "LineString",
-  };
-  const candidate = initialSlackCandidate(route, []);
-  assert.equal(candidate.kind, "Slack / Coil");
-  assert.equal(candidate.basis, "PLANNING");
-  assert.ok(Math.abs(candidate.longitude - 0.003) < 0.000_01);
-  assert.equal(candidate.latitude, 0);
-  assert.equal(
-    initialSlackCandidate(route, [
-      { latitude: 0, longitude: 0.003, type: "Slack / Coil" },
-    ]),
-    null
-  );
-  assert.equal(
-    initialSlackCandidate(
-      {
-        coordinates: [
-          [0, 0],
-          [0.0001, 0],
-        ],
-        type: "LineString",
-      },
-      []
-    ),
-    null
-  );
+test("analysis suggests devices from route evidence, not an automatic slack", async () => {
+  const instance = controller(1000);
+  const withoutEvidence = await instance.analyzeCoordinates(106, -6);
+  assert.ok(withoutEvidence.terminationPlan.deviceCandidates.every((p) => p.kind === "ODP"));
+  assert.ok(withoutEvidence.terminationPlan.deviceCandidates.length > 1);
+
+  instance.atlas.terminationsAlongRoute = async () => [
+    { type: "OLT", name: "OLT A", latitude: -6, longitude: 106.005 },
+  ];
+  const withOlt = await instance.analyzeCoordinates(106, -6);
+  assert.ok(withOlt.terminationPlan.deviceCandidates.some((p) => p.kind === "OTB"));
+  assert.ok(withOlt.terminationPlan.deviceCandidates.every((p) => p.kind !== "Slack / Coil"));
 });
+
+test("ODP estimates follow KMZ spacing, avoid existing ODP and endpoints", () => {
+  const { estimateOdpLocations } = require("../src/atlas/termination-plan");
+  const geometry = { type: "LineString", coordinates: [[0, 0], [0.001, 0]] };
+  const estimates = estimateOdpLocations(geometry, [], 31);
+  assert.equal(estimates.length, 2);
+  assert.ok(Math.abs(estimates[0].longitude * 111320 - 31) < 0.01);
+  assert.equal(estimateOdpLocations(geometry, [{ ...estimates[0], type: "ODP" }], 31).length, 1);
+  assert.equal(estimateOdpLocations(geometry, [], 45).length, 2);
+  assert.equal(estimateOdpLocations(geometry, [], 0).length, 0);
+});
+
+test("analysis uses current local pattern and suppresses simulation when samples are insufficient", async () => {
+  const instance = controller(1000);
+  instance.atlas.terminationPatterns = async () => [{ type: "ODP", sampleSize: 5, medianMeters: 60 }];
+  const result = await instance.analyzeCoordinates(106, -6);
+  assert.ok(result.terminationPlan.deviceCandidates[0].reason.includes("60 m"));
+  instance.atlas.terminationPatterns = async () => [{ type: "ODP", sampleSize: 4, medianMeters: 60 }];
+  assert.equal((await instance.analyzeCoordinates(106, -6)).terminationPlan.deviceCandidates.length, 0);
+});
+

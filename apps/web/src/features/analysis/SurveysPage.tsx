@@ -10,7 +10,8 @@ import {
   NearestNetworkMap,
   type NetworkSearchResult,
 } from "./NearestNetworkMap";
-import { describeSourceCable } from "./terminationPlan";
+import { candidateName, connectionName } from "./terminationPlan";
+import { CablePlanDetails } from "./CablePlanDetails";
 
 type Survey = {
   id: string;
@@ -380,21 +381,21 @@ export function SurveysPage() {
                       " Data aset di sepanjang jalur belum lengkap."}
                   </div>
                 )}
-                {selected.analysis.terminationPlan.deviceCandidates?.map(
-                  (point) => (
+                {selected.analysis.terminationPlan.deviceCandidates?.filter((point) => point.kind !== "Tiang").map(
+                  (point, index) => (
                     <div
                       key={`${point.kind}-${point.latitude}-${point.longitude}`}
                     >
-                      Opsi {point.kind}: {point.reason}
+                      {candidateName(point, index)}: {point.reason}
                     </div>
                   )
                 )}
                 {selected.analysis.terminationPlan.connectionCandidates?.map(
-                  (point) => (
+                  (point, index) => (
                     <div
                       key={`${point.cableId}-${point.longitude}-${point.latitude}`}
                     >
-                      Potensi sambungan: ujung {point.cableName} ·{" "}
+                      {connectionName(index)}: ujung {point.cableName} ·{" "}
                       {point.recommendedKind
                         ? "opsi closure jika kabel disambungkan"
                         : "jenis terminasi belum ditentukan"}
@@ -402,24 +403,11 @@ export function SurveysPage() {
                     </div>
                   )
                 )}
-                {selected.analysis.terminationPlan.cables.map(
-                  (cable, index) => (
-                    <div key={JSON.stringify(cable.geometry)}>
-                      Kabel {index + 1}: {cable.type} ·{" "}
-                      {cable.cores === null
-                        ? "core belum ditentukan"
-                        : `${cable.cores} core`}{" "}
-                      · {Math.round(cable.distanceMeters)} m
-                    </div>
-                  )
-                )}
+                <CablePlanDetails plan={selected.analysis.terminationPlan} networkName={selected.analysis.network?.name} />
                 <small>
-                  Tujuan: {selected.analysis.network?.name}. Kabel eksisting di
-                  tujuan:{" "}
-                  {describeSourceCable(selected.analysis.terminationPlan)}.{" "}
                   {selected.analysis.terminationPlan.capacityBasis ===
                   "VERIFIED_SOURCE"
-                    ? "Kapasitas mengikuti kabel sumber terverifikasi; kebutuhan aktual belum diketahui. "
+                    ? "Kapasitas mengikuti kabel sumber terverifikasi. "
                     : selected.analysis.terminationPlan.capacityBasis ===
                         "UNVERIFIED_SOURCE"
                       ? "Kapasitas mengikuti kabel kandidat; relasi ke tujuan atau pemakaian core belum terverifikasi. "
@@ -427,17 +415,13 @@ export function SurveysPage() {
                           "SOURCE_UNKNOWN"
                         ? "Kapasitas kabel belum dapat ditentukan dari data sumber. "
                         : ""}
-                  {selected.analysis.terminationPlan.requirement &&
-                  !selected.analysis.terminationPlan.requirement.assumed
-                    ? `Kebutuhan: ${selected.analysis.terminationPlan.requirement.services} layanan + ${selected.analysis.terminationPlan.requirement.reserve} core cadangan = ${selected.analysis.terminationPlan.requirement.requiredCores} core (1 core per layanan; kebutuhan aktual belum diketahui).`
-                    : "Kebutuhan core belum diketahui dari data analisis."}{" "}
                   Periksa spesifikasi kabel, sambungan, dan jalur saat survei.
                 </small>
               </section>
             )}
             {selected.analysis.proposal && (
               <div className="alert alert-warning">
-                Usulan terminasi {selected.analysis.proposal.kind} · kabel{" "}
+                Usulan {selected.analysis.proposal.kind} pelanggan · kabel{" "}
                 {selected.analysis.proposal.cores === null
                   ? "core belum ditentukan"
                   : `${selected.analysis.proposal.cores} core`}{" "}

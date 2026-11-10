@@ -1823,7 +1823,7 @@ export function AddressAnalysisPage() {
             </div>
           </div>
           <div className="card-body">
-            <NearestNetworkMap result={analyze.data} />
+            <NearestNetworkMap key={analyze.data.historyId} result={analyze.data} />
             <SubmitSurveyButton
               historyId={analyze.data.historyId}
               key={analyze.data.historyId}

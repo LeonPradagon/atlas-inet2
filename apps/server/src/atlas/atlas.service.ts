@@ -277,6 +277,7 @@ export class AtlasService {
         routeEvidence: _clientRouteEvidence,
         routeEvidenceIncomplete: _clientRouteEvidenceIncomplete,
         requirement: _clientRequirement,
+        odpDemands: clientOdpDemands,
         ...validatedPlan
       } = value as typeof value & {
         deviceCandidates?: unknown;
@@ -288,9 +289,20 @@ export class AtlasService {
         routeEvidence?: unknown;
         routeEvidenceIncomplete?: unknown;
         requirement?: unknown;
+        odpDemands?: unknown;
       };
       const savedPlan = candidate.analysis.terminationPlan;
-      candidate.analysis.terminationPlan = savedPlan ?? validatedPlan;
+      if (clientOdpDemands !== undefined) {
+        const points = Array.isArray(savedPlan?.deviceCandidates) ? savedPlan.deviceCandidates.filter((point: { kind?: string }) => point.kind !== "Tiang") : [];
+        const allowed = new Set(points.flatMap((point: { kind?: string; basis?: string }, index: number) => point.kind === "ODP" && point.basis === "PLANNING" ? [`Simulasi ODP ${String(index + 1).padStart(2, "0")}`] : []));
+        if (!clientOdpDemands || typeof clientOdpDemands !== "object" || Array.isArray(clientOdpDemands) || !savedPlan) throw new BadRequestException({ message: "Kebutuhan ODP tidak valid." });
+        const entries = Object.entries(clientOdpDemands);
+        const total = entries.reduce((sum, [, count]) => sum + (typeof count === "number" ? count : 0), Number(savedPlan.requirement?.requiredCores ?? 0));
+        if (entries.length > allowed.size || entries.some(([name, count]) => !allowed.has(name) || !Number.isSafeInteger(count) || Number(count) < 0 || Number(count) > 4096) || total > 4096) throw new BadRequestException({ message: "Kebutuhan ODP tidak valid." });
+        candidate.analysis.terminationPlan = { ...savedPlan, odpDemands: Object.fromEntries(entries) };
+      } else {
+        candidate.analysis.terminationPlan = savedPlan ?? validatedPlan;
+      }
     }
     return this.db.transaction(async (client) => {
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
@@ -1801,6 +1813,72 @@ export class AtlasService {
     );
     return rows;
   }
+
+  async listCoreMappings(segmentId: string) {
+    const { rows: segment } = await this.db.query("SELECT id FROM network_assets WHERE id=$1 AND asset_type='segment'", [segmentId]);
+    if (!segment.length) throw new NotFoundException({ message: "Kabel tidak ditemukan." });
+    const { rows } = await this.db.query(
+      `SELECT m.id,m.source,m.note,m.created_at AS "createdAt",m.node_asset_id AS "nodeAssetId",n.name AS "nodeName",
+        a.asset_id AS "cableAId",ca.name AS "cableAName",a.core_number AS "coreA",
+        b.asset_id AS "cableBId",cb.name AS "cableBName",b.core_number AS "coreB",m.splitter_input AS "splitterInput"
+       FROM network_core_mappings m JOIN network_assets n ON n.id=m.node_asset_id
+       JOIN network_cores a ON a.id=m.core_a_id JOIN network_assets ca ON ca.id=a.asset_id
+       LEFT JOIN network_cores b ON b.id=m.core_b_id LEFT JOIN network_assets cb ON cb.id=b.asset_id
+       WHERE a.asset_id=$1 OR b.asset_id=$1 ORDER BY n.name,a.core_number,m.id`, [segmentId]);
+    return rows;
+  }
+
+  async createCoreMapping(segmentId: string, input: Record<string, unknown>, userId: string) {
+    const node = input?.nodeAssetId;
+    const core = input?.coreNumber;
+    const peer = input?.peerSegmentId;
+    const peerCore = input?.peerCoreNumber;
+    const source = input?.source;
+    const splitter = typeof input?.splitterInput === "string" ? input.splitterInput.trim() : "";
+    const note = typeof input?.note === "string" ? input.note.trim() : "";
+    const isSplice = typeof peer === "string" && peer.length > 0;
+    if (typeof node !== "string" || !node || !Number.isSafeInteger(core) || Number(core) < 1 || !["Survei lapangan", "Data operasional", "Dokumen inventaris"].includes(String(source)) || note.length > 500 || (!isSplice && peer != null && peer !== "") || (isSplice ? peer === segmentId || !Number.isSafeInteger(peerCore) || Number(peerCore) < 1 || !!splitter : !splitter || splitter.length > 80 || peerCore != null)) {
+      throw new BadRequestException({ message: "Data sambungan core tidak valid." });
+    }
+    try {
+      const mappingId = await this.db.transaction(async (client) => {
+        const { rows: nodes } = await client.query(`SELECT id,lower(concat_ws(' ',name,attributes->>'folderPath',attributes->>'assetKind',attributes->>'Tipe Perangkat')) AS label FROM network_assets WHERE id=$1 AND asset_type='asset' AND GeometryType(geometry)='POINT' FOR UPDATE`, [node]);
+        if (!nodes.length) throw new BadRequestException({ message: "Pilih titik terminasi yang tersedia." });
+        if (!isSplice && !/(^|[^a-z0-9])(odp|fat|spl[-_ ]?1[:_-][0-9]+)([^a-z0-9]|$)/u.test(nodes[0].label)) throw new BadRequestException({ message: "Masukan splitter harus berada pada ODP." });
+        const ids = isSplice ? [segmentId, peer] : [segmentId];
+        const { rows: cables } = await client.query("SELECT id FROM network_assets WHERE id=ANY($1::text[]) AND asset_type='segment' ORDER BY id FOR UPDATE", [ids]);
+        if (cables.length !== ids.length) throw new BadRequestException({ message: "Kabel tidak ditemukan." });
+        const { rows: cores } = await client.query("SELECT id,asset_id AS \"assetId\",core_number AS \"coreNumber\" FROM network_cores WHERE (asset_id=$1 AND core_number=$2) OR (asset_id=$3 AND core_number=$4) ORDER BY id FOR UPDATE", [segmentId, core, isSplice ? peer : segmentId, isSplice ? peerCore : core]);
+        const first = cores.find((row) => row.assetId === segmentId && row.coreNumber === core);
+        const second = isSplice ? cores.find((row) => row.assetId === peer && row.coreNumber === peerCore) : null;
+        if (!first || (isSplice && !second)) throw new BadRequestException({ message: "Nomor core tidak ditemukan pada kabel yang dipilih." });
+        const ordered = second ? [Number(first.id), Number(second.id)].sort((a, b) => a - b) : [Number(first.id), null];
+        const { rows: occupied } = await client.query(`SELECT id FROM network_core_mappings WHERE node_asset_id=$1 AND (core_a_id=ANY($2::bigint[]) OR core_b_id=ANY($2::bigint[])) LIMIT 1`, [node, ordered.filter((value) => value !== null)]);
+        if (occupied.length) throw new ConflictException({ message: "Salah satu core sudah memiliki sambungan pada titik ini." });
+        if (!isSplice) {
+          const { rows: inputTaken } = await client.query("SELECT id FROM network_core_mappings WHERE node_asset_id=$1 AND lower(splitter_input)=lower($2) LIMIT 1", [node, splitter]);
+          if (inputTaken.length) throw new ConflictException({ message: "Masukan splitter tersebut sudah tercatat." });
+        }
+        const { rows } = await client.query(`INSERT INTO network_core_mappings(node_asset_id,core_a_id,core_b_id,splitter_input,source,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id`, [node, ordered[0], ordered[1], isSplice ? null : splitter, source, note, userId]);
+        await audit(client, userId, "CORE_MAPPING_CREATED", "ASSET", segmentId, { mappingId: rows[0].id, nodeAssetId: node, coreNumber: core, peerSegmentId: isSplice ? peer : null, peerCoreNumber: isSplice ? peerCore : null, splitterInput: isSplice ? null : splitter, source });
+        return rows[0].id;
+      });
+      return { id: mappingId };
+    } catch (error) {
+      if ((error as { code?: string }).code === "23505") throw new ConflictException({ message: "Sambungan ini atau masukan splitter tersebut sudah tercatat." });
+      throw error;
+    }
+  }
+
+  async deleteCoreMapping(segmentId: string, mappingId: string, userId: string) {
+    if (!/^[0-9a-f-]{36}$/iu.test(mappingId)) throw new BadRequestException({ message: "ID sambungan tidak valid." });
+    return this.db.transaction(async (client) => {
+      const { rows } = await client.query(`DELETE FROM network_core_mappings m USING network_cores a WHERE m.id=$1 AND a.id=m.core_a_id AND (a.asset_id=$2 OR EXISTS (SELECT 1 FROM network_cores b WHERE b.id=m.core_b_id AND b.asset_id=$2)) RETURNING m.id,m.node_asset_id AS "nodeAssetId"`, [mappingId, segmentId]);
+      if (!rows.length) throw new NotFoundException({ message: "Sambungan tidak ditemukan pada kabel ini." });
+      await audit(client, userId, "CORE_MAPPING_DELETED", "ASSET", segmentId, rows[0]);
+      return { id: rows[0].id };
+    });
+  }
   async verifyCoreUsage(
     assetId: string,
     source: string | undefined,
@@ -1926,6 +2004,11 @@ export class AtlasService {
     await client.query("SELECT id FROM network_assets WHERE id=$1 FOR UPDATE", [
       assetId,
     ]);
+    const { rows: mapped } = await client.query(
+      `SELECT c.core_number FROM network_cores c JOIN network_core_mappings m ON c.id IN (m.core_a_id,m.core_b_id) WHERE c.asset_id=$1 AND c.core_number>$2 LIMIT 1`,
+      [assetId, total]
+    );
+    if (mapped.length) throw new ConflictException({ message: "Kapasitas tidak dapat dikurangi karena core yang akan dihapus masih memiliki catatan sambungan." });
     const { rows: active } = await client.query(
       `SELECT id FROM network_cores WHERE asset_id=$1 AND core_number > $2 AND status <> 'Available' LIMIT 1`,
       [assetId, total]
@@ -2120,9 +2203,9 @@ export class AtlasService {
     }
     const { rows: cables } = await this.db.query(
       `SELECT p.id AS "pointId", c.id,c.name,c.total_cores AS "totalCores",
-        EXISTS(SELECT 1 FROM network_asset_relations r WHERE r.asset_id=p.id AND r.segment_id=c.id) AS recorded,
+        (EXISTS(SELECT 1 FROM network_asset_relations r WHERE r.asset_id=p.id AND r.segment_id=c.id) OR EXISTS(SELECT 1 FROM network_core_mappings m JOIN network_cores mc ON mc.id IN (m.core_a_id,m.core_b_id) WHERE m.node_asset_id=p.id AND mc.asset_id=c.id)) AS recorded,
         ST_Distance(p.geometry::geography,c.geometry::geography) AS "distanceMeters",
-        (c.source='managed' OR c.attributes->'__coreUsageVerification'->>'verified'='true' OR c.attributes->>'__coreUsageVerified'='true') AS verified,
+        COALESCE((c.source='managed' OR c.attributes->'__coreUsageVerification'->>'verified'='true' OR c.attributes->>'__coreUsageVerified'='true'), false) AS verified,
         (SELECT count(*)::int FROM network_cores x WHERE x.asset_id=c.id AND x.status='Used') AS used,
         (SELECT count(*)::int FROM network_cores x WHERE x.asset_id=c.id AND x.status='Booked') AS booked,
         (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_cores x WHERE x.asset_id=c.id AND x.status='Used') AS "usedNumbers",
@@ -2131,7 +2214,7 @@ export class AtlasService {
         ST_AsGeoJSON(c.geometry)::json AS geometry
       FROM network_assets p JOIN network_assets c ON c.asset_type='segment'
         AND GeometryType(c.geometry) IN ('LINESTRING','MULTILINESTRING')
-        AND (ST_DWithin(p.geometry::geography,c.geometry::geography,20) OR EXISTS(SELECT 1 FROM network_asset_relations r WHERE r.asset_id=p.id AND r.segment_id=c.id))
+        AND (ST_DWithin(p.geometry::geography,c.geometry::geography,20) OR EXISTS(SELECT 1 FROM network_asset_relations r WHERE r.asset_id=p.id AND r.segment_id=c.id) OR EXISTS(SELECT 1 FROM network_core_mappings m JOIN network_cores mc ON mc.id IN (m.core_a_id,m.core_b_id) WHERE m.node_asset_id=p.id AND mc.asset_id=c.id))
       WHERE p.id=ANY($1::text[]) ORDER BY p.id,recorded DESC,"distanceMeters",c.id`,
       [points.map((point) => point.id)]
     );
@@ -2182,6 +2265,37 @@ export class AtlasService {
     };
   }
 
+  async terminationPatterns(longitude: number, latitude: number) {
+    const { rows } = await this.db.query<{ type: string; sampleSize: number; medianMeters: number }>(
+      `WITH location AS (SELECT ST_SetSRID(ST_MakePoint($1,$2),4326) AS geom),
+       points AS (
+         SELECT DISTINCT a.geometry,
+           CASE
+             WHEN label ~ '(^|[^a-z0-9])olt([^a-z0-9]|$)' THEN 'OLT'
+             WHEN label ~ '(^|[^a-z0-9])otb([^a-z0-9]|$)' THEN 'OTB'
+             WHEN label ~ '(^|[^a-z0-9])odc([^a-z0-9]|$)' THEN 'ODC'
+             WHEN label ~ '(^|[^a-z0-9])(odp|fat|spl[-_ ]?1[:_-][0-9]+)([^a-z0-9]|$)' THEN 'ODP'
+             WHEN label ~ '(^|[^a-z0-9])(closure|cs[-_ ]?[0-9]+c)([^a-z0-9]|$)' THEN 'Closure'
+             WHEN label ~ '(^|[^a-z0-9])(slack|coil|slk[-_ ]?[0-9]+)([^a-z0-9]|$)' THEN 'Slack / Coil'
+           END AS type
+         FROM network_assets a CROSS JOIN location l CROSS JOIN LATERAL
+           (SELECT lower(concat_ws(' ',a.name,a.attributes->>'folderPath',a.attributes->>'assetKind',a.attributes->>'Tipe Perangkat',a.attributes->>'tipe_perangkat')) AS label) labels
+         WHERE a.source='kml' AND a.asset_type='asset' AND GeometryType(a.geometry)='POINT'
+           AND ST_DWithin(a.geometry::geography,l.geom::geography,2000)
+       ), nearest AS (
+         SELECT a.type, min(ST_Distance(a.geometry::geography,b.geometry::geography)) AS distance
+         FROM points a JOIN points b ON a.type=b.type AND NOT ST_Equals(a.geometry,b.geometry)
+           AND ST_DWithin(a.geometry::geography,b.geometry::geography,500)
+           AND ST_Distance(a.geometry::geography,b.geometry::geography)>1
+         WHERE a.type IS NOT NULL GROUP BY a.type,a.geometry
+       )
+       SELECT type,count(*)::int AS "sampleSize",percentile_cont(0.5) WITHIN GROUP (ORDER BY distance) AS "medianMeters"
+       FROM nearest GROUP BY type`,
+      [longitude, latitude]
+    );
+    return rows;
+  }
+
   async terminationsAlongRoute(geometry: unknown) {
     const { rows } = await this.db.query<{
       id: string;
@@ -2209,7 +2323,10 @@ export class AtlasService {
       )
       SELECT p.id,p.name,p.type,ST_X(p.geometry) AS longitude,ST_Y(p.geometry) AS latitude,
         ST_Distance(p.geometry::geography,r.geom::geography) AS "distanceToRouteMeters",
-        (SELECT count(DISTINCT rel.segment_id)::int FROM network_asset_relations rel WHERE rel.asset_id=p.id) AS "recordedCables"
+        (SELECT count(*)::int FROM (
+          SELECT rel.segment_id FROM network_asset_relations rel WHERE rel.asset_id=p.id
+          UNION SELECT mc.asset_id FROM network_core_mappings m JOIN network_cores mc ON mc.id IN (m.core_a_id,m.core_b_id) WHERE m.node_asset_id=p.id
+        ) linked) AS "recordedCables"
       FROM points p CROSS JOIN route r
       WHERE p.type IS NOT NULL AND ST_DWithin(p.geometry::geography,r.geom::geography,20)
       ORDER BY ST_LineLocatePoint(r.geom,p.geometry),p.id LIMIT 100`,
@@ -2293,7 +2410,16 @@ export class AtlasService {
           [asset.id]
         );
         const { rows: connectedCables } = await this.db.query(
-          `SELECT DISTINCT a.id,a.name,a.total_cores AS "totalCores" FROM network_asset_relations r JOIN network_assets a ON a.id=r.segment_id WHERE r.asset_id=$1 ORDER BY a.name`,
+          `SELECT a.id,a.name,a.total_cores AS "totalCores",
+            COALESCE((a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true'), false) AS verified,
+            count(c.id) FILTER (WHERE c.status='Used')::int AS used,
+            count(c.id) FILTER (WHERE c.status='Booked')::int AS booked,
+            count(c.id) FILTER (WHERE c.status='Available')::int AS available,
+            (SELECT count(DISTINCT mc.id)::int FROM network_core_mappings m JOIN network_cores mc ON mc.id IN (m.core_a_id,m.core_b_id) WHERE m.node_asset_id=$1 AND mc.asset_id=a.id) AS "mappedCores"
+           FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+           WHERE a.asset_type='segment' AND (EXISTS (SELECT 1 FROM network_asset_relations r WHERE r.asset_id=$1 AND r.segment_id=a.id)
+             OR EXISTS (SELECT 1 FROM network_core_mappings m JOIN network_cores mc ON mc.id IN (m.core_a_id,m.core_b_id) WHERE m.node_asset_id=$1 AND mc.asset_id=a.id))
+           GROUP BY a.id ORDER BY a.name`,
           [asset.id]
         );
         const attributes = asset.attributes ?? {};
@@ -2344,7 +2470,12 @@ export class AtlasService {
           capacity: {
             availableCores: counts[0]?.available ?? 0,
             bookedCores: counts[0]?.booked ?? 0,
-            connectedCables,
+            connectedCables: connectedCables.map((cable) => ({
+              ...cable,
+              used: cable.verified ? cable.used : null,
+              booked: cable.verified ? cable.booked : null,
+              available: cable.verified ? cable.available : null,
+            })),
             deviceType: String(deviceType),
             fields: capacityFields,
             recommendation,

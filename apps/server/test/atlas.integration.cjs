@@ -52,6 +52,17 @@ async function main() {
     const bookings = new BookingService(db);
     const atlas = new AtlasService(db, bookings);
     const q = (sql, values) => db.query(sql, values);
+    await q(`INSERT INTO network_assets(id,name,asset_type,source,geometry,attributes)
+      SELECT 'pattern-' || i, 'ODP ' || i, 'asset', 'kml', ST_SetSRID(ST_MakePoint(i * 0.001, 0),4326), '{}'::jsonb
+      FROM generate_series(0,4) i`);
+    const beforePattern = (await atlas.terminationPatterns(0, 0)).find((p) => p.type === 'ODP');
+    assert.equal(beforePattern.sampleSize, 5);
+    assert.ok(beforePattern.medianMeters > 110 && beforePattern.medianMeters < 112);
+    await q(`UPDATE network_assets SET geometry=ST_SetSRID(ST_MakePoint(substring(id from '[0-9]+')::int * 0.0002,0),4326) WHERE id LIKE 'pattern-%'`);
+    const afterPattern = (await atlas.terminationPatterns(0, 0)).find((p) => p.type === 'ODP');
+    assert.ok(afterPattern.medianMeters > 22 && afterPattern.medianMeters < 23);
+    await q("DELETE FROM network_assets WHERE id LIKE 'pattern-%'");
+    console.log("PASS: local KMZ pattern updates when ODP data changes");
     await q(`INSERT INTO audit_logs(action,entity_type,entity_id,details) VALUES
       ('NETWORK_IMPORTED','NETWORK_IMPORT','import-active','{"fileName":"active.kmz"}'),
       ('NETWORK_IMPORTED','NETWORK_IMPORT','import-empty','{"fileName":"deleted.kmz"}')`);
@@ -73,6 +84,44 @@ async function main() {
       ('cable-b','Kabel B','segment','kml',1,ST_GeomFromText('LINESTRING(0 0,0.002 0)',4326),'{}')`);
     await q(`INSERT INTO network_cores(asset_id,core_number,status) VALUES
       ('cable-a',1,'Used'),('cable-a',2,'Booked'),('cable-a',3,'Available'),('cable-b',1,'Available')`);
+    const mapped = await atlas.createCoreMapping("cable-a", { nodeAssetId: "term-b", coreNumber: 1, splitterInput: "SPL-1:8 input 1", source: "Survei lapangan" }, "admin");
+    const splice = await atlas.createCoreMapping("cable-a", { nodeAssetId: "term-b", coreNumber: 3, peerSegmentId: "cable-b", peerCoreNumber: 1, source: "Dokumen inventaris" }, "admin");
+    assert.equal((await atlas.listCoreMappings("cable-a")).length, 2);
+    assert.equal((await atlas.listCoreMappings("cable-b")).length, 1);
+    await assert.rejects(() => atlas.createCoreMapping("cable-a", { nodeAssetId: "term-b", coreNumber: 1, splitterInput: "input lain", source: "Survei lapangan" }, "admin"));
+    await assert.rejects(() => atlas.createCoreMapping("cable-a", { nodeAssetId: "term-b", coreNumber: 2, peerSegmentId: "cable-b", peerCoreNumber: 99, source: "Survei lapangan" }, "admin"));
+    await assert.rejects(() => atlas.createCoreMapping("cable-a", { nodeAssetId: "term-a", coreNumber: 2, splitterInput: "input", source: "Survei lapangan" }, "admin"));
+    const mappedPoint = await atlas.nearestNetwork(0.001, 0);
+    const mappedCable = mappedPoint.capacity.connectedCables.find((cable) => cable.id === "cable-a");
+    assert.deepEqual([mappedCable.totalCores, mappedCable.used, mappedCable.booked, mappedCable.available, mappedCable.mappedCores], [3, 1, 1, 1, 2]);
+    assert.equal(mappedCable.verified, true);
+    const unverifiedMappedCable = mappedPoint.capacity.connectedCables.find((cable) => cable.id === "cable-b");
+    assert.equal(unverifiedMappedCable.verified, false);
+    assert.equal(unverifiedMappedCable.available, null);
+    const routeMapped = await atlas.terminationsAlongRoute({ type: "LineString", coordinates: [[0, 0], [0.001, 0]] });
+    assert.equal(routeMapped.find((point) => point.id === "term-b").recordedCables, 2);
+    const nearbyMapped = await atlas.nearbyTerminations(0.001, 0);
+    assert.equal(nearbyMapped.points.find((point) => point.id === "term-b").cables.find((cable) => cable.id === "cable-a").recorded, true);
+    await assert.rejects(() => atlas.updateAsset("cable-a", { totalCores: 2 }, "admin"), /catatan sambungan/);
+    await assert.rejects(() => q("DELETE FROM network_assets WHERE id='cable-a'"));
+    assert.equal((await atlas.listCoreMappings("cable-a")).length, 2);
+    await q(`INSERT INTO network_assets(id,name,asset_type,source,total_cores,geometry,attributes) VALUES ('mapped-96','Kabel 96','segment','kml',96,ST_GeomFromText('LINESTRING(0 0,0.001 0)',4326),'{}')`);
+    await q(`INSERT INTO network_cores(asset_id,core_number,status) SELECT 'mapped-96',i,CASE WHEN i=2 THEN 'Booked' ELSE 'Available' END FROM generate_series(1,96) i`);
+    const mapping96 = await atlas.createCoreMapping("mapped-96", { nodeAssetId: "term-b", coreNumber: 1, splitterInput: "SPL-1:8 input 2", source: "Survei lapangan" }, "admin");
+    const beforeVerify96 = (await atlas.nearestNetwork(0.001, 0)).capacity.connectedCables.find((cable) => cable.id === "mapped-96");
+    assert.equal(beforeVerify96.verified, false);
+    assert.equal(beforeVerify96.available, null);
+    await atlas.verifyCoreUsage("mapped-96", "Survei lapangan", "Pemeriksaan", "admin", [{ coreNumber: 1, status: "Used" }]);
+    const afterVerify96 = (await atlas.nearestNetwork(0.001, 0)).capacity.connectedCables.find((cable) => cable.id === "mapped-96");
+    assert.deepEqual([afterVerify96.totalCores, afterVerify96.used, afterVerify96.booked, afterVerify96.available, afterVerify96.mappedCores], [96, 1, 1, 94, 1]);
+    await atlas.deleteCoreMapping("mapped-96", mapping96.id, "admin");
+    await q("DELETE FROM network_assets WHERE id='mapped-96'");
+    assert.deepEqual((await atlas.listCores("cable-a")).map((core) => core.status), ["Used", "Booked", "Available"]);
+    await assert.rejects(() => atlas.deleteCoreMapping("cable-b", mapped.id, "admin"));
+    await atlas.deleteCoreMapping("cable-a", mapped.id, "admin");
+    await atlas.deleteCoreMapping("cable-b", splice.id, "admin");
+    assert.equal((await atlas.listCoreMappings("cable-a")).length, 0);
+    console.log("PASS: explicit core mapping and verified usage counts do not modify core status");
     await q(
       "INSERT INTO network_asset_relations(segment_id,asset_id,kind) VALUES('cable-a','term-a','ODC')"
     );
@@ -710,6 +759,17 @@ async function main() {
       demandResult.rows[0].analysis.terminationPlan,
       canonicalPlan
     );
+    const odpPlan = { ...canonicalPlan, deviceCandidates: [{ kind: "ODP", basis: "PLANNING", latitude: -7, longitude: 110 }] };
+    const odpHistory = await atlas.saveAnalysisHistory("admin", "ADDRESS", "Kebutuhan ODP", {}, {
+      latitude: -7.008, longitude: 110, network: { id: "near-point" }, terminationPlan: odpPlan,
+    });
+    await assert.rejects(() => atlas.createSurvey("admin", odpHistory, 0, undefined, { ...odpPlan, odpDemands: { "Simulasi ODP 99": 2 } }));
+    await assert.rejects(() => atlas.createSurvey("admin", odpHistory, 0, undefined, { ...odpPlan, odpDemands: { "Simulasi ODP 01": -1 } }));
+    const odpSurvey = await atlas.createSurvey("admin", odpHistory, 0, undefined, { ...odpPlan, odpDemands: { "Simulasi ODP 01": 3 } });
+    const odpResult = await q("SELECT analysis FROM network_surveys WHERE id=$1", [odpSurvey.id]);
+    assert.deepEqual(odpResult.rows[0].analysis.terminationPlan.odpDemands, { "Simulasi ODP 01": 3 });
+    assert.deepEqual(odpResult.rows[0].analysis.terminationPlan.deviceCandidates, odpPlan.deviceCandidates);
+    console.log("PASS: survey validates and stores per-ODP demands without changing source plan");
 
     console.log("PASS: survey retains a validated termination and cable plan");
     console.log(

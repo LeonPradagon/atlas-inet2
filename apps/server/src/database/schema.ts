@@ -640,3 +640,22 @@ export const networkAssetRelations = pgTable(
     check("network_asset_relations_check", sql`segment_id <> asset_id`),
   ]
 );
+
+export const networkCoreMappings = pgTable("network_core_mappings", {
+  id: uuid().defaultRandom().primaryKey(),
+  nodeAssetId: text("node_asset_id").notNull().references(() => networkAssets.id, { onDelete: "restrict" }),
+  coreAId: bigint("core_a_id", { mode: "number" }).notNull().references(() => networkCores.id, { onDelete: "restrict" }),
+  coreBId: bigint("core_b_id", { mode: "number" }).references(() => networkCores.id, { onDelete: "restrict" }),
+  splitterInput: text("splitter_input"),
+  source: text().notNull(),
+  note: text().notNull().default(""),
+  createdBy: text("created_by").notNull(),
+  createdAt: timestamp("created_at", { mode: "date", withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index("network_core_mappings_node_idx").on(table.nodeAssetId),
+  index("network_core_mappings_core_a_idx").on(table.coreAId),
+  index("network_core_mappings_core_b_idx").on(table.coreBId),
+  unique("network_core_mappings_splice_unique").on(table.nodeAssetId, table.coreAId, table.coreBId),
+  unique("network_core_mappings_splitter_unique").on(table.nodeAssetId, table.splitterInput),
+  check("network_core_mappings_endpoint_check", sql`(core_b_id IS NOT NULL AND splitter_input IS NULL AND core_a_id < core_b_id) OR (core_b_id IS NULL AND splitter_input IS NOT NULL AND length(trim(splitter_input)) > 0)`),
+]);

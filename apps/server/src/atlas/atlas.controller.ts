@@ -28,8 +28,8 @@ import { AtlasService } from "./atlas.service";
 import { BulkAnalysisService } from "./bulk-analysis.service";
 import {
   buildTerminationPlan,
+  estimateOdpLocations,
   type CoreRequirement,
-  initialSlackCandidate,
   placeAlongRoute,
   recommendDeviceCandidates,
   recommendSourceCable,
@@ -433,6 +433,24 @@ export class AtlasController {
   async cores(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
     return this.atlas.listCores(id);
+  }
+
+  @Get("assets/:id/core-mappings")
+  async coreMappings(@Req() req: IncomingMessage, @Param("id") id: string) {
+    await this.auth.requireUser(req);
+    return this.atlas.listCoreMappings(id);
+  }
+
+  @Post("assets/:id/core-mappings")
+  async createCoreMapping(@Req() req: IncomingMessage, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+    const user = await this.auth.requireAdmin(req);
+    return this.atlas.createCoreMapping(id, body, user.id);
+  }
+
+  @Delete("assets/:id/core-mappings/:mappingId")
+  async deleteCoreMapping(@Req() req: IncomingMessage, @Param("id") id: string, @Param("mappingId") mappingId: string) {
+    const user = await this.auth.requireAdmin(req);
+    return this.atlas.deleteCoreMapping(id, mappingId, user.id);
   }
 
   @Post("assets/:id/cores/verify")
@@ -1081,10 +1099,7 @@ export class AtlasController {
               totalCores: number;
             }[];
           }[]
-        ).find((point) => point.id === nearest.id)?.cables ?? [],
-        coreRequirement
-          ? coreRequirement.services + coreRequirement.reserve
-          : undefined
+        ).find((point) => point.id === nearest.id)?.cables ?? []
       );
       const calculatedPlan = buildTerminationPlan(
         nearest.id,
@@ -1110,11 +1125,13 @@ export class AtlasController {
         ),
         route.geometry
       );
-      const planningSlack = evidenceCandidates.some(
-        (point) => point.kind === "Slack / Coil"
-      )
-        ? null
-        : initialSlackCandidate(route.geometry, routeEvidence);
+      let terminationPatterns: Awaited<ReturnType<AtlasService["terminationPatterns"]>> | null = null;
+      try {
+        terminationPatterns = await this.atlas.terminationPatterns(longitude, latitude);
+      } catch {
+        // Without a reliable sample, do not invent an ODP spacing.
+      }
+      const odpPattern = terminationPatterns?.find((p) => p.type === "ODP" && p.sampleSize >= 5);
       const terminationPlan = {
         ...calculatedPlan,
         connectionCandidates: placeAlongRoute(
@@ -1125,9 +1142,16 @@ export class AtlasController {
           recommendedKind: "Closure" as const,
         })),
         connectionCandidatesIncomplete,
-        deviceCandidates: planningSlack
-          ? [...evidenceCandidates, planningSlack]
-          : evidenceCandidates,
+        deviceCandidates: [
+          ...evidenceCandidates.map((candidate) => {
+            const pattern = terminationPatterns?.find((p) => p.type === candidate.kind && p.sampleSize >= 5);
+            return pattern ? { ...candidate, reason: `${candidate.reason} Median jarak lurus ${candidate.kind} terdekat di data KMZ sekitar lokasi: ${Math.round(pattern.medianMeters)} m (${pattern.sampleSize} titik); bukan aturan pemasangan.` } : candidate;
+          }),
+          ...(!routeEvidenceIncomplete && odpPattern
+            ? estimateOdpLocations(route.geometry, routeEvidence, odpPattern.medianMeters)
+            : []),
+        ],
+        terminationPatterns,
         deviceRecommendation: targetOdp
           ? {
               kind: "REUSE_ODP",
