@@ -30,7 +30,9 @@ test("route spans retain bends, consistent ODP names and total route length", ()
   assert.match(rows["Ruas masuk"], /Ruas 02.*Simulasi ODP 03.*100 m/);
   assert.match(rows["Ruas keluar"], /Ruas 03.*Usulan ODP pelanggan.*50 m/);
   assert.match(rows["Kabel usulan"], /96 core/);
-  assert.match(rows["Core distribusi dibutuhkan"], /Belum dapat ditentukan/);
+  assert.deepEqual(spans.map((span) => span.requiredCores), [3, 2, 1]);
+  assert.equal(rows["Core rencana ruas masuk"], "2 core");
+  assert.equal(rows["Core rencana ruas keluar"], "1 core");
   assert.deepEqual(describeNodeCableRows(plan, "Titik tidak ada"), []);
   assert.deepEqual(describeCableSpans({ ...plan, cables: [...plan.cables, plan.cables[0]] }), []);
 });
