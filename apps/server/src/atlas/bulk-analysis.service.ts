@@ -15,6 +15,7 @@ import {
 import { RoutingService } from "../geospatial/routing.service";
 import { NetworkImportService } from "../network/network-import.service";
 import { AtlasService } from "./atlas.service";
+import { analyzeCoordinates } from "./address-analysis";
 
 type InputRow = {
   row: number;
@@ -215,56 +216,7 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
         message: "Koordinat hasil analisis tidak valid.",
       });
     }
-    if (previous.network && previous.terminations?.points?.length === 0) {
-      const terminations = await this.atlas.nearbyTerminations(
-        longitude,
-        latitude,
-        true
-      );
-      const result = { ...previous, terminations };
-      await this.db.query(
-        "UPDATE analysis_bulk_job_rows SET result=$3::jsonb WHERE job_id=$1 AND row_number=$2",
-        [jobId, row, JSON.stringify(result)]
-      );
-      return result;
-    }
-    const network = await this.atlas.nearestNetwork(longitude, latitude, true);
-    const terminations = await this.atlas.nearbyTerminations(
-      longitude,
-      latitude,
-      true
-    );
-    let result = {
-      ...previous,
-      distanceMeters: null,
-      expansionAvailable: false,
-      network,
-      routeGeometry: null,
-      searchRadiusMeters: 2000,
-      status: "NETWORK_NOT_FOUND",
-      terminations,
-    };
-    if (network?.nearestPoint?.coordinates) {
-      try {
-        const route = await this.routing.previewNetwork([
-          [longitude, latitude],
-          network.nearestPoint.coordinates,
-        ]);
-        result = {
-          ...result,
-          distanceMeters: route.distanceMeters,
-          routeGeometry: route.geometry,
-          status: "OK",
-        };
-      } catch {
-        result = {
-          ...result,
-          message:
-            "Jaringan ditemukan, tetapi rute jalan mobil belum tersedia.",
-          status: "ROUTING_UNAVAILABLE",
-        };
-      }
-    }
+    const result = await analyzeCoordinates(this.atlas, this.routing, longitude, latitude, previous.address, previous.geocodingProvider, previous.geocodingMatch, previous.matchedStreet, true);
     await this.db.transaction(async (client) => {
       await client.query(
         "UPDATE analysis_bulk_job_rows SET result=$3::jsonb,status=$4,error_message=NULL WHERE job_id=$1 AND row_number=$2",
@@ -361,62 +313,7 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
           geocodingMatch = geocoded.matchQuality;
           matchedStreet = geocoded.matchedStreet;
         }
-        const nearest = await this.atlas.nearestNetwork(longitude!, latitude!);
-        const terminations = await this.atlas.nearbyTerminations(
-          longitude!,
-          latitude!
-        );
-        if (nearest?.nearestPoint?.coordinates) {
-          try {
-            const route = await this.routing.previewNetwork([
-              [longitude!, latitude!],
-              nearest.nearestPoint.coordinates as [number, number],
-            ]);
-            result = {
-              address: input.address,
-              distanceMeters: route.distanceMeters,
-              geocodingMatch,
-              geocodingProvider,
-              latitude,
-              longitude,
-              matchedStreet,
-              network: nearest,
-              routeGeometry: route.geometry,
-              status: "OK",
-              terminations,
-            };
-          } catch {
-            result = {
-              address: input.address,
-              distanceMeters: null,
-              geocodingMatch,
-              geocodingProvider,
-              latitude,
-              longitude,
-              matchedStreet,
-              message:
-                "Rute jalan belum tersedia; jarak penarikan tidak ditampilkan.",
-              network: nearest,
-              status: "ROUTING_UNAVAILABLE",
-              terminations,
-            };
-          }
-        } else {
-          result = {
-            address: input.address,
-            distanceMeters: null,
-            expansionAvailable: true,
-            geocodingMatch,
-            geocodingProvider,
-            latitude,
-            longitude,
-            matchedStreet,
-            network: nearest ?? null,
-            searchRadiusMeters: 1000,
-            status: "NETWORK_NOT_FOUND",
-            terminations,
-          };
-        }
+        result = await analyzeCoordinates(this.atlas, this.routing, longitude!, latitude!, input.address, geocodingProvider as "photon" | "nominatim" | "manual" | undefined, geocodingMatch as "approximate" | undefined, matchedStreet);
         await this.finishRow(
           claim,
           result,

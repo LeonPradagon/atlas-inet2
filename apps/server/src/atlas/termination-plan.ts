@@ -6,6 +6,40 @@ export type CoreRequirement = {
   reserve: number;
   assumed?: boolean;
 };
+
+// Estimates reflect observed proximity, not a coverage or capacity rule.
+export function estimateOdpLocations(
+  geometry: Line,
+  existing: { type: string; longitude: number; latitude: number }[],
+  spacing: number
+) {
+  const coords = geometry.coordinates;
+  if (coords.length < 2 || !Number.isFinite(spacing) || spacing < 1) return [];
+  const sy = 111_320;
+  const sx = sy * Math.cos((coords[0][1] * Math.PI) / 180);
+  const distances = coords.slice(1).map((p, i) =>
+    Math.hypot((p[0] - coords[i][0]) * sx, (p[1] - coords[i][1]) * sy)
+  );
+  const total = distances.reduce((a, b) => a + b, 0);
+  const results: { kind: string; latitude: number; longitude: number; basis: "PLANNING"; reason: string }[] = [];
+  let before = 0;
+  for (let i = 0; i < distances.length && results.length < 100; i++) {
+    const length = distances[i];
+    let offset = Math.max(spacing, Math.ceil(before / spacing) * spacing);
+    while (length > 0 && offset < before + length && offset < total - 20 && results.length < 100) {
+      const t = (offset - before) / length;
+      const longitude = coords[i][0] + (coords[i + 1][0] - coords[i][0]) * t;
+      const latitude = coords[i][1] + (coords[i + 1][1] - coords[i][1]) * t;
+      if (!existing.some((p) => p.type === "ODP" && Math.hypot((p.longitude - longitude) * sx, (p.latitude - latitude) * sy) <= 20)) {
+        results.push({ kind: "ODP", latitude, longitude, basis: "PLANNING", reason: `Simulasi berdasarkan median jarak lurus sekitar ${Math.round(spacing)} m antar-ODP terdekat dalam data KMZ di sekitar lokasi. Bukan jarak cakupan atau standar pemasangan; kebutuhan, jumlah, lokasi, port, dan kapasitas perlu survei.` });
+      }
+      offset += spacing;
+    }
+    before += length;
+  }
+  return results;
+}
+
 const CABLE_CAPACITIES = [12, 24, 48, 96, 144, 288];
 export type SourceCable = {
   id: string;
@@ -28,23 +62,14 @@ export function buildTerminationPlan(
   if (!Array.isArray(geometry.coordinates) || geometry.coordinates.length < 2) {
     throw new Error("Invalid route geometry");
   }
-  const requiredCores = requirement
-    ? requirement.services + requirement.reserve
-    : null;
-  const useSourceCapacity = !requirement || requirement.assumed === true;
-  const capacity = useSourceCapacity
-    ? sourceCable?.totalCores &&
-      CABLE_CAPACITIES.includes(sourceCable.totalCores)
+  const sourceCapacity = sourceCable?.totalCores &&
+    CABLE_CAPACITIES.includes(sourceCable.totalCores)
       ? sourceCable.totalCores
-      : null
-    : (CABLE_CAPACITIES.find((value) => value >= requiredCores!) ?? null);
-  const capacityBasis = useSourceCapacity
-    ? capacity === null
-      ? "SOURCE_UNKNOWN"
-      : sourceCable?.verified && sourceCable.recorded
-        ? "VERIFIED_SOURCE"
-        : "UNVERIFIED_SOURCE"
-    : "EXPLICIT_DEMAND";
+      : null;
+  const capacity = sourceCapacity;
+  const capacityBasis = sourceCapacity !== null
+    ? sourceCable?.verified && sourceCable.recorded ? "VERIFIED_SOURCE" : "UNVERIFIED_SOURCE"
+    : "SOURCE_UNKNOWN";
   return {
     cables: [
       {
@@ -59,7 +84,7 @@ export function buildTerminationPlan(
     requirement: requirement
       ? {
           assumed: requirement.assumed === true,
-          requiredCores,
+          requiredCores: null,
           reserve: requirement.reserve,
           services: requirement.services,
         }
@@ -273,54 +298,3 @@ export function placeAlongRoute<
   });
 }
 
-// A midpoint is an editable planning placeholder, not a prescribed installation spacing.
-export function initialSlackCandidate(
-  geometry: Line,
-  evidence: { type: string; longitude: number; latitude: number }[]
-) {
-  const coords = geometry.coordinates;
-  if (coords.length < 2) {
-    return null;
-  }
-  const scaleY = 111_320;
-  const scaleX = scaleY * Math.cos((coords[0][1] * Math.PI) / 180);
-  const lengths = coords
-    .slice(1)
-    .map((p, i) =>
-      Math.hypot((p[0] - coords[i][0]) * scaleX, (p[1] - coords[i][1]) * scaleY)
-    );
-  const total = lengths.reduce((sum, length) => sum + length, 0);
-  if (total <= 40) {
-    return null;
-  }
-  let left = total / 2;
-  for (let i = 0; i < lengths.length; i++) {
-    if (left <= lengths[i] && lengths[i] > 0) {
-      const t = left / lengths[i];
-      const longitude = coords[i][0] + t * (coords[i + 1][0] - coords[i][0]);
-      const latitude = coords[i][1] + t * (coords[i + 1][1] - coords[i][1]);
-      if (
-        evidence.some(
-          (point) =>
-            point.type === "Slack / Coil" &&
-            Math.hypot(
-              (point.longitude - longitude) * scaleX,
-              (point.latitude - latitude) * scaleY
-            ) <= 20
-        )
-      ) {
-        return null;
-      }
-      return {
-        basis: "PLANNING" as const,
-        kind: "Slack / Coil",
-        latitude,
-        longitude,
-        reason:
-          "Opsi cadangan kabel untuk pemeliharaan. Titik tengah jalur dipakai sebagai posisi awal perencanaan, bukan ketentuan jarak pemasangan. Kebutuhan, lokasi, dan panjang cadangan belum ditentukan.",
-      };
-    }
-    left -= lengths[i];
-  }
-  return null;
-}

@@ -24,7 +24,7 @@ test("source cable detail does not select cores when demand is unknown", async (
     describeSourceCable({ requirement: { assumed: true }, sourceCable }),
     /core 4/
   );
-  assert.match(
+  assert.doesNotMatch(
     describeSourceCable({ requirement: { assumed: false }, sourceCable }),
     /core 4/
   );

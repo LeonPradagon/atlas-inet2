@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { BadRequestException, Inject, Injectable } from "@nestjs/common";
+import { BadRequestException, ConflictException, Inject, Injectable } from "@nestjs/common";
 import ExcelJS from "exceljs";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import JSZip from "jszip";
@@ -750,6 +750,8 @@ export class NetworkImportService {
     const batchSize = 250;
     await this.db.transaction(async (client) => {
       if (replaceExistingKml) {
+        const { rows: mappings } = await client.query(`SELECT m.id FROM network_core_mappings m JOIN network_assets n ON n.id=m.node_asset_id JOIN network_cores a ON a.id=m.core_a_id JOIN network_assets ca ON ca.id=a.asset_id LEFT JOIN network_cores b ON b.id=m.core_b_id LEFT JOIN network_assets cb ON cb.id=b.asset_id WHERE n.source='kml' OR ca.source='kml' OR cb.source='kml' LIMIT 1`);
+        if (mappings.length) throw new ConflictException({ message: "Data KMZ tidak dapat diganti karena masih memiliki catatan sambungan core. Tinjau dan hapus catatan terkait terlebih dahulu." });
         await client.query("DELETE FROM network_assets WHERE source='kml'");
         await client.query("DELETE FROM network_kml_icons");
       }

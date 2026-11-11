@@ -76,6 +76,8 @@ export function TerminationDetail({ data }: { data?: TerminationResults }) {
           Tidak ada terminasi yang dikenali dalam radius pencarian.
         </p>
       )}
+      {data.points.length > 0 && <details>
+        <summary className="fw-semibold py-2">Lihat {data.points.length} terminasi ditemukan</summary>
       {data.points.map((point) => (
         <details className="border-top py-2" key={point.id}>
           <summary>
@@ -130,6 +132,7 @@ export function TerminationDetail({ data }: { data?: TerminationResults }) {
           ))}
         </details>
       ))}
+      </details>}
     </section>
   );
 }

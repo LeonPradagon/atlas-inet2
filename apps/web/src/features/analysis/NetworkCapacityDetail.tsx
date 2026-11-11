@@ -9,7 +9,7 @@ export type NetworkCapacity = {
   usageVerified: boolean;
   verification?: { source?: string; note?: string; verifiedAt?: string } | null;
   fields: { label: string; value: unknown }[];
-  connectedCables: { id: string; name: string; totalCores: number }[];
+  connectedCables: { id: string; name: string; totalCores: number; verified?: boolean; used?: number | null; booked?: number | null; available?: number | null; mappedCores?: number }[];
 };
 
 export function NetworkCapacityDetail({
@@ -114,9 +114,14 @@ export function NetworkCapacityDetail({
                 {cable.totalCores > 0
                   ? cable.totalCores + " core"
                   : "Jumlah core belum diketahui"}
+                {cable.verified
+                  ? ` · terpakai ${cable.used ?? 0} · dibooking ${cable.booked ?? 0} · tersedia ${cable.available ?? 0}`
+                  : " · pemakaian core belum terverifikasi"}
+                {cable.mappedCores ? ` · ${cable.mappedCores} core dipetakan pada titik ini` : ""}
               </li>
             ))}
           </ul>
+          <small className="d-block text-secondary">Jalankan ulang analisis setelah mengubah sambungan atau verifikasi core untuk memperbarui angka.</small>
         </div>
       ) : (
         <small className="d-block text-secondary mt-2">
