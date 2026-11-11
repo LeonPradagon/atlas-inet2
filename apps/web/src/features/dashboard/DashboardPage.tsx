@@ -138,13 +138,6 @@ export function DashboardPage() {
       (segmentPage - 1) * dashboardPageSize,
       segmentPage * dashboardPageSize
     ) ?? [];
-  const format = (date: Date) =>
-    new Intl.DateTimeFormat("id-ID", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    }).format(date);
   return (
     <>
       <PageHeader
@@ -175,20 +168,6 @@ export function DashboardPage() {
             : "Laporan tidak dapat diekspor."}
         </div>
       )}
-      <div className="welcome-banner mb-4">
-        <div>
-          <span className="eyebrow">
-            {format(new Date()).toLocaleUpperCase("id-ID")}
-          </span>
-          <h2>Ringkasan ATLAS</h2>
-          <p>Informasi aset dan booking yang tersimpan.</p>
-        </div>
-        <div className="welcome-art">
-          <i className="bi bi-broadcast-pin" />
-          <span />
-          <span />
-        </div>
-      </div>
       {summary.isError ? (
         <div className="alert alert-danger">
           Data ATLAS tidak dapat dimuat. Periksa koneksi backend atau sesi Anda.

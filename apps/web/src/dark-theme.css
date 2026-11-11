@@ -414,38 +414,50 @@
 [data-bs-theme="dark"] .maplibregl-popup-anchor-top .maplibregl-popup-tip {
   border-bottom-color: var(--atlas-surface);
 }
-[data-bs-theme="dark"] .bulk-upload-zone {
+[data-bs-theme="dark"] .bulk-upload-zone,
+[data-bs-theme="dark"] .file-upload-zone {
   color: var(--bs-body-color);
   background: var(--bs-tertiary-bg);
   border-color: #536780;
 }
 [data-bs-theme="dark"] .bulk-upload-zone:focus-within,
-[data-bs-theme="dark"] .bulk-upload-input:focus-visible + .bulk-upload-zone {
+[data-bs-theme="dark"] .bulk-upload-input:focus-visible + .bulk-upload-zone,
+[data-bs-theme="dark"] .file-upload-zone:focus-within,
+[data-bs-theme="dark"] .file-upload-input:focus-visible + .file-upload-zone {
   background: #22314a;
 }
-[data-bs-theme="dark"] .bulk-upload-zone.is-dragging {
+[data-bs-theme="dark"] .bulk-upload-zone.is-dragging,
+[data-bs-theme="dark"] .file-upload-zone.is-dragging {
   background: #263956;
   border-color: #8299ed;
 }
-[data-bs-theme="dark"] .bulk-upload-zone.is-uploading {
+[data-bs-theme="dark"] .bulk-upload-zone.is-uploading,
+[data-bs-theme="dark"] .file-upload-zone.is-uploading {
   background: #1a273a;
 }
-[data-bs-theme="dark"] .bulk-upload-icon {
+[data-bs-theme="dark"] .bulk-upload-icon,
+[data-bs-theme="dark"] .file-upload-icon {
   color: #b2c1ff;
   background: #293956;
 }
 [data-bs-theme="dark"] .bulk-upload-copy > strong,
+[data-bs-theme="dark"] .file-upload-copy > strong,
 [data-bs-theme="dark"] .bulk-upload-selected b,
+[data-bs-theme="dark"] .file-upload-selected b,
 [data-bs-theme="dark"] .bulk-job-summary strong {
   color: var(--bs-heading-color);
 }
 [data-bs-theme="dark"] .bulk-upload-copy > span,
+[data-bs-theme="dark"] .file-upload-copy > span,
 [data-bs-theme="dark"] .bulk-upload-selected > span,
+[data-bs-theme="dark"] .file-upload-selected > span,
 [data-bs-theme="dark"] .bulk-upload-feedback,
+[data-bs-theme="dark"] .file-upload-feedback,
 [data-bs-theme="dark"] .bulk-job-summary > span {
   color: var(--atlas-muted);
 }
-[data-bs-theme="dark"] .bulk-upload-selected {
+[data-bs-theme="dark"] .bulk-upload-selected,
+[data-bs-theme="dark"] .file-upload-selected {
   color: #b2c1ff !important;
 }
 [data-bs-theme="dark"] .bulk-job-footer {

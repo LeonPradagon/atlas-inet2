@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import type { MouseEventHandler, ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { AccountMenu } from "../components/AccountMenu";
 import { AuthGate } from "../components/AuthGate";
 import { ThemeToggle } from "../components/ThemeToggle";
@@ -60,10 +60,12 @@ const navLink = (
   onClick?: MouseEventHandler<HTMLAnchorElement>
 ) => (
   <Link
+    aria-label={item.label}
     className={`nav-link ${pathname === item.to ? "active" : ""}`}
     key={item.to}
     onClick={onClick}
     to={item.to}
+    title={item.label}
   >
     <i className={`nav-icon bi ${item.icon}`} />
     <span>{item.label}</span>
@@ -79,7 +81,6 @@ export function AppShell({ children }: { children: ReactNode }) {
 }
 
 function AuthenticatedShell({ children }: { children: ReactNode }) {
-  const [sidebarHidden, setSidebarHidden] = useState(false);
   const mobileAnalysisMenu = useRef<HTMLDetailsElement>(null);
   const notificationMenu = useRef<HTMLDetailsElement>(null);
   const queryClient = useQueryClient();
@@ -144,23 +145,9 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
   };
   const unread = notifications.filter((item) => !item.readAt);
   return (
-    <div
-      className={`app-wrapper ${sidebarHidden ? "atlas-sidebar-hidden" : ""}`}
-    >
+    <div className="app-wrapper">
       <nav className="app-header navbar navbar-expand border-bottom bg-white">
         <div className="container-fluid px-4">
-          <button
-            aria-controls="atlas-sidebar"
-            aria-expanded={!sidebarHidden}
-            aria-label={
-              sidebarHidden ? "Tampilkan sidebar" : "Sembunyikan sidebar"
-            }
-            className="btn btn-light sidebar-toggle"
-            onClick={() => setSidebarHidden((hidden) => !hidden)}
-            type="button"
-          >
-            <i aria-hidden="true" className="bi bi-list" />
-          </button>
           <Link
             className="navbar-brand header-brand d-flex align-items-center mb-0 gap-2"
             to="/"
@@ -241,7 +228,11 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             <li>{navLink(navSections[1].items[0], pathname)}</li>
             <li className="desktop-analysis-menu">
               <details open={analysisPath || undefined}>
-                <summary className={`nav-link ${analysisPath ? "active" : ""}`}>
+                <summary
+                  aria-label="Analisis"
+                  className={`nav-link ${analysisPath ? "active" : ""}`}
+                  title="Analisis"
+                >
                   <i className="nav-icon bi bi-graph-up-arrow" />
                   <span>Analisis</span>
                   <i className="bi bi-chevron-down desktop-menu-chevron" />
