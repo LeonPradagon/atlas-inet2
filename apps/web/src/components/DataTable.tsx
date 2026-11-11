@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type KeyboardEvent,
   cloneElement,
   isValidElement,
   type ReactNode,
@@ -51,6 +52,8 @@ export function DataTable<Row>({
   rowClassName,
   tableClassName = "",
   rowId,
+  onRowClick,
+  rowAriaLabel,
   density = "comfortable",
   showHeader = true,
   hover = true,
@@ -63,6 +66,8 @@ export function DataTable<Row>({
   rowClassName?: (row: Row) => string | undefined;
   tableClassName?: string;
   rowId?: (row: Row) => string | undefined;
+  onRowClick?: (row: Row) => void;
+  rowAriaLabel?: (row: Row) => string;
   density?: "comfortable" | "compact";
   showHeader?: boolean;
   hover?: boolean;
@@ -97,6 +102,23 @@ export function DataTable<Row>({
                 className={rowClassName?.(row)}
                 id={rowId?.(row)}
                 key={rowKey(row)}
+                aria-label={onRowClick ? rowAriaLabel?.(row) : undefined}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                onKeyDown={
+                  onRowClick
+                    ? (event: KeyboardEvent<HTMLTableRowElement>) => {
+                        if (
+                          event.target !== event.currentTarget ||
+                          (event.key !== "Enter" && event.key !== " ")
+                        ) {
+                          return;
+                        }
+                        event.preventDefault();
+                        onRowClick(row);
+                      }
+                    : undefined
+                }
+                tabIndex={onRowClick ? 0 : undefined}
               >
                 {columns.map((column) => {
                   const content = column.render(row);

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import ExcelJS from "exceljs";
 import type {
@@ -40,8 +40,6 @@ import {
   legendStyle,
   loadNetworkMapIcons,
 } from "./networkMap";
-import { SegmentRelations } from "./SegmentRelations";
-import { CoreMappingPanel } from "./CoreMappingPanel";
 import { registerSatelliteTiles } from "./satelliteTiles";
 
 type Coordinate = [number, number];
@@ -56,17 +54,314 @@ type MapProvinceOption = {
   folderCount: number;
   bounds: [number, number, number, number] | null;
 };
+type CoreSide = "A" | "B";
+type CorePosition = CoreSide | "R";
 type CoreDestination = {
   id: string;
   name: string;
   type: string | null;
-  side: "A" | "B";
-  distance: number | string;
+  side: CoreSide;
+  distanceFromEndpoint: number | string | null;
+  distanceToRoute: number | string;
+  distanceFromStart: number | string;
+  longitude: number | string;
+  latitude: number | string;
+};
+type CoreEndRecord = {
+  nodeAssetId: string | null;
+  nodeAssetName: string | null;
+  nodeAssetType: string | null;
+  longitude: number | string | null;
+  latitude: number | string | null;
+  verificationStatus: "confirmed" | "needs_review" | null;
+  endpointSource: string | null;
+  endpointNote: string | null;
+  connectionType: "splice" | "termination" | "device_port" | null;
+  peerSegmentId: string | null;
+  peerSegmentName: string | null;
+  peerCoreNumber: number | null;
+  peerSide: CorePosition | null;
+  peerRouteMeasureM: number | string | null;
+  connectionGroupId: string | null;
+  portReference: string | null;
+  connectionVerificationStatus: "confirmed" | "needs_review" | null;
+  connectionSource: string | null;
+  connectionNote: string | null;
+};
+type CoreEndpoint = {
+  side: CoreSide;
+  endpoint: {
+    nodeAssetId: string;
+    nodeAssetName: string;
+    nodeAssetType: string | null;
+    longitude: number;
+    latitude: number;
+    verificationStatus: "confirmed" | "needs_review";
+    source: string;
+    note: string;
+    updatedAt: string;
+  } | null;
+  candidates: CoreDestination[];
+};
+type CorePeer = {
+  peerSegmentId: string;
+  peerSegmentName: string;
+  peerSide: CorePosition;
+  peerRouteMeasureM: number | string | null;
+  peerCoreNumber: number;
+  peerStatus: "Available" | "Booked" | "Used";
+  existingConnectionType: "splice" | "termination" | "device_port" | null;
+  existingPeerCoreId: number | null;
+  existingPeerSide: CorePosition | null;
+  connectionGroupId: string | null;
+  recordedNodeAssetId: string | null;
+  connectedSegmentId: string | null;
+  connectedCoreNumber: number | null;
+  connectedSide: CorePosition | null;
+  connectedRouteMeasureM: number | string | null;
+  isOccupied: boolean;
+  matchesDistribution: boolean;
+  matchesCompany: boolean;
+};
+type CoreEndDraft =
+  | {
+      connectionType: "splice";
+      peerSegmentId?: string;
+      peerCoreNumber?: number;
+      peerSide?: CorePosition;
+      peerRouteMeasureM?: number;
+    }
+  | { connectionType: "termination" }
+  | { connectionType: "device_port"; portReference: string }
+  | null;
+type CoreSpliceDraft = Extract<CoreEndDraft, { connectionType: "splice" }>;
+type CorePeerPositionOption = {
+  key: string;
+  peerSegmentId: string;
+  peerSegmentName: string;
+  peerSide: CorePosition;
+  peerRouteMeasureM: number | null;
+  cores: CorePeer[];
+};
+
+function corePeerPositionKey(peer: Pick<CorePeer, "peerSegmentId" | "peerSide" | "peerRouteMeasureM">) {
+  const routeMeasureM = peer.peerSide === "R" && peer.peerRouteMeasureM != null
+    ? Number(peer.peerRouteMeasureM).toFixed(2)
+    : null;
+  return JSON.stringify([peer.peerSegmentId, peer.peerSide, routeMeasureM]);
+}
+
+function CorePeerSelector({
+  idPrefix,
+  peers,
+  connection,
+  onChange,
+  disabled,
+  loading,
+  error,
+}: {
+  idPrefix: string;
+  peers: CorePeer[];
+  connection: CoreSpliceDraft | null;
+  onChange: (connection: CoreSpliceDraft) => void;
+  disabled: boolean;
+  loading: boolean;
+  error: boolean;
+}) {
+  const positions = useMemo(() => {
+    const grouped = new Map<string, CorePeerPositionOption>();
+    for (const peer of peers) {
+      const key = corePeerPositionKey(peer);
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.cores.push(peer);
+      } else {
+        grouped.set(key, {
+          key,
+          peerSegmentId: peer.peerSegmentId,
+          peerSegmentName: peer.peerSegmentName,
+          peerSide: peer.peerSide,
+          peerRouteMeasureM: peer.peerSide === "R" && peer.peerRouteMeasureM != null
+            ? Number(peer.peerRouteMeasureM)
+            : null,
+          cores: [peer],
+        });
+      }
+    }
+    return [...grouped.values()].map((position) => ({
+      ...position,
+      cores: position.cores.sort((a, b) => a.peerCoreNumber - b.peerCoreNumber),
+    }));
+  }, [peers]);
+
+  const savedPositionKey = connection?.peerSegmentId && connection.peerSide
+    ? corePeerPositionKey({
+        peerSegmentId: connection.peerSegmentId,
+        peerSide: connection.peerSide,
+        peerRouteMeasureM: connection.peerRouteMeasureM ?? null,
+      })
+    : "";
+  const selectedPosition = positions.find((position) => position.key === savedPositionKey) ??
+    (!connection?.peerSegmentId && positions.length === 1 ? positions[0] : undefined);
+  const isSinglePosition = positions.length === 1 && Boolean(selectedPosition);
+  const positionDescription = selectedPosition?.peerSide === "R"
+    ? `Bertemu di jalur kabel tujuan · ${Number(selectedPosition.peerRouteMeasureM).toFixed(0)} m dari Ujung A`
+    : selectedPosition
+      ? `Bertemu di Ujung ${selectedPosition.peerSide} kabel tujuan`
+      : "";
+  const selectedCoreNumber = selectedPosition?.cores.some(
+    (peer) => peer.peerCoreNumber === connection?.peerCoreNumber
+  )
+    ? String(connection?.peerCoreNumber)
+    : "";
+
+  if (loading && positions.length === 0) {
+    return <small className="text-secondary">Mencari kabel di titik sambungan…</small>;
+  }
+  if (error) {
+    return <small className="text-danger">Daftar kabel tujuan tidak dapat dimuat.</small>;
+  }
+  if (positions.length === 0) {
+    return <small className="text-secondary">Tidak ada core tujuan yang belum tersambung di titik ini.</small>;
+  }
+
+  const updatePosition = (position: CorePeerPositionOption | undefined) => {
+    if (!position) {
+      onChange({ connectionType: "splice" });
+      return;
+    }
+    onChange({
+      connectionType: "splice",
+      peerSegmentId: position.peerSegmentId,
+      peerSide: position.peerSide,
+      ...(position.peerSide === "R" && position.peerRouteMeasureM !== null
+        ? { peerRouteMeasureM: position.peerRouteMeasureM }
+        : {}),
+    });
+  };
+
+  return (
+    <div className="core-peer-selector">
+      <div className="core-peer-selector-field">
+        <label htmlFor={`${idPrefix}-cable`}>Kabel yang tersambung</label>
+        {isSinglePosition ? (
+          <span
+            className="core-peer-cable-summary"
+            title={selectedPosition?.peerSegmentName}
+          >
+            {selectedPosition?.peerSegmentName}
+          </span>
+        ) : (
+          <select
+            className="form-select form-select-sm"
+            disabled={disabled}
+            id={`${idPrefix}-cable`}
+            onChange={(event) => updatePosition(positions.find((position) => position.key === event.target.value))}
+            value={selectedPosition?.key ?? ""}
+          >
+            <option value="">Pilih kabel yang tersambung</option>
+            {positions.map((position) => {
+              const sameCablePositions = positions.filter(
+                (item) => item.peerSegmentId === position.peerSegmentId
+              ).length;
+              const location = position.peerSide === "R"
+                ? `Jalur kabel tujuan · ${Number(position.peerRouteMeasureM).toFixed(0)} m dari Ujung A`
+                : `Ujung ${position.peerSide} kabel tujuan`;
+              return (
+                <option key={position.key} value={position.key}>
+                  {position.peerSegmentName}{sameCablePositions > 1 ? ` · ${location}` : ""}
+                </option>
+              );
+            })}
+          </select>
+        )}
+        {selectedPosition && (
+          <small>{positionDescription}</small>
+        )}
+      </div>
+      <div className="core-peer-selector-field">
+        <label htmlFor={`${idPrefix}-core`}>Core pada kabel tujuan</label>
+        <select
+          className="form-select form-select-sm"
+          disabled={disabled || !selectedPosition}
+          id={`${idPrefix}-core`}
+          onChange={(event) => {
+            const peerCoreNumber = Number(event.target.value);
+            onChange({
+              connectionType: "splice",
+              peerSegmentId: selectedPosition?.peerSegmentId,
+              peerSide: selectedPosition?.peerSide,
+              ...(selectedPosition?.peerSide === "R" && selectedPosition.peerRouteMeasureM !== null
+                ? { peerRouteMeasureM: selectedPosition.peerRouteMeasureM }
+                : {}),
+              ...(peerCoreNumber > 0 ? { peerCoreNumber } : {}),
+            });
+          }}
+          value={selectedCoreNumber}
+        >
+          <option value="">Pilih core pada kabel tujuan</option>
+          {selectedPosition?.cores.map((peer) => (
+            <option key={peer.peerCoreNumber} value={peer.peerCoreNumber}>
+              Core {peer.peerCoreNumber}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+type CoreRouteNode = {
+  id: string;
+  name: string;
+  type: string | null;
+  routeMeasureM: number | string;
+  routeLengthM: number | string;
+  distanceToRoute: number | string;
+  matchesDistribution: boolean;
+  matchesCompany: boolean;
+};
+type MidspanConnectionRecord = {
+  id: string;
+  nodeAssetId: string;
+  nodeAssetName: string;
+  nodeAssetType: string | null;
+  routeMeasureM: number | string;
+  connectionType: "splice" | "termination" | "device_port";
+  peerSegmentId: string | null;
+  peerSegmentName: string | null;
+  peerCoreNumber: number | null;
+  peerSide: CorePosition | null;
+  peerRouteMeasureM: number | string | null;
+  connectionGroupId: string;
+  portReference: string | null;
+  verificationStatus: "confirmed" | "needs_review";
+  source: string;
+  note: string;
+};
+type MidspanConnectionDraft = {
+  draftId: string;
+  nodeAssetId: string;
+  routeMeasureM: number | null;
+  connection: CoreEndDraft;
+};
+type CoreItem = {
+  coreNumber: number;
+  status: "Available" | "Booked" | "Used";
+  endA: CoreEndRecord | null;
+  endB: CoreEndRecord | null;
+  midspanConnections: MidspanConnectionRecord[];
+  legacyConnectedAssetId: string | null;
+  legacyConnectedAssetName: string | null;
+  legacyConnectedSide: CoreSide | "R" | null;
+  customer?: string;
+  picCustomer?: string;
+  picPresales?: string;
+  expiresAt?: string;
 };
 type PendingCoreChange = {
   status: "Available" | "Used";
-  connectedAssetId: string | null;
-  connectedSide: "A" | "B" | null;
+  endConnections?: Partial<Record<CoreSide, CoreEndDraft>>;
+  midspanConnections?: MidspanConnectionDraft[];
 };
 type MapProvinceResponse = {
   items: MapProvinceOption[];
@@ -846,6 +1141,12 @@ export function MapPage() {
   const [pendingCoreStatuses, setPendingCoreStatuses] = useState<
     Record<number, PendingCoreChange>
   >({});
+  const [expandedCoreConnections, setExpandedCoreConnections] = useState<
+    Record<number, boolean>
+  >({});
+  const [pendingSegmentEndpoints, setPendingSegmentEndpoints] = useState<
+    Partial<Record<CoreSide, string | null>>
+  >({});
   const [corePageSize, setCorePageSize] = useState(10);
   const [corePage, setCorePage] = useState(1);
   const catalogCoreFilter =
@@ -1278,29 +1579,74 @@ export function MapPage() {
   const coresQuery = useQuery({
     queryKey: ["cores", selectedSegment?.id],
     queryFn: () =>
-      api<
-        {
-          coreNumber: number;
-          status: "Available" | "Booked" | "Used";
-          connectedAssetId: string | null;
-          connectedAssetName: string | null;
-          connectedSide: "A" | "B" | null;
-          customer?: string;
-          picCustomer?: string;
-          picPresales?: string;
-          expiresAt?: string;
-        }[]
-      >(`/assets/${selectedSegment?.id}/cores`),
+      api<CoreItem[]>(`/assets/${selectedSegment?.id}/cores`),
     enabled: Boolean(selectedSegment),
     refetchInterval: 30_000,
   });
-  const coreDestinationsQuery = useQuery({
-    queryKey: ["core-destinations", selectedSegment?.id],
+  const coreEndpointsQuery = useQuery({
+    queryKey: ["core-endpoints", selectedSegment?.id],
     queryFn: () =>
-      api<CoreDestination[]>(
-        `/assets/${selectedSegment?.id}/cores/destinations`
-      ),
+      api<CoreEndpoint[]>(`/assets/${selectedSegment?.id}/cores/endpoints`),
     enabled: Boolean(selectedSegment),
+    staleTime: 30_000,
+  });
+  const coreRouteNodesQuery = useQuery({
+    queryKey: ["core-route-nodes", selectedSegment?.id],
+    queryFn: () =>
+      api<CoreRouteNode[]>(
+        `/assets/${selectedSegment?.id}/cores/route-nodes`
+      ),
+    enabled: Boolean(
+      selectedSegment &&
+      (isCoreVerificationExpanded || isCoreUsageVerified(selectedSegment))
+    ),
+    staleTime: 30_000,
+  });
+  const effectiveEndpointNodeId = (side: CoreSide) => {
+    if (Object.hasOwn(pendingSegmentEndpoints, side)) {
+      return pendingSegmentEndpoints[side] ?? "";
+    }
+    const endpointState = coreEndpointsQuery.data?.find(
+      (endpoint) => endpoint.side === side
+    );
+    return endpointState?.endpoint?.nodeAssetId ?? endpointState?.candidates[0]?.id ?? "";
+  };
+  const corePeerAQuery = useQuery({
+    queryKey: [
+      "core-connection-peers",
+      selectedSegment?.id,
+      "A",
+      effectiveEndpointNodeId("A"),
+    ],
+    queryFn: () => {
+      const query = new URLSearchParams({
+        nodeAssetId: effectiveEndpointNodeId("A"),
+        side: "A",
+      });
+      return api<CorePeer[]>(
+        `/assets/${selectedSegment?.id}/cores/connection-peers?${query}`
+      );
+    },
+    enabled: Boolean(selectedSegment && effectiveEndpointNodeId("A")),
+    staleTime: 30_000,
+  });
+  const corePeerBQuery = useQuery({
+    queryKey: [
+      "core-connection-peers",
+      selectedSegment?.id,
+      "B",
+      effectiveEndpointNodeId("B"),
+    ],
+    queryFn: () => {
+      const query = new URLSearchParams({
+        nodeAssetId: effectiveEndpointNodeId("B"),
+        side: "B",
+      });
+      return api<CorePeer[]>(
+        `/assets/${selectedSegment?.id}/cores/connection-peers?${query}`
+      );
+    },
+    enabled: Boolean(selectedSegment && effectiveEndpointNodeId("B")),
     staleTime: 30_000,
   });
   const corePageCount = Math.max(
@@ -1310,36 +1656,112 @@ export function MapPage() {
   const visibleCores = [...(coresQuery.data ?? [])]
     .sort((a, b) => a.coreNumber - b.coreNumber)
     .slice((corePage - 1) * corePageSize, corePage * corePageSize);
-  const coreDestinationSummary = useMemo(() => {
-    const counts = new Map<
-      string,
-      { assetId: string; assetName: string; side: "A" | "B"; count: number }
-    >();
+  const midspanPeerQueryEntries = visibleCores.flatMap((core) => {
+    const pending = pendingCoreStatuses[core.coreNumber]?.midspanConnections;
+    const drafts = pending ?? (core.midspanConnections ?? []).map((record) => ({
+      draftId: record.id,
+      nodeAssetId: record.nodeAssetId,
+      routeMeasureM: Number(record.routeMeasureM),
+      connection:
+        record.connectionType === "splice"
+          ? {
+              connectionType: "splice" as const,
+              peerSegmentId: record.peerSegmentId ?? undefined,
+              peerCoreNumber: record.peerCoreNumber ?? undefined,
+              peerSide: record.peerSide ?? undefined,
+              peerRouteMeasureM: record.peerRouteMeasureM == null
+                ? undefined
+                : Number(record.peerRouteMeasureM),
+            }
+          : record.connectionType === "device_port"
+            ? { connectionType: "device_port" as const, portReference: record.portReference ?? "" }
+            : { connectionType: "termination" as const },
+    }));
+    return drafts
+      .filter(
+        (draft) =>
+          draft.connection?.connectionType === "splice" &&
+          Boolean(draft.nodeAssetId) &&
+          draft.routeMeasureM !== null
+      )
+      .map((draft) => ({
+        key: `${core.coreNumber}:${draft.draftId}`,
+        segmentId: selectedSegment?.id,
+        nodeAssetId: draft.nodeAssetId,
+        routeMeasureM: Number(draft.routeMeasureM),
+      }));
+  });
+  const midspanPeerResults = useQueries({
+    queries: midspanPeerQueryEntries.map((entry) => ({
+      queryKey: [
+        "core-connection-peers",
+        entry.segmentId,
+        "R",
+        entry.nodeAssetId,
+        entry.routeMeasureM,
+      ],
+      queryFn: () => {
+        const query = new URLSearchParams({
+          nodeAssetId: entry.nodeAssetId,
+          side: "R",
+          routeMeasureM: String(entry.routeMeasureM),
+        });
+        return api<CorePeer[]>(
+          `/assets/${entry.segmentId}/cores/connection-peers?${query}`
+        );
+      },
+      enabled: Boolean(entry.segmentId && entry.nodeAssetId),
+      staleTime: 30_000,
+    })),
+  });
+  const midspanPeerQueriesByKey = new Map(
+    midspanPeerQueryEntries.map((entry, index) => [
+      entry.key,
+      midspanPeerResults[index],
+    ])
+  );
+  const coreConnectionSummary = useMemo(() => {
+    const counts = new Map<string, {
+      side: CorePosition;
+      nodeAssetName: string;
+      count: number;
+      routeMeasureM: number | null;
+    }>();
     for (const core of coresQuery.data ?? []) {
-      const change = pendingCoreStatuses[core.coreNumber];
-      const status = change?.status ?? core.status;
-      const assetId = change ? change.connectedAssetId : core.connectedAssetId;
-      const side = change ? change.connectedSide : core.connectedSide;
-      if (status !== "Used" || !assetId || !side) {
-        continue;
+      for (const side of ["A", "B"] as const) {
+        const end = side === "A" ? core.endA : core.endB;
+        if (
+          !end?.nodeAssetName ||
+          !end.connectionType ||
+          end.connectionVerificationStatus !== "confirmed"
+        ) continue;
+        const key = `${side}:${end.nodeAssetName}`;
+        const previous = counts.get(key);
+        counts.set(key, {
+          side,
+          nodeAssetName: end.nodeAssetName,
+          count: (previous?.count ?? 0) + 1,
+          routeMeasureM: null,
+        });
       }
-      const key = `${assetId}:${side}`;
-      const existing = counts.get(key);
-      const destination = coreDestinationsQuery.data?.find(
-        (item) => item.id === assetId && item.side === side
-      );
-      counts.set(key, {
-        assetId,
-        assetName:
-          destination?.name ?? core.connectedAssetName ?? "Aset jaringan",
-        side,
-        count: (existing?.count ?? 0) + 1,
-      });
+      for (const connection of core.midspanConnections ?? []) {
+        if (
+          connection.verificationStatus !== "confirmed" ||
+          !connection.connectionType
+        ) continue;
+        const routeMeasureM = Number(connection.routeMeasureM);
+        const key = `R:${connection.nodeAssetId}:${routeMeasureM.toFixed(2)}`;
+        const previous = counts.get(key);
+        counts.set(key, {
+          side: "R",
+          nodeAssetName: connection.nodeAssetName,
+          count: (previous?.count ?? 0) + 1,
+          routeMeasureM,
+        });
+      }
     }
-    return [...counts.values()].sort((a, b) =>
-      a.assetName.localeCompare(b.assetName, "id")
-    );
-  }, [coresQuery.data, coreDestinationsQuery.data, pendingCoreStatuses]);
+    return [...counts.entries()].map(([key, value]) => ({ key, ...value }));
+  }, [coresQuery.data]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: mapReady is required to populate the source created during map initialization
   useEffect(() => {
     const source = map.current?.getSource("selected-cable-highlight") as
@@ -1367,15 +1789,12 @@ export function MapPage() {
         geometry,
       });
 
-      const destinationsBySide = (["A", "B"] as const).map((side) => {
-        const destinations = coreDestinationSummary.filter(
-          (item) => item.side === side
-        );
-        return {
-          side,
-          count: destinations.reduce((sum, item) => sum + item.count, 0),
-        };
-      });
+      const destinationsBySide = (["A", "B"] as const).map((side) => ({
+        side,
+        count: coreConnectionSummary
+          .filter((item) => item.side === side)
+          .reduce((sum, item) => sum + item.count, 0),
+      }));
 
       for (const destination of destinationsBySide) {
         if (!destination.count) {
@@ -1422,6 +1841,42 @@ export function MapPage() {
         }
       }
 
+      const routeLengthM = cableLengthMeters(geometry);
+      if (routeLengthM) {
+        for (const destination of coreConnectionSummary.filter(
+          (item) => item.side === "R" && item.routeMeasureM !== null
+        )) {
+          const fraction = Math.max(
+            0,
+            Math.min(1, Number(destination.routeMeasureM) / routeLengthM)
+          );
+          const arrowCoordinate = coordinateAlongCable(lines, fraction);
+          const nextCoordinate = coordinateAlongCable(
+            lines,
+            Math.min(1, fraction + Math.min(0.02, 20 / routeLengthM))
+          );
+          if (!arrowCoordinate || !nextCoordinate) continue;
+          features.push({
+            type: "Feature",
+            properties: {
+              featureType: "core-direction-count",
+              label: `${destination.count} core · jalur`,
+              lineColor: selectedCableLineColor,
+            },
+            geometry: { type: "Point", coordinates: arrowCoordinate },
+          });
+          features.push({
+            type: "Feature",
+            properties: {
+              featureType: "core-direction-arrow",
+              lineColor: selectedCableLineColor,
+              rotation: (bearingDegrees(arrowCoordinate, nextCoordinate) - 90 + 360) % 360,
+            },
+            geometry: { type: "Point", coordinates: arrowCoordinate },
+          });
+        }
+      }
+
       if (first) {
         features.push({
           type: "Feature",
@@ -1444,13 +1899,8 @@ export function MapPage() {
     selectedCableGeometry,
     selectedCableLineColor,
     selectedSegment?.id,
-    coreDestinationSummary,
+    coreConnectionSummary,
   ]);
-  const hasUsedCoreWithoutDestination = Object.values(pendingCoreStatuses).some(
-    (change) =>
-      change.status === "Used" &&
-      (!change.connectedAssetId || !change.connectedSide)
-  );
   // biome-ignore lint/correctness/useExhaustiveDependencies: the selected segment and page size are triggers that reset paging
   useEffect(() => {
     setCorePage(1);
@@ -1459,14 +1909,19 @@ export function MapPage() {
     setCorePage((page) => Math.min(page, corePageCount));
   }, [corePageCount]);
   const verifyCoreUsage = useMutation({
-    mutationFn: (
+    mutationFn: (changes: {
       coreStatuses: {
         coreNumber: number;
         status: "Available" | "Used";
-        connectedAssetId: string | null;
-        connectedSide: "A" | "B" | null;
-      }[]
-    ) =>
+        endConnections?: Partial<Record<CoreSide, CoreEndDraft>>;
+        midspanConnections?: {
+          nodeAssetId: string;
+          routeMeasureM: number | null;
+          connection: CoreEndDraft;
+        }[];
+      }[];
+      segmentEndpoints: Partial<Record<CoreSide, string | null>>;
+    }) =>
       api<{
         verifiedAt: string;
       }>(`/assets/${selectedSegment?.id}/cores/verify`, {
@@ -1474,17 +1929,28 @@ export function MapPage() {
         data: {
           source: coreVerificationSource,
           note: coreVerificationNote,
-          coreStatuses,
+          coreStatuses: changes.coreStatuses,
+          segmentEndpoints: changes.segmentEndpoints,
         },
       }),
     onSuccess: async () => {
       setCoreVerificationNote("");
       setPendingCoreStatuses({});
+      setPendingSegmentEndpoints({});
       setIsCoreVerificationExpanded(false);
       await Promise.all([
         invalidateNetwork(),
         queryClient.invalidateQueries({
           queryKey: ["cores", selectedSegment?.id],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["core-endpoints", selectedSegment?.id],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["core-connection-peers", selectedSegment?.id],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["core-route-nodes", selectedSegment?.id],
         }),
       ]);
     },
@@ -1499,6 +1965,8 @@ export function MapPage() {
     updateAsset.reset();
     setIsCoreVerificationExpanded(false);
     setPendingCoreStatuses({});
+    setPendingSegmentEndpoints({});
+    setExpandedCoreConnections({});
   }, [selectedSegment?.id, updateAsset.reset]);
   const normalizedSearch = search.trim().toLocaleLowerCase("id-ID");
   const matchesCableFilters = (item: NetworkAsset) =>
@@ -4254,24 +4722,71 @@ export function MapPage() {
                   className="segment-endpoints-summary"
                 >
                   {(["A", "B"] as const).map((side) => {
-                    const endpoint = coreDestinationsQuery.data?.find(
+                    const endpointState = coreEndpointsQuery.data?.find(
                       (item) => item.side === side
                     );
+                    const endpoint = endpointState?.endpoint ?? null;
+                    const selectedNodeId = effectiveEndpointNodeId(side);
+                    const selectedCandidate = endpointState?.candidates.find(
+                      (candidate) => candidate.id === selectedNodeId
+                    );
+                    const candidateStillListed = endpointState?.candidates.some(
+                      (candidate) => candidate.id === endpoint?.nodeAssetId
+                    );
+                    const mappedCoreCount = (coresQuery.data ?? []).filter(
+                      (core) =>
+                        (side === "A" ? core.endA : core.endB)?.connectionType
+                    ).length;
+                    const changedFromSaved =
+                      Object.hasOwn(pendingSegmentEndpoints, side) &&
+                      (pendingSegmentEndpoints[side] ?? null) !==
+                        (endpoint?.nodeAssetId ?? null);
                     return (
-                      <div key={side}>
-                        <small>Ujung {side}</small>
-                        <strong>
-                          {coreDestinationsQuery.isPending
-                            ? "Mencari titik…"
-                            : coreDestinationsQuery.isError
-                              ? "Tidak dapat dimuat"
-                              : (endpoint?.name ?? "Belum terdeteksi otomatis")}
-                        </strong>
-                        {endpoint && (
-                          <span>
-                            {Number(endpoint.distance).toLocaleString("id-ID")}{" "}
-                            m dari ujung kabel
-                          </span>
+                      <div className="segment-endpoint-field" key={side}>
+                        <label htmlFor={`cable-endpoint-${side}`}>
+                          Ujung {side}
+                        </label>
+                        <select
+                          className="form-select form-select-sm"
+                          disabled={coreEndpointsQuery.isPending || coreEndpointsQuery.isError}
+                          id={`cable-endpoint-${side}`}
+                          onChange={(event) =>
+                            setPendingSegmentEndpoints((current) => ({
+                              ...current,
+                              [side]: event.target.value || null,
+                            }))
+                          }
+                          value={selectedNodeId}
+                        >
+                          <option value="">Belum ditentukan</option>
+                          {endpoint && !candidateStillListed && (
+                            <option value={endpoint.nodeAssetId}>
+                              {endpoint.nodeAssetName} · titik tersimpan
+                            </option>
+                          )}
+                          {(endpointState?.candidates ?? []).map((candidate) => (
+                            <option key={candidate.id} value={candidate.id}>
+                              {candidate.name} · {Number(candidate.distanceFromEndpoint).toLocaleString("id-ID")} m
+                            </option>
+                          ))}
+                        </select>
+                        <small className="segment-endpoint-meta">
+                          {coreEndpointsQuery.isPending
+                            ? "Mencari aset di sekitar ujung kabel…"
+                            : coreEndpointsQuery.isError
+                              ? "Daftar titik ujung gagal dimuat."
+                              : endpoint && selectedNodeId === endpoint.nodeAssetId
+                                ? `Titik tersimpan · ${endpoint.source}`
+                                : selectedCandidate
+                                  ? `Saran otomatis · ${Number(selectedCandidate.distanceFromEndpoint).toLocaleString("id-ID")} m dari ujung kabel · belum disimpan`
+                                  : selectedNodeId
+                                    ? "Pilihan belum disimpan"
+                                    : "Pilih saran aset untuk menetapkan titik ujung kabel."}
+                        </small>
+                        {changedFromSaved && mappedCoreCount > 0 && (
+                          <small className="text-warning">
+                            Hapus {mappedCoreCount} sambungan core pada ujung ini sebelum mengganti titik.
+                          </small>
                         )}
                       </div>
                     );
@@ -4484,7 +4999,38 @@ export function MapPage() {
                             className="btn btn-sm btn-outline-primary"
                             disabled={
                               verifyCoreUsage.isPending ||
-                              hasUsedCoreWithoutDestination ||
+                              Object.values(pendingCoreStatuses).some((change) =>
+                                Object.values(change.endConnections ?? {}).some(
+                                  (connection) =>
+                                    connection?.connectionType === "splice" &&
+                                    (!connection.peerSegmentId ||
+                                      !connection.peerCoreNumber ||
+                                      !connection.peerSide ||
+                                      (connection.peerSide === "R" &&
+                                        !Number.isFinite(connection.peerRouteMeasureM)))
+                                ) ||
+                                Object.values(change.endConnections ?? {}).some(
+                                  (connection) =>
+                                    connection?.connectionType === "device_port" &&
+                                    !connection.portReference.trim()
+                                ) ||
+                                change.midspanConnections?.some((draft) => {
+                                  if (
+                                    !draft.nodeAssetId ||
+                                    draft.routeMeasureM === null ||
+                                    !draft.connection
+                                  ) return true;
+                                  if (draft.connection.connectionType === "splice") {
+                                    return !draft.connection.peerSegmentId ||
+                                      !draft.connection.peerCoreNumber ||
+                                      !draft.connection.peerSide ||
+                                      (draft.connection.peerSide === "R" &&
+                                        !Number.isFinite(draft.connection.peerRouteMeasureM));
+                                  }
+                                  return draft.connection.connectionType === "device_port" &&
+                                    !draft.connection.portReference.trim();
+                                })
+                              ) ||
                               (isCoreVerificationExpanded &&
                                 coresQuery.data?.length !==
                                   selectedSegment.totalCores)
@@ -4497,14 +5043,44 @@ export function MapPage() {
                                 setIsCoreVerificationExpanded(true);
                                 return;
                               }
-                              verifyCoreUsage.mutate(
-                                Object.entries(pendingCoreStatuses).map(
+                              const endpointsToSave = {
+                                ...pendingSegmentEndpoints,
+                              };
+                              for (const change of Object.values(
+                                pendingCoreStatuses
+                              )) {
+                                for (const side of ["A", "B"] as const) {
+                                  const connection = change.endConnections?.[side];
+                                  const savedEndpoint = coreEndpointsQuery.data?.find(
+                                    (item) => item.side === side
+                                  )?.endpoint;
+                                  if (
+                                    connection &&
+                                    !Object.hasOwn(endpointsToSave, side) &&
+                                    !savedEndpoint
+                                  ) {
+                                    const suggestedNode = effectiveEndpointNodeId(side);
+                                    if (suggestedNode) endpointsToSave[side] = suggestedNode;
+                                  }
+                                }
+                              }
+                              verifyCoreUsage.mutate({
+                                coreStatuses: Object.entries(pendingCoreStatuses).map(
                                   ([coreNumber, change]) => ({
                                     coreNumber: Number(coreNumber),
-                                    ...change,
+                                    status: change.status,
+                                    endConnections: change.endConnections,
+                                    midspanConnections: change.midspanConnections?.map(
+                                      ({ nodeAssetId, routeMeasureM, connection }) => ({
+                                        nodeAssetId,
+                                        routeMeasureM,
+                                        connection,
+                                      })
+                                    ),
                                   })
-                                )
-                              );
+                                ),
+                                segmentEndpoints: endpointsToSave,
+                              });
                             }}
                             type="button"
                           >
@@ -4516,20 +5092,17 @@ export function MapPage() {
                                   ? "Simpan dan verifikasi kabel"
                                   : "Verifikasi kabel"}
                           </button>
-                          {Object.keys(pendingCoreStatuses).length > 0 && (
+                          {(Object.keys(pendingCoreStatuses).length > 0 ||
+                            Object.keys(pendingSegmentEndpoints).length > 0) && (
                             <small className="text-warning" role="status">
-                              Ada perubahan status core yang belum disimpan.
-                            </small>
-                          )}
-                          {hasUsedCoreWithoutDestination && (
-                            <small className="text-warning" role="status">
-                              Pilih tujuan dan arah untuk setiap core berstatus
-                              Terpakai.
+                              Perubahan titik ujung atau sambungan core belum disimpan.
                             </small>
                           )}
                         </div>
-                        {coresQuery.data?.length !==
-                          selectedSegment.totalCores && (
+                        {!coresQuery.isPending &&
+                          !coresQuery.isError &&
+                          coresQuery.data?.length !==
+                            selectedSegment.totalCores && (
                           <small className="d-block text-warning mt-1">
                             Jumlah core tercatat ({coresQuery.data?.length ?? 0}
                             ) belum sama dengan total KMZ (
@@ -4560,35 +5133,109 @@ export function MapPage() {
                           {visibleCores.map((core) => {
                             const change = pendingCoreStatuses[core.coreNumber];
                             const status = change?.status ?? core.status;
-                            const connectedAssetId = change
-                              ? change.connectedAssetId
-                              : core.connectedAssetId;
-                            const connectedSide = change
-                              ? change.connectedSide
-                              : core.connectedSide;
-                            const destinationValue =
-                              connectedAssetId && connectedSide
-                                ? `${connectedAssetId}:${connectedSide}`
-                                : "";
+                            const getEndDraft = (side: CoreSide): CoreEndDraft => {
+                              if (
+                                change?.endConnections &&
+                                Object.hasOwn(change.endConnections, side)
+                              ) {
+                                return change.endConnections[side] ?? null;
+                              }
+                              const saved = side === "A" ? core.endA : core.endB;
+                              if (saved?.connectionType === "splice") {
+                                return {
+                                  connectionType: "splice",
+                                  peerSegmentId: saved.peerSegmentId ?? undefined,
+                                  peerCoreNumber: saved.peerCoreNumber ?? undefined,
+                                  peerSide: saved.peerSide ?? undefined,
+                                  peerRouteMeasureM: saved.peerRouteMeasureM == null
+                                    ? undefined
+                                    : Number(saved.peerRouteMeasureM),
+                                };
+                              }
+                              if (saved?.connectionType === "device_port") {
+                                return {
+                                  connectionType: "device_port",
+                                  portReference: saved.portReference ?? "",
+                                };
+                              }
+                              return saved?.connectionType === "termination"
+                                ? { connectionType: "termination" }
+                                : null;
+                            };
+                            const setEndDraft = (
+                              side: CoreSide,
+                              connection: CoreEndDraft
+                            ) =>
+                              setPendingCoreStatuses((current) => {
+                                const previous = current[core.coreNumber];
+                                return {
+                                  ...current,
+                                  [core.coreNumber]: {
+                                    status:
+                                      previous?.status ??
+                                      (core.status as "Available" | "Used"),
+                                    endConnections: {
+                                      ...previous?.endConnections,
+                                      [side]: connection,
+                                    },
+                                  },
+                                };
+                              });
+                            const getMidspanDrafts = (): MidspanConnectionDraft[] => {
+                              if (change?.midspanConnections) {
+                                return change.midspanConnections;
+                              }
+                              return (core.midspanConnections ?? []).map((record) => ({
+                                draftId: record.id,
+                                nodeAssetId: record.nodeAssetId,
+                                routeMeasureM: Number(record.routeMeasureM),
+                                connection:
+                                  record.connectionType === "splice"
+                                    ? {
+                                        connectionType: "splice" as const,
+                                        peerSegmentId: record.peerSegmentId ?? undefined,
+                                        peerCoreNumber: record.peerCoreNumber ?? undefined,
+                                        peerSide: record.peerSide ?? undefined,
+                                        peerRouteMeasureM: record.peerRouteMeasureM == null
+                                          ? undefined
+                                          : Number(record.peerRouteMeasureM),
+                                      }
+                                    : record.connectionType === "device_port"
+                                      ? { connectionType: "device_port" as const, portReference: record.portReference ?? "" }
+                                      : { connectionType: "termination" as const },
+                              }));
+                            };
+                            const setMidspanDrafts = (
+                              drafts: MidspanConnectionDraft[]
+                            ) =>
+                              setPendingCoreStatuses((current) => {
+                                const previous = current[core.coreNumber];
+                                return {
+                                  ...current,
+                                  [core.coreNumber]: {
+                                    status:
+                                      previous?.status ??
+                                      (core.status as "Available" | "Used"),
+                                    endConnections: previous?.endConnections,
+                                    midspanConnections: drafts,
+                                  },
+                                };
+                              });
                             return (
                               <div
-                                className={
-                                  status === "Used"
-                                    ? "core-status-row is-used"
-                                    : "core-status-row"
-                                }
+                                className={`core-status-row${status === "Used" ? " is-used" : ""}${expandedCoreConnections[core.coreNumber] ? " is-expanded" : ""}`}
                                 key={core.coreNumber}
                               >
-                                <span>Core {core.coreNumber}</span>
-                                {core.status === "Booked" ? (
-                                  <span
-                                    className="status-pill is-booked"
-                                    title={`PIC customer: ${core.picCustomer ?? "—"} · PIC presales: ${core.picPresales ?? "—"}`}
-                                  >
-                                    Booked · {core.customer}
-                                  </span>
-                                ) : (
-                                  <div className="core-status-fields">
+                                <div className="core-status-primary">
+                                  <span>Core {core.coreNumber}</span>
+                                  {core.status === "Booked" ? (
+                                    <span
+                                      className="status-pill is-booked"
+                                      title={`PIC customer: ${core.picCustomer ?? "—"} · PIC presales: ${core.picPresales ?? "—"}`}
+                                    >
+                                      Booked · {core.customer}
+                                    </span>
+                                  ) : (
                                     <select
                                       aria-label={`Status Core ${core.coreNumber}`}
                                       className="form-select form-select-sm"
@@ -4596,131 +5243,376 @@ export function MapPage() {
                                         const nextStatus = event.target.value as
                                           | "Available"
                                           | "Used";
-                                        setPendingCoreStatuses((current) => {
-                                          const next = { ...current };
-                                          const updated: PendingCoreChange = {
+                                        setPendingCoreStatuses((current) => ({
+                                          ...current,
+                                          [core.coreNumber]: {
                                             status: nextStatus,
-                                            connectedAssetId:
-                                              nextStatus === "Used"
-                                                ? (change?.connectedAssetId ??
-                                                  core.connectedAssetId)
-                                                : null,
-                                            connectedSide:
-                                              nextStatus === "Used"
-                                                ? (change?.connectedSide ??
-                                                  core.connectedSide)
-                                                : null,
-                                          };
-                                          if (
-                                            updated.status === core.status &&
-                                            updated.connectedAssetId ===
-                                              core.connectedAssetId &&
-                                            updated.connectedSide ===
-                                              core.connectedSide
-                                          ) {
-                                            delete next[core.coreNumber];
-                                          } else {
-                                            next[core.coreNumber] = updated;
-                                          }
-                                          return next;
-                                        });
+                                            endConnections:
+                                              current[core.coreNumber]
+                                                ?.endConnections,
+                                            midspanConnections:
+                                              current[core.coreNumber]
+                                                ?.midspanConnections,
+                                          },
+                                        }));
+                                        if (nextStatus === "Used") {
+                                          setExpandedCoreConnections((current) => ({
+                                            ...current,
+                                            [core.coreNumber]: true,
+                                          }));
+                                        }
                                       }}
                                       value={status}
                                     >
-                                      <option value="Available">
-                                        Tersedia
-                                      </option>
+                                      <option value="Available">Tersedia</option>
                                       <option value="Used">Terpakai</option>
                                     </select>
-                                    {status === "Used" && (
-                                      <select
-                                        aria-label={`Terhubung ke untuk Core ${core.coreNumber}`}
-                                        className="form-select form-select-sm core-destination-select"
-                                        disabled={
-                                          coreDestinationsQuery.isPending
-                                        }
-                                        onChange={(event) => {
-                                          const [assetId, destinationSide] =
-                                            event.target.value.split(":");
-                                          setPendingCoreStatuses((current) => ({
-                                            ...current,
-                                            [core.coreNumber]: {
-                                              status: "Used",
-                                              connectedAssetId: assetId || null,
-                                              connectedSide:
-                                                destinationSide === "A" ||
-                                                destinationSide === "B"
-                                                  ? destinationSide
-                                                  : null,
-                                            },
-                                          }));
-                                        }}
-                                        value={destinationValue}
-                                      >
-                                        <option value="">
-                                          Pilih tujuan sambungan
-                                        </option>
-                                        {coreDestinationsQuery.data?.map(
-                                          (destination) => (
-                                            <option
-                                              key={`${destination.id}:${destination.side}`}
-                                              value={`${destination.id}:${destination.side}`}
-                                            >
-                                              {destination.name} · Arah ujung{" "}
-                                              {destination.side}
-                                            </option>
-                                          )
-                                        )}
-                                      </select>
-                                    )}
+                                  )}
+                                </div>
+                                <details
+                                  className="core-end-connections-details"
+                                  onToggle={(event) => {
+                                    const isOpen = event.currentTarget.open;
+                                    setExpandedCoreConnections((current) => ({
+                                      ...current,
+                                      [core.coreNumber]: isOpen,
+                                    }));
+                                  }}
+                                  open={expandedCoreConnections[core.coreNumber] ?? false}
+                                >
+                                  <summary>
+                                    Sambungan core
+                                    <span>
+                                      {(["A", "B"] as const)
+                                        .map((side) => {
+                                          const end = side === "A" ? core.endA : core.endB;
+                                          const connection = getEndDraft(side);
+                                          const peerQuery = side === "A" ? corePeerAQuery : corePeerBQuery;
+                                          const selectedPeer = connection?.connectionType === "splice"
+                                            ? peerQuery.data?.find((peer) =>
+                                                peer.peerSegmentId === connection.peerSegmentId &&
+                                                peer.peerCoreNumber === connection.peerCoreNumber &&
+                                                peer.peerSide === connection.peerSide &&
+                                                (peer.peerSide !== "R" ||
+                                                  Math.abs(Number(peer.peerRouteMeasureM) - Number(connection.peerRouteMeasureM)) < 0.02)
+                                              )
+                                            : undefined;
+                                          const targetSegmentName = selectedPeer?.peerSegmentName ??
+                                            (connection?.connectionType === "splice" &&
+                                              connection.peerSegmentId === end?.peerSegmentId
+                                              ? end.peerSegmentName
+                                              : null);
+                                          const target =
+                                            connection?.connectionType === "splice"
+                                              ? connection.peerSegmentId
+                                                ? connection.peerCoreNumber
+                                                  ? `Core ${connection.peerCoreNumber} pada ${targetSegmentName ?? "kabel tujuan"}`
+                                                  : `Pilih core pada ${targetSegmentName ?? "kabel tujuan"}`
+                                                : "Tujuan belum dipilih"
+                                              : connection?.connectionType === "device_port"
+                                                ? `Port ${connection.portReference || "belum diisi"}`
+                                                : connection?.connectionType === "termination"
+                                                  ? "Berakhir di aset"
+                                                  : end?.nodeAssetName
+                                                    ? "Belum dicatat"
+                                                    : "Titik ujung belum dipilih";
+                                          return `Ujung ${side} kabel ini: ${target}`;
+                                        })
+                                        .join(" · ")}
+                                      {` · ${getMidspanDrafts().length} titik di jalur`}
+                                    </span>
+                                  </summary>
+                                  <div className="core-end-editors">
+                                    {(["A", "B"] as const).map((side) => {
+                                      const savedEnd = side === "A" ? core.endA : core.endB;
+                                      const connection = getEndDraft(side);
+                                      const nodeAssetId = effectiveEndpointNodeId(side);
+                                      const peerQuery = side === "A" ? corePeerAQuery : corePeerBQuery;
+                                      const peerOptions = (peerQuery.data ?? []).filter((peer) => {
+                                        const isCurrentReciprocal =
+                                          peer.connectedSegmentId === selectedSegment.id &&
+                                          peer.connectedCoreNumber === core.coreNumber &&
+                                          peer.connectedSide === side;
+                                        return !peer.isOccupied || isCurrentReciprocal;
+                                      });
+                                      return (
+                                        <section className="core-end-editor" key={side}>
+                                          <div className="core-end-editor-heading">
+                                            <strong>Ujung {side} kabel ini</strong>
+                                            <span>
+                                              {savedEnd?.nodeAssetName ??
+                                                coreEndpointsQuery.data?.find((item) => item.side === side)?.candidates.find((item) => item.id === nodeAssetId)?.name ??
+                                                "Titik belum ditentukan"}
+                                            </span>
+                                          </div>
+                                          <label htmlFor={`core-${core.coreNumber}-${side}-connection`}>
+                                            Sambungan pada ujung kabel ini
+                                          </label>
+                                          <select
+                                            className="form-select form-select-sm"
+                                            disabled={!nodeAssetId || core.status === "Booked"}
+                                            id={`core-${core.coreNumber}-${side}-connection`}
+                                            onChange={(event) => {
+                                              const value = event.target.value;
+                                              if (!value) {
+                                                setEndDraft(side, null);
+                                              } else if (value === "splice") {
+                                                setEndDraft(
+                                                  side,
+                                                  connection?.connectionType === "splice"
+                                                    ? connection
+                                                    : { connectionType: "splice" }
+                                                );
+                                              } else {
+                                                setEndDraft(side, { connectionType: "termination" });
+                                              }
+                                            }}
+                                            value={connection?.connectionType ?? ""}
+                                          >
+                                            <option value="">Belum dicatat</option>
+                                            {connection?.connectionType === "device_port" && (
+                                              <option disabled value="device_port">Port perangkat · data lama</option>
+                                            )}
+                                            <option value="splice">Disambung ke core kabel lain</option>
+                                            <option value="termination">Berakhir di aset ini</option>
+                                          </select>
+                                          {connection?.connectionType === "splice" && (
+                                            <CorePeerSelector
+                                              connection={connection}
+                                              disabled={core.status === "Booked" || !nodeAssetId}
+                                              error={peerQuery.isError}
+                                              idPrefix={`core-${core.coreNumber}-${side}-peer`}
+                                              loading={peerQuery.isPending}
+                                              onChange={(nextConnection) => setEndDraft(side, nextConnection)}
+                                              peers={peerOptions}
+                                            />
+                                          )}
+                                          {connection?.connectionType === "device_port" && (
+                                            <small className="text-secondary">
+                                              Catatan port lama: {connection.portReference || "tanpa nomor"}. Pilihan ini tidak tersedia untuk sambungan baru.
+                                            </small>
+                                          )}
+                                          {connection?.connectionType === "termination" && (
+                                            <small className="text-secondary">
+                                              Core berakhir di {savedEnd?.nodeAssetName ?? "titik ujung yang dipilih"}.
+                                            </small>
+                                          )}
+                                        </section>
+                                      );
+                                    })}
                                   </div>
-                                )}
+                                  <section className="core-midspan-editor">
+                                    <div className="core-midspan-heading">
+                                      <div>
+                                        <strong>Sambungan di sepanjang jalur</strong>
+                                        <small>
+                                          Catat tiap titik akses tengah kabel. Titik dipilih dari aset yang dekat dengan jalur.
+                                        </small>
+                                      </div>
+                                      <button
+                                        className="btn btn-sm btn-outline-primary"
+                                        disabled={core.status === "Booked"}
+                                        onClick={() =>
+                                          setMidspanDrafts([
+                                            ...getMidspanDrafts(),
+                                            {
+                                              draftId: crypto.randomUUID(),
+                                              nodeAssetId: "",
+                                              routeMeasureM: null,
+                                              connection: null,
+                                            },
+                                          ])
+                                        }
+                                        type="button"
+                                      >
+                                        Tambah titik sambungan
+                                      </button>
+                                    </div>
+                                    {coreRouteNodesQuery.isPending ? (
+                                      <small className="text-secondary">Memuat aset di sepanjang jalur…</small>
+                                    ) : coreRouteNodesQuery.isError ? (
+                                      <small className="text-danger">Daftar aset di sepanjang jalur tidak dapat dimuat.</small>
+                                    ) : coreRouteNodesQuery.data?.length ? (
+                                      getMidspanDrafts().length ? (
+                                        <div className="core-midspan-list">
+                                          {getMidspanDrafts().map((draft) => {
+                                            const peerQuery = midspanPeerQueriesByKey.get(
+                                              `${core.coreNumber}:${draft.draftId}`
+                                            );
+                                            const peerOptions = (peerQuery?.data ?? []).filter((peer) => {
+                                              const isCurrentReciprocal =
+                                                peer.connectedSegmentId === selectedSegment?.id &&
+                                                peer.connectedCoreNumber === core.coreNumber &&
+                                                peer.connectedSide === "R" &&
+                                                Math.abs(Number(peer.connectedRouteMeasureM) - Number(draft.routeMeasureM)) < 0.02;
+                                              return !peer.isOccupied || isCurrentReciprocal;
+                                            });
+                                            const updateDraft = (
+                                              update: Partial<MidspanConnectionDraft>
+                                            ) =>
+                                              setMidspanDrafts(
+                                                getMidspanDrafts().map((item) =>
+                                                  item.draftId === draft.draftId
+                                                    ? { ...item, ...update }
+                                                    : item
+                                                )
+                                              );
+                                            return (
+                                              <div className="core-midspan-row" key={draft.draftId}>
+                                                <div className="core-midspan-location">
+                                                  <label htmlFor={`core-${core.coreNumber}-midspan-${draft.draftId}-node`}>
+                                                    Titik sambungan
+                                                  </label>
+                                                  <select
+                                                    className="form-select form-select-sm"
+                                                    disabled={core.status === "Booked"}
+                                                    id={`core-${core.coreNumber}-midspan-${draft.draftId}-node`}
+                                                    onChange={(event) => {
+                                                      const node = coreRouteNodesQuery.data?.find(
+                                                        (candidate) => candidate.id === event.target.value
+                                                      );
+                                                      updateDraft({
+                                                        nodeAssetId: node?.id ?? "",
+                                                        routeMeasureM: node ? Number(node.routeMeasureM) : null,
+                                                        connection: null,
+                                                      });
+                                                    }}
+                                                    value={draft.nodeAssetId}
+                                                  >
+                                                    <option value="">Pilih aset di sepanjang jalur</option>
+                                                    {coreRouteNodesQuery.data.map((node) => (
+                                                      <option key={node.id} value={node.id}>
+                                                        {node.name} · {node.type ?? "Aset"} · {Number(node.routeMeasureM).toFixed(0)} m dari Ujung A · {Number(node.distanceToRoute).toFixed(0)} m dari jalur
+                                                      </option>
+                                                    ))}
+                                                  </select>
+                                                  {draft.routeMeasureM !== null && (
+                                                    <small>
+                                                      Posisi jalur: {draft.routeMeasureM.toFixed(1)} m dari Ujung A
+                                                    </small>
+                                                  )}
+                                                </div>
+                                                <div className="core-midspan-connection">
+                                                  <label htmlFor={`core-${core.coreNumber}-midspan-${draft.draftId}-type`}>
+                                                    Sambungan di titik ini
+                                                  </label>
+                                                  <select
+                                                    className="form-select form-select-sm"
+                                                    disabled={!draft.nodeAssetId || core.status === "Booked"}
+                                                    id={`core-${core.coreNumber}-midspan-${draft.draftId}-type`}
+                                                    onChange={(event) => {
+                                                      const value = event.target.value;
+                                                      const connection: CoreEndDraft =
+                                                        value === "splice"
+                                                          ? draft.connection?.connectionType === "splice"
+                                                            ? draft.connection
+                                                            : { connectionType: "splice" }
+                                                          : value === "termination"
+                                                            ? { connectionType: "termination" }
+                                                            : null;
+                                                      updateDraft({ connection });
+                                                    }}
+                                                    value={draft.connection?.connectionType ?? ""}
+                                                  >
+                                                    <option value="">Pilih jenis sambungan</option>
+                                                    {draft.connection?.connectionType === "device_port" && (
+                                                      <option disabled value="device_port">Port perangkat · data lama</option>
+                                                    )}
+                                                    <option value="splice">Disambung ke core kabel lain</option>
+                                                    <option value="termination">Berakhir di aset ini</option>
+                                                  </select>
+                                                  {draft.connection?.connectionType === "splice" && (
+                                                    <CorePeerSelector
+                                                      connection={draft.connection}
+                                                      disabled={core.status === "Booked"}
+                                                      error={peerQuery?.isError ?? false}
+                                                      idPrefix={`core-${core.coreNumber}-midspan-${draft.draftId}-peer`}
+                                                      loading={peerQuery?.isPending ?? false}
+                                                      onChange={(connection) => updateDraft({ connection })}
+                                                      peers={peerOptions}
+                                                    />
+                                                  )}
+                                                  {draft.connection?.connectionType === "device_port" && (
+                                                    <small className="text-secondary">
+                                                      Catatan port lama: {draft.connection.portReference || "tanpa nomor"}. Pilihan ini tidak tersedia untuk sambungan baru.
+                                                    </small>
+                                                  )}
+                                                </div>
+                                                <button
+                                                  aria-label="Hapus titik sambungan"
+                                                  className="btn btn-sm btn-outline-secondary core-midspan-remove"
+                                                  disabled={core.status === "Booked"}
+                                                  onClick={() =>
+                                                    setMidspanDrafts(
+                                                      getMidspanDrafts().filter(
+                                                        (item) => item.draftId !== draft.draftId
+                                                      )
+                                                    )
+                                                  }
+                                                  type="button"
+                                                >
+                                                  Hapus
+                                                </button>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : (
+                                        <small className="text-secondary">Belum ada sambungan yang dicatat di sepanjang kabel.</small>
+                                      )
+                                    ) : (
+                                      <small className="text-secondary">
+                                        Tidak ada aset KMZ di dekat bagian tengah jalur kabel. Pastikan titik akses sudah tercatat sebagai aset jaringan.
+                                      </small>
+                                    )}
+                                  </section>
+                                </details>
+                                {core.legacyConnectedAssetId &&
+                                  !core.endA?.connectionType &&
+                                  !core.endB?.connectionType &&
+                                  !(core.midspanConnections?.length) && (
+                                    <small className="core-legacy-connection-note">
+                                      Catatan sambungan lama perlu diperiksa: {core.legacyConnectedAssetName ?? core.legacyConnectedAssetId}
+                                      {core.legacyConnectedSide
+                                        ? ` · ${core.legacyConnectedSide === "R" ? "posisi lama di sepanjang jalur" : `Ujung ${core.legacyConnectedSide}`}`
+                                        : ""}.
+                                    </small>
+                                  )}
                               </div>
                             );
                           })}
                         </div>
-                        {coreDestinationsQuery.isError && (
+                        {(corePeerAQuery.isError || corePeerBQuery.isError) && (
                           <small className="d-block text-danger mt-2">
-                            Daftar tujuan sambungan tidak dapat dimuat.
+                            Daftar kabel di titik sambungan tidak dapat dimuat.
                           </small>
                         )}
-                        {!coreDestinationsQuery.isPending &&
-                          !coreDestinationsQuery.isError &&
-                          !coreDestinationsQuery.data?.length && (
-                            <small className="d-block text-secondary mt-2">
-                              Belum ada aset terminasi di sekitar ujung kabel
-                              pada kelompok distribusi yang sama.
-                            </small>
-                          )}
-                        {coreDestinationSummary.length > 0 && (
+                        {coreConnectionSummary.length > 0 && (
                           <div className="core-destination-summary">
                             <div className="core-destination-summary-header">
                               <strong>
-                                Pemakaian core per titik sambungan
+                                Core dengan sambungan tercatat
                               </strong>
                               <span>
-                                {coreDestinationSummary.reduce(
-                                  (total, destination) =>
-                                    total + destination.count,
-                                  0
-                                )}{" "}
-                                core · {coreDestinationSummary.length} tujuan
+                                {coreConnectionSummary.reduce((sum, item) => sum + item.count, 0)} sambungan
                               </span>
                             </div>
                             <ul
                               aria-label="Daftar tujuan core"
                               className="core-destination-list"
                             >
-                              {coreDestinationSummary.map((destination) => (
+                              {coreConnectionSummary.map((destination) => (
                                 <li
-                                  key={`${destination.assetId}:${destination.side}`}
+                                  key={destination.key}
                                 >
                                   <span className="core-destination-count">
                                     {destination.count} core
                                   </span>
-                                  <strong>{destination.assetName}</strong>
+                                  <strong>{destination.nodeAssetName}</strong>
                                   <span className="core-destination-side">
-                                    Ujung {destination.side}
+                                    {destination.side === "R"
+                                      ? `Jalur kabel ini · ${Number(destination.routeMeasureM).toFixed(0)} m dari Ujung A`
+                                      : `Ujung ${destination.side} kabel ini`}
                                   </span>
                                 </li>
                               ))}
@@ -4989,12 +5881,6 @@ export function MapPage() {
                     </div>
                   )}
                 </div>
-                <SegmentRelations
-                  isAdmin={user?.role === "ADMIN"}
-                  key={selectedSegment.id}
-                  segmentId={selectedSegment.id}
-                />
-                <CoreMappingPanel key={selectedSegment.id} segmentId={selectedSegment.id} isAdmin={user?.role === "ADMIN"} />
                 <details className="admin-settings mt-4">
                   <summary>
                     <i className="bi bi-pencil-square me-2" />
