@@ -9,11 +9,13 @@ import {
   index,
   integer,
   jsonb,
+  numeric,
   pgTable,
   primaryKey,
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -212,11 +214,149 @@ export const networkCores = pgTable(
     ),
     check(
       "network_cores_connected_side_check",
-      sql`connected_side IS NULL OR connected_side = ANY (ARRAY['A'::text, 'B'::text])`
+      sql`connected_side IS NULL OR connected_side = ANY (ARRAY['A'::text, 'B'::text, 'R'::text])`
     ),
     check(
       "network_cores_destination_pair_check",
       sql`(connected_asset_id IS NULL) = (connected_side IS NULL)`
+    ),
+  ]
+);
+
+export const networkSegmentEndpoints = pgTable(
+  "network_segment_endpoints",
+  {
+    segmentId: text("segment_id")
+      .notNull()
+      .references(() => networkAssets.id, { onDelete: "cascade" }),
+    side: text().notNull(),
+    nodeAssetId: text("node_asset_id")
+      .notNull()
+      .references(() => networkAssets.id, { onDelete: "restrict" }),
+    verificationStatus: text("verification_status")
+      .default("confirmed")
+      .notNull(),
+    source: text().notNull(),
+    note: text().default("").notNull(),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", {
+      mode: "date",
+      withTimezone: true,
+    })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", {
+      mode: "date",
+      withTimezone: true,
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "network_segment_endpoints_pk",
+      columns: [table.segmentId, table.side],
+    }),
+    index("network_segment_endpoints_node_idx").on(table.nodeAssetId),
+    check(
+      "network_segment_endpoints_side_check",
+      sql`side = ANY (ARRAY['A'::text, 'B'::text])`
+    ),
+    check(
+      "network_segment_endpoints_verification_check",
+      sql`verification_status = ANY (ARRAY['confirmed'::text, 'needs_review'::text])`
+    ),
+    check(
+      "network_segment_endpoints_source_check",
+      sql`source = ANY (ARRAY['Survei lapangan'::text, 'Data operasional'::text, 'Dokumen inventaris'::text])`
+    ),
+  ]
+);
+
+export const networkCoreEndConnections = pgTable(
+  "network_core_end_connections",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    connectionGroupId: uuid("connection_group_id").notNull(),
+    connectionType: text("connection_type").notNull(),
+    coreId: bigint("core_id", { mode: "number" })
+      .notNull()
+      .references(() => networkCores.id, { onDelete: "cascade" }),
+    side: text().notNull(),
+    nodeAssetId: text("node_asset_id")
+      .notNull()
+      .references(() => networkAssets.id, { onDelete: "restrict" }),
+    routeMeasureM: numeric("route_measure_m", { precision: 10, scale: 2 }),
+    peerCoreId: bigint("peer_core_id", { mode: "number" }).references(
+      () => networkCores.id,
+      { onDelete: "restrict" }
+    ),
+    peerSide: text("peer_side"),
+    peerRouteMeasureM: numeric("peer_route_measure_m", {
+      precision: 10,
+      scale: 2,
+    }),
+    portReference: text("port_reference"),
+    verificationStatus: text("verification_status")
+      .default("confirmed")
+      .notNull(),
+    source: text().notNull(),
+    note: text().default("").notNull(),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", {
+      mode: "date",
+      withTimezone: true,
+    })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("network_core_end_connections_node_idx").on(table.nodeAssetId),
+    index("network_core_end_connections_group_idx").on(
+      table.connectionGroupId
+    ),
+    index("network_core_end_connections_peer_idx").on(table.peerCoreId),
+    uniqueIndex("network_core_end_connections_core_side_key")
+      .on(table.coreId, table.side)
+      .where(sql`side = ANY (ARRAY['A'::text, 'B'::text])`),
+    uniqueIndex("network_core_end_connections_route_node_key")
+      .on(table.coreId, table.nodeAssetId, table.routeMeasureM)
+      .where(sql`side = 'R'::text`),
+    check(
+      "network_core_end_connections_side_check",
+      sql`side = ANY (ARRAY['A'::text, 'B'::text, 'R'::text])`
+    ),
+    check(
+      "network_core_end_connections_peer_pair_check",
+      sql`(peer_core_id IS NULL) = (peer_side IS NULL)`
+    ),
+    check(
+      "network_core_end_connections_peer_side_check",
+      sql`peer_side IS NULL OR peer_side = ANY (ARRAY['A'::text, 'B'::text, 'R'::text])`
+    ),
+    check(
+      "network_core_end_connections_type_check",
+      sql`(connection_type = 'splice' AND peer_core_id IS NOT NULL AND peer_side IS NOT NULL AND port_reference IS NULL) OR (connection_type = 'termination' AND peer_core_id IS NULL AND peer_side IS NULL AND peer_route_measure_m IS NULL AND port_reference IS NULL) OR (connection_type = 'device_port' AND peer_core_id IS NULL AND peer_side IS NULL AND peer_route_measure_m IS NULL AND length(trim(COALESCE(port_reference, ''))) > 0)`
+    ),
+    check(
+      "network_core_end_connections_route_measure_check",
+      sql`(side = 'R'::text AND route_measure_m IS NOT NULL AND route_measure_m >= 0) OR (side <> 'R'::text AND route_measure_m IS NULL)`
+    ),
+    check(
+      "network_core_end_connections_peer_route_measure_check",
+      sql`(peer_side = 'R'::text AND peer_route_measure_m IS NOT NULL AND peer_route_measure_m >= 0) OR (peer_side IS DISTINCT FROM 'R'::text AND peer_route_measure_m IS NULL)`
+    ),
+    check(
+      "network_core_end_connections_verification_check",
+      sql`verification_status = ANY (ARRAY['confirmed'::text, 'needs_review'::text])`
+    ),
+    check(
+      "network_core_end_connections_source_check",
+      sql`source = ANY (ARRAY['Survei lapangan'::text, 'Data operasional'::text, 'Dokumen inventaris'::text])`
+    ),
+    check(
+      "network_core_end_connections_not_self_check",
+      sql`peer_core_id IS NULL OR peer_core_id <> core_id OR peer_side <> side`
     ),
   ]
 );

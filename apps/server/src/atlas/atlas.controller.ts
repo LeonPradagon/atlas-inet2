@@ -435,6 +435,35 @@ export class AtlasController {
     return this.atlas.listCoreDestinations(id);
   }
 
+  @Get("assets/:id/cores/endpoints")
+  async coreEndpoints(@Req() req: IncomingMessage, @Param("id") id: string) {
+    await this.auth.requireUser(req);
+    return this.atlas.listCoreEndpoints(id);
+  }
+
+  @Get("assets/:id/cores/route-nodes")
+  async coreRouteNodes(@Req() req: IncomingMessage, @Param("id") id: string) {
+    await this.auth.requireUser(req);
+    return this.atlas.listCoreRouteNodes(id);
+  }
+
+  @Get("assets/:id/cores/connection-peers")
+  async coreConnectionPeers(
+    @Req() req: IncomingMessage,
+    @Param("id") id: string,
+    @Query("nodeAssetId") nodeAssetId?: string,
+    @Query("side") side?: string,
+    @Query("routeMeasureM") routeMeasureM?: string
+  ) {
+    await this.auth.requireUser(req);
+    return this.atlas.listCoreConnectionPeers(
+      id,
+      side ?? "",
+      nodeAssetId ?? "",
+      routeMeasureM === undefined ? undefined : Number(routeMeasureM)
+    );
+  }
+
   @Get("assets/:id/core-mappings")
   async coreMappings(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
@@ -460,11 +489,39 @@ export class AtlasController {
     @Body() body: {
       source?: string;
       note?: string;
+      segmentEndpoints?: Partial<Record<"A" | "B", string | null>>;
       coreStatuses?: {
         coreNumber: number;
         status: string;
-        connectedAssetId?: string | null;
-        connectedSide?: string | null;
+        midspanConnections?: {
+          nodeAssetId: string;
+          routeMeasureM: number;
+          connection:
+            | {
+                connectionType: "splice";
+                peerSegmentId: string;
+                peerCoreNumber: number;
+                peerSide: "A" | "B" | "R";
+                peerRouteMeasureM?: number;
+              }
+            | { connectionType: "termination" }
+            | { connectionType: "device_port"; portReference: string };
+        }[];
+        endConnections?: Partial<
+          Record<
+            "A" | "B",
+            | {
+                connectionType: "splice";
+                peerSegmentId: string;
+                peerCoreNumber: number;
+                peerSide: "A" | "B" | "R";
+                peerRouteMeasureM?: number;
+              }
+            | { connectionType: "termination" }
+            | { connectionType: "device_port"; portReference: string }
+            | null
+          >
+        >;
       }[];
     }
   ) {
@@ -474,7 +531,8 @@ export class AtlasController {
       body?.source,
       body?.note,
       user.id,
-      body?.coreStatuses
+      body?.coreStatuses,
+      body?.segmentEndpoints
     );
   }
 
