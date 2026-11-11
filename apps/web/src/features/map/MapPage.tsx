@@ -5300,7 +5300,7 @@ export function MapPage() {
                                           const targetSegmentName = selectedPeer?.peerSegmentName ??
                                             (connection?.connectionType === "splice" &&
                                               connection.peerSegmentId === end?.peerSegmentId
-                                              ? end.peerSegmentName
+                                              ? end?.peerSegmentName
                                               : null);
                                           const target =
                                             connection?.connectionType === "splice"
