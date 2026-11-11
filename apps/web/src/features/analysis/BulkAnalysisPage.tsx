@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ExcelJS from "exceljs";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DataTable, type DataTableColumn } from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
 import { api, postJson } from "../../lib/api";
 import { confirmAction } from "../../lib/dialogs";
@@ -40,7 +41,7 @@ function rowReviewReason(row: AnalysisRow) {
   if (["OK", "QUEUED", "PROCESSING", "CANCELLED"].includes(row.status)) {
     return "";
   }
-  if (row.message) {
+  if (row.message && row.message !== row.status) {
     return row.message;
   }
   if (row.status === "NETWORK_NOT_FOUND") {
@@ -50,6 +51,29 @@ function rowReviewReason(row: AnalysisRow) {
     return "Jaringan ditemukan, tetapi rute jalan belum tersedia.";
   }
   return "Periksa kembali alamat atau koordinat pada file.";
+}
+function rowActionGuidance(row: AnalysisRow) {
+  if (["ERROR", "ANALYSIS_FAILED"].includes(row.status)) {
+    return "Perbaiki alamat atau koordinat di file Excel, lalu unggah ulang.";
+  }
+  if (row.status === "NETWORK_NOT_FOUND") {
+    return row.result?.expansionAvailable
+      ? "Jaringan belum ditemukan. Coba perluas pencarian hingga 2 km."
+      : "Jaringan belum ditemukan. Periksa kembali titik lokasi.";
+  }
+  if (row.status === "ROUTING_UNAVAILABLE") {
+    return "Rute jalan belum tersedia. Periksa titik lokasi sebelum mengajukan survei.";
+  }
+  if (["QUEUED", "PROCESSING"].includes(row.status)) {
+    return "Tunggu analisis lokasi selesai.";
+  }
+  if (row.status === "CANCELLED") {
+    return "Baris ini belum dianalisis. Unggah ulang file untuk memprosesnya.";
+  }
+  if (row.status === "OK") {
+    return "Rencana terminasi belum tersedia. Unggah ulang file untuk memperbarui hasil.";
+  }
+  return "Periksa alamat atau koordinat pada file Excel sebelum mengajukan survei.";
 }
 function downloadWorkbook(workbook: ExcelJS.Workbook, name: string) {
   void workbook.xlsx.writeBuffer().then((buffer) => {
@@ -368,6 +392,137 @@ export function BulkAnalysisPage() {
     };
     downloadWorkbook(workbook, "template-analisis-atlas.xlsx");
   };
+  const columns: readonly DataTableColumn<AnalysisRow>[] = [
+    {
+      key: "row",
+      header: "Baris",
+      render: (row) => row.row,
+      width: "64px",
+    },
+    {
+      key: "location",
+      header: "Lokasi",
+      render: (row) => (
+        <>
+          <button
+            className="btn btn-link p-0 text-start"
+            onClick={(event) => {
+              event.stopPropagation();
+              setSelectedRowNumber(row.row);
+            }}
+            type="button"
+          >
+            {row.address}
+          </button>
+          <small className="d-block">
+            {row.latitude ?? "—"}, {row.longitude ?? "—"}
+          </small>
+        </>
+      ),
+    },
+    {
+      key: "network",
+      header: "Jaringan terdekat",
+      render: (row) => row.network?.name ?? "—",
+    },
+    {
+      key: "radius",
+      header: "Radius pencarian",
+      render: (row) => (
+        <>
+          {row.result?.network?.searchRadiusMeters ??
+            row.result?.searchRadiusMeters ??
+            "—"}{" "}
+          m
+        </>
+      ),
+      width: "130px",
+    },
+    {
+      key: "distance",
+      header: "Estimasi panjang kabel mengikuti jalan mobil",
+      render: (row) =>
+        row.distanceMeters == null
+          ? "Belum tersedia"
+          : row.distanceMeters >= 1000
+            ? (row.distanceMeters / 1000).toFixed(2) + " km"
+            : Math.round(row.distanceMeters) + " m",
+      width: "190px",
+    },
+    {
+      key: "status",
+      header: "Status",
+      render: (row) => {
+        const reason = rowReviewReason(row);
+        return (
+          <>
+            {reason ? (
+              <span className="bulk-row-review-state">Perlu diperiksa</span>
+            ) : (
+              row.status
+            )}
+            {reason && (
+              <small className="bulk-row-review-reason">{reason}</small>
+            )}
+          </>
+        );
+      },
+      width: "190px",
+    },
+    {
+      key: "actions",
+      header: "Aksi",
+      render: (row) => {
+        const validCoordinates =
+          Number.isFinite(row.latitude) &&
+          Number.isFinite(row.longitude) &&
+          Math.abs(row.latitude ?? Infinity) <= 90 &&
+          Math.abs(row.longitude ?? Infinity) <= 180;
+        const plan = row.result?.terminationPlan;
+        const canSubmitSurvey =
+          row.status === "OK" &&
+          validCoordinates &&
+          Boolean(plan) &&
+          Boolean(jobQuery.data?.historyId);
+
+        return (
+          <div
+            className="bulk-row-actions"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {canSubmitSurvey && plan && jobQuery.data?.historyId ? (
+              <SubmitSurveyButton
+                compact
+                historyId={jobQuery.data.historyId}
+                latitude={row.latitude ?? undefined}
+                longitude={row.longitude ?? undefined}
+                plan={plan}
+                planRequired
+                rowNumber={row.row}
+              />
+            ) : (
+              <small className="bulk-row-action-guidance">
+                {rowActionGuidance(row)}
+              </small>
+            )}
+            {(row.result?.expansionAvailable ||
+              (row.result?.terminations?.points.length === 0 &&
+                row.result.terminations.searchRadiusMeters === 1000)) && (
+              <button
+                className="btn btn-outline-primary btn-sm"
+                disabled={expanding !== null}
+                onClick={() => void expand(row)}
+                type="button"
+              >
+                {expanding === row.row ? "Mencari…" : "Cari hingga 2 km"}
+              </button>
+            )}
+          </div>
+        );
+      },
+      width: "230px",
+    },
+  ];
   return (
     <>
       <PageHeader
@@ -620,110 +775,21 @@ export function BulkAnalysisPage() {
                 </select>
               </div>
             </div>
-            <div className="table-responsive">
-              <table className="table table-hover atlas-data-table">
-                <thead>
-                  <tr>
-                    <th>Baris</th>
-                    <th>Lokasi</th>
-                    <th>Jaringan terdekat</th>
-                    <th>Radius pencarian</th>
-                    <th>Estimasi panjang kabel mengikuti jalan mobil</th>
-                    <th>Status</th>
-                    <th>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => {
-                    const reason = rowReviewReason(row);
-                    const needsReview = Boolean(reason);
-                    return (
-                      <tr
-                        className={
-                          selectedRowNumber === row.row
-                            ? "table-primary"
-                            : needsReview
-                              ? "bulk-row-needs-review"
-                              : ""
-                        }
-                        key={row.row}
-                      >
-                        <td>{row.row}</td>
-                        <td>
-                          <button
-                            className="btn btn-link p-0 text-start"
-                            onClick={() => setSelectedRowNumber(row.row)}
-                            type="button"
-                          >
-                            {row.address}
-                          </button>
-                          <small className="d-block">
-                            {row.latitude}, {row.longitude}
-                          </small>
-                        </td>
-                        <td>{row.network?.name ?? "—"}</td>
-                        <td>
-                          {row.result?.network?.searchRadiusMeters ??
-                            row.result?.searchRadiusMeters ??
-                            "—"}{" "}
-                          m
-                        </td>
-                        <td>
-                          {row.distanceMeters == null
-                            ? "Belum tersedia"
-                            : row.distanceMeters >= 1000
-                              ? (row.distanceMeters / 1000).toFixed(2) + " km"
-                              : Math.round(row.distanceMeters) + " m"}
-                        </td>
-                        <td>
-                          {needsReview ? (
-                            <span className="bulk-row-review-state">
-                              Perlu diperiksa
-                            </span>
-                          ) : (
-                            row.status
-                          )}
-                          {reason && (
-                            <small className="bulk-row-review-reason">
-                              {reason}
-                            </small>
-                          )}
-                        </td>
-                        <td>
-                          {row.result &&
-                            Number.isFinite(row.latitude) &&
-                            Number.isFinite(row.longitude) &&
-                            jobQuery.data?.historyId && (
-                              <SubmitSurveyButton
-                                historyId={jobQuery.data.historyId}
-                                latitude={row.latitude ?? undefined}
-                                longitude={row.longitude ?? undefined}
-                                requireProposal={!row.network}
-                                rowNumber={row.row}
-                              />
-                            )}
-                          {(row.result?.expansionAvailable ||
-                            (row.result?.terminations?.points.length === 0 &&
-                              row.result.terminations.searchRadiusMeters ===
-                                1000)) && (
-                            <button
-                              className="btn btn-outline-primary btn-sm"
-                              disabled={expanding !== null}
-                              onClick={() => void expand(row)}
-                              type="button"
-                            >
-                              {expanding === row.row
-                                ? "Mencari…"
-                                : "Cari hingga 2 km"}
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <DataTable
+              columns={columns}
+              density="compact"
+              label="Hasil analisis massal"
+              onRowClick={(row) => setSelectedRowNumber(row.row)}
+              rowAriaLabel={(row) => `Buka detail lokasi ${row.address}`}
+              rowClassName={(row) => {
+                const classes: string[] = [];
+                if (selectedRowNumber === row.row) classes.push("bulk-row-selected");
+                if (rowReviewReason(row)) classes.push("bulk-row-needs-review");
+                return classes.length ? classes.join(" ") : undefined;
+              }}
+              rowKey={(row) => String(row.row)}
+              rows={rows}
+            />
             <div className="d-flex justify-content-between align-items-center">
               <small>
                 Halaman {page} · {pageQuery.data?.total ?? 0} baris

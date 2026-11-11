@@ -102,6 +102,9 @@ export function SurveysPage() {
   const [form, setForm] = useState<Record<string, string>>({});
   const [imageError, setImageError] = useState("");
   const [readingImage, setReadingImage] = useState(false);
+  const [isDraggingImage, setIsDraggingImage] = useState(false);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
   const imageReadId = useRef(0);
   const me = useQuery({
     queryKey: ["me"],
@@ -127,9 +130,72 @@ export function SurveysPage() {
     imageReadId.current++;
     setImageError("");
     setReadingImage(false);
+    setIsDraggingImage(false);
+    setImageFile(null);
     setSelected(survey);
     setForm(restoreTextFindings(survey.findings ?? {}));
     update.reset();
+  };
+  const chooseImage = (file?: File) => {
+    if (!file) {
+      return;
+    }
+    const readId = ++imageReadId.current;
+    setImageError("");
+    setReadingImage(false);
+    setImageFile(null);
+    setForm((current) => ({
+      ...current,
+      image: "",
+      imageLatitude: "",
+      imageLongitude: "",
+    }));
+    if (
+      !["image/jpeg", "image/png", "image/webp"].includes(file.type) ||
+      file.size > 2 * 1024 * 1024
+    ) {
+      setImageError(
+        "Pilih gambar JPG, PNG, atau WebP dengan ukuran maksimal 2 MB."
+      );
+      return;
+    }
+
+    setImageFile(file);
+    const reader = new FileReader();
+    setReadingImage(true);
+    reader.onload = async () => {
+      const location = await gps(file).catch(() => undefined);
+      if (readId !== imageReadId.current) {
+        return;
+      }
+      if (
+        !location ||
+        !Number.isFinite(location.latitude) ||
+        !Number.isFinite(location.longitude) ||
+        Math.abs(location.latitude) > 90 ||
+        Math.abs(location.longitude) > 180 ||
+        typeof reader.result !== "string"
+      ) {
+        setImageError(
+          "Foto tidak memiliki koordinat GPS. Aktifkan lokasi pada kamera dan pilih foto asli."
+        );
+      } else {
+        setForm((current) => ({
+          ...current,
+          image: reader.result as string,
+          imageLatitude: String(location.latitude),
+          imageLongitude: String(location.longitude),
+        }));
+      }
+      setReadingImage(false);
+    };
+    reader.onerror = () => {
+      if (readId === imageReadId.current) {
+        setImageError("Gambar tidak dapat dibaca.");
+        setReadingImage(false);
+      }
+    };
+    reader.readAsDataURL(file);
   };
   const update = useMutation({
     mutationFn: ({ survey, status, findings }: SurveyChange) =>
@@ -452,127 +518,176 @@ export function SurveysPage() {
                 </label>
               ))}
             </div>{" "}
-            <div className="mt-3">
-              <label className="form-label" htmlFor="survey-image">
-                Foto bukti survei
-              </label>
+            <div className="mt-4">
               {selected.status === "IN_PROGRESS" && (
                 <>
                   <input
                     accept="image/jpeg,image/png,image/webp"
-                    className="form-control"
+                    aria-describedby="survey-image-help"
+                    aria-label="Pilih foto bukti survei"
+                    className="file-upload-input"
                     id="survey-image"
                     onChange={(event) => {
-                      const file = event.target.files?.[0];
+                      chooseImage(event.target.files?.[0]);
                       event.target.value = "";
-                      const readId = ++imageReadId.current;
-                      setImageError("");
-                      setReadingImage(false);
-                      if (!file) {
-                        return;
-                      }
+                    }}
+                    ref={imageInput}
+                    type="file"
+                  />
+                  {/* biome-ignore lint/a11y/noStaticElementInteractions: the drop zone has a keyboard-accessible file picker button */}
+                  {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: the drop zone has a keyboard-accessible file picker button */}
+                  <div
+                    className={`file-upload-zone survey-image-upload${isDraggingImage ? " is-dragging" : ""}${readingImage ? " is-uploading" : ""}`}
+                    onDragEnter={(event) => {
+                      event.preventDefault();
+                      setIsDraggingImage(true);
+                    }}
+                    onDragLeave={(event) => {
                       if (
-                        !["image/jpeg", "image/png", "image/webp"].includes(
-                          file.type
-                        ) ||
-                        file.size > 2 * 1024 * 1024
+                        !event.currentTarget.contains(
+                          event.relatedTarget as Node | null
+                        )
                       ) {
+                        setIsDraggingImage(false);
+                      }
+                    }}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setIsDraggingImage(false);
+                      if (event.dataTransfer.files.length > 1) {
                         setImageError(
-                          "Pilih gambar JPG, PNG, atau WebP dengan ukuran maksimal 2 MB."
+                          "Pilih satu foto setiap kali mengunggah."
                         );
                         return;
                       }
-                      const reader = new FileReader();
-                      setReadingImage(true);
-                      reader.onload = async () => {
-                        const location = await gps(file).catch(() => undefined);
-                        if (readId !== imageReadId.current) {
-                          return;
-                        }
-                        if (
-                          !location ||
-                          !Number.isFinite(location.latitude) ||
-                          !Number.isFinite(location.longitude) ||
-                          Math.abs(location.latitude) > 90 ||
-                          Math.abs(location.longitude) > 180 ||
-                          typeof reader.result !== "string"
-                        ) {
-                          setImageError(
-                            "Foto tidak memiliki koordinat GPS. Aktifkan lokasi pada kamera dan pilih foto asli."
-                          );
-                        } else {
-                          setForm((current) => ({
-                            ...current,
-                            image: reader.result as string,
-                            imageLatitude: String(location.latitude),
-                            imageLongitude: String(location.longitude),
-                          }));
-                        }
-                        setReadingImage(false);
-                      };
-                      reader.onerror = () => {
-                        if (readId === imageReadId.current) {
-                          setImageError("Gambar tidak dapat dibaca.");
-                          setReadingImage(false);
-                        }
-                      };
-                      reader.readAsDataURL(file);
+                      chooseImage(event.dataTransfer.files[0]);
                     }}
-                    type="file"
-                  />
-                  <small className="text-secondary">
-                    JPG, PNG, atau WebP, maksimal 2 MB. Foto harus memiliki
-                    koordinat GPS.
-                  </small>
+                  >
+                    <div aria-hidden="true" className="file-upload-icon">
+                      <i className="bi bi-file-earmark-image" />
+                    </div>
+                    <div className="file-upload-copy">
+                      <strong>
+                        {isDraggingImage
+                          ? "Lepaskan foto untuk diperiksa"
+                          : readingImage
+                            ? "Memeriksa foto dan koordinat GPS…"
+                            : form.image
+                              ? "Foto bukti survei siap"
+                              : "Unggah foto bukti survei"}
+                      </strong>
+                      <span id="survey-image-help">
+                        JPG, PNG, atau WebP, maksimal 2 MB. Foto harus memiliki
+                        koordinat GPS.
+                      </span>
+                      {(imageFile || form.image) && (
+                        <span
+                          className="file-upload-selected"
+                          title={
+                            imageFile?.name ?? "Foto bukti survei tersimpan"
+                          }
+                        >
+                          <i
+                            aria-hidden="true"
+                            className="bi bi-file-earmark-check"
+                          />
+                          <b>
+                            {imageFile?.name ?? "Foto bukti survei tersimpan"}
+                          </b>
+                          {imageFile && (
+                            <span>{(imageFile.size / 1024).toFixed(1)} KB</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      className="btn btn-outline-primary file-upload-button"
+                      disabled={readingImage}
+                      onClick={() => imageInput.current?.click()}
+                      type="button"
+                    >
+                      {form.image ? "Pilih foto lain" : "Pilih foto"}
+                    </button>
+                    <span className="file-upload-drop-hint">
+                      atau seret foto ke sini
+                    </span>
+                  </div>
+                  <div
+                    aria-live="polite"
+                    className="file-upload-feedback"
+                    role="status"
+                  >
+                    {readingImage && (
+                      <>
+                        <span
+                          aria-hidden="true"
+                          className="spinner-border spinner-border-sm"
+                        />
+                        <span>Memeriksa foto dan koordinat GPS…</span>
+                      </>
+                    )}
+                  </div>
                 </>
               )}
               {imageError && (
-                <p className="text-danger" role="alert">
+                <p
+                  className="alert alert-danger py-2 px-3 mt-2 mb-0"
+                  role="alert"
+                >
                   {imageError}
                 </p>
               )}
               {form.image && (
-                <div className="mt-2">
-                  <a href={form.image} rel="noreferrer" target="_blank">
+                <div className="survey-image-preview mt-3">
+                  <a
+                    aria-label="Buka foto bukti survei ukuran penuh"
+                    className="survey-image-preview-link"
+                    href={form.image}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
                     {/* biome-ignore lint/correctness/useImageSize: foto survei memiliki rasio yang berbeda */}
-                    <img
-                      alt="Bukti survei"
-                      src={form.image}
-                      style={{
-                        maxWidth: "100%",
-                        maxHeight: 240,
-                        objectFit: "contain",
-                      }}
-                    />
+                    <img alt="Bukti survei" src={form.image} />
                   </a>
-                  {form.imageLatitude && form.imageLongitude ? (
-                    <p className="mt-2 mb-1">
-                      Koordinat foto: {form.imageLatitude},{" "}
-                      {form.imageLongitude}
-                    </p>
-                  ) : (
-                    <p className="text-secondary mt-2 mb-1">
-                      Koordinat foto tidak tersedia.
-                    </p>
-                  )}
-                  {selected.status === "IN_PROGRESS" && (
-                    <button
-                      className="btn btn-sm btn-outline-danger d-block mt-2"
-                      onClick={() => {
-                        imageReadId.current++;
-                        setReadingImage(false);
-                        setForm((current) => ({
-                          ...current,
-                          image: "",
-                          imageLatitude: "",
-                          imageLongitude: "",
-                        }));
-                      }}
-                      type="button"
-                    >
-                      Hapus gambar
-                    </button>
-                  )}
+                  <div className="survey-image-preview-details">
+                    <strong>Foto bukti survei</strong>
+                    {form.imageLatitude && form.imageLongitude ? (
+                      <span className="survey-image-gps">
+                        <i aria-hidden="true" className="bi bi-geo-alt-fill" />
+                        Koordinat GPS terbaca
+                      </span>
+                    ) : (
+                      <span className="text-secondary">
+                        Koordinat foto tidak tersedia.
+                      </span>
+                    )}
+                    {form.imageLatitude && form.imageLongitude && (
+                      <span className="survey-image-coordinates">
+                        {form.imageLatitude}, {form.imageLongitude}
+                      </span>
+                    )}
+                    {selected.status === "IN_PROGRESS" && (
+                      <button
+                        className="btn btn-sm btn-outline-danger mt-2"
+                        onClick={() => {
+                          imageReadId.current++;
+                          setReadingImage(false);
+                          setImageFile(null);
+                          setImageError("");
+                          setForm((current) => ({
+                            ...current,
+                            image: "",
+                            imageLatitude: "",
+                            imageLongitude: "",
+                          }));
+                        }}
+                        type="button"
+                      >
+                        Hapus gambar
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
               {!form.image && selected.status !== "IN_PROGRESS" && (

@@ -11,6 +11,7 @@ export function SubmitSurveyButton({
   requireProposal = false,
   plan,
   planRequired = false,
+  compact = false,
 }: {
   historyId: string;
   rowNumber?: number;
@@ -19,6 +20,7 @@ export function SubmitSurveyButton({
   requireProposal?: boolean;
   plan?: TerminationPlan | null;
   planRequired?: boolean;
+  compact?: boolean;
 }) {
   const client = useQueryClient();
   const [showProposal, setShowProposal] = useState(requireProposal);
@@ -49,7 +51,7 @@ export function SubmitSurveyButton({
     },
   });
   return (
-    <div className="my-3">
+    <div className={compact ? "bulk-survey-submit" : "my-3"}>
       {!planRequired && (
         <label className="d-block mb-2">
           <input
@@ -108,7 +110,7 @@ export function SubmitSurveyButton({
         </small>
       )}
       <button
-        className="btn btn-outline-primary"
+        className={`btn btn-outline-primary${compact ? " btn-sm" : ""}`}
         disabled={
           submit.isPending ||
           submit.isSuccess ||

@@ -1311,10 +1311,13 @@ export function NearestNetworkMap({
         </div>
       )}
       {result.terminationPlan && result.terminationPlan.cables.length > 0 && (
-        <div className="alert alert-info">
-          <strong className="d-block mb-2">Usulan sambungan kabel</strong>
-          <CablePlanDetails plan={result.terminationPlan} networkName={result.network?.name} />
-        </div>
+        <section aria-label="Usulan sambungan kabel" className="cable-plan-panel">
+          <h3>Usulan sambungan kabel</h3>
+          <CablePlanDetails
+            networkName={result.network?.name}
+            plan={result.terminationPlan}
+          />
+        </section>
       )}
       <section
         aria-label="Peta jaringan terdekat dan estimasi jalur kabel mengikuti jalan mobil"

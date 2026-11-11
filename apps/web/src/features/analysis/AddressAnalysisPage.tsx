@@ -956,7 +956,6 @@ export function AddressAnalysisPage() {
                         onClick={() => chooseInputMode("address")}
                         type="button"
                       >
-                        <i className="bi bi-house-door me-2" />
                         <b>Alamat rumah</b>
                         <small className="d-block mt-1">
                           Cari alamat dan pilih titiknya pada peta.
@@ -969,7 +968,6 @@ export function AddressAnalysisPage() {
                         onClick={() => chooseInputMode("coordinates")}
                         type="button"
                       >
-                        <i className="bi bi-crosshair me-2" />
                         <b>Koordinat langsung</b>
                         <small className="d-block mt-1">
                           Masukkan latitude dan longitude.
@@ -992,7 +990,6 @@ export function AddressAnalysisPage() {
                     onClick={() => chooseInputMode("address")}
                     type="button"
                   >
-                    <i className="bi bi-house-door me-2" />
                     Alamat rumah
                   </button>
                   <button
@@ -1001,7 +998,6 @@ export function AddressAnalysisPage() {
                     onClick={() => chooseInputMode("coordinates")}
                     type="button"
                   >
-                    <i className="bi bi-crosshair me-2" />
                     Koordinat langsung
                   </button>
                 </div>
