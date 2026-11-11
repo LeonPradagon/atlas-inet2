@@ -59,6 +59,32 @@ make prod-bootstrap-admin
 
 Setelah akun ADMIN pertama dibuat, hapus `BOOTSTRAP_ADMIN_EMAIL` dan `BOOTSTRAP_ADMIN_PASSWORD` dari `.env`. Port HTTP frontend dapat diatur dengan `WEB_PORT` (default 80). Data PostGIS memakai volume `atlas_phase2_postgis_data` dan tidak ikut terhapus oleh `docker compose down` tanpa `-v`.
 
+## Monitoring Uptime Kuma
+
+Uptime Kuma berjalan terpisah dari stack produksi, tetapi terhubung ke jaringan `atlas-phase2_default` untuk memantau layanan internal. Mulai stack produksi terlebih dahulu, lalu jalankan:
+
+```sh
+docker volume create uptime-kuma
+docker compose -f deploy/compose.uptime-kuma.yaml up -d
+```
+
+Panel hanya mendengarkan di localhost server. Dari komputer operator, buka tunnel SSH lalu akses <http://localhost:3001>:
+
+```sh
+ssh -N -L 3001:127.0.0.1:3001 root@110.239.80.32
+```
+
+Tambahkan `-i <path-kunci-ssh>` bila diperlukan. Pada pemasangan pertama, pilih SQLite dan buat akun admin. Konfigurasi akun, monitor, dan riwayat tersimpan dalam volume eksternal `uptime-kuma`, bukan di repository; cadangkan volume tersebut secara terpisah.
+
+Server saat ini memiliki container mandiri bernama `uptime-kuma`. Untuk beralih ke Compose, pastikan volume tersebut sudah dicadangkan, lalu hentikan dan hapus **container saja** sebelum menjalankan perintah Compose di atas:
+
+```sh
+docker stop uptime-kuma
+docker rm uptime-kuma
+```
+
+Jangan hapus volume `uptime-kuma`. Konfigurasi Compose akan memakai volume yang sama. Monitor dan notifikasi dikelola melalui panel; monitor internal memakai `http://backend:3000/api/health`, `http://photon:2322/status`, dan `http://graphhopper:8989/health`.
+
 ## Provider geospasial
 
 Compose produksi menjalankan Photon dan GraphHopper pada jaringan internal. Letakkan data Photon (JAR dan `photon_data/`) di `./var/providers/photon`, serta data GraphHopper (JAR, PBF jalan, dan `graph-cache/`) di `./var/providers/graphhopper`. Backend memakai API Photon dan profil jalan `car` GraphHopper; provider tidak membuka port publik. Data provider tidak termasuk dalam repository.
