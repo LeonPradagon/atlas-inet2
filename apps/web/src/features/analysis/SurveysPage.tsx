@@ -2,7 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { gps } from "exifr";
 import { useRef, useState } from "react";
 import { AtlasTag } from "../../components/AtlasTag";
-import { DataTable } from "../../components/DataTable";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
 import { api } from "../../lib/api";
@@ -10,8 +13,10 @@ import {
   NearestNetworkMap,
   type NetworkSearchResult,
 } from "./NearestNetworkMap";
-import { candidateName, connectionName } from "./terminationPlan";
-import { CablePlanDetails } from "./CablePlanDetails";
+import {
+  candidateName,
+  type TerminationPlan,
+} from "./terminationPlan";
 
 type Survey = {
   id: string;
@@ -28,6 +33,88 @@ type SurveyChange = {
   status: string;
   findings: Record<string, string>;
 };
+type TerminationReference = {
+  id: string;
+  name: string;
+  location: string;
+  detail: string;
+};
+
+const terminationReferenceColumns: readonly DataTableColumn<TerminationReference>[] = [
+  {
+    key: "name",
+    header: "Titik / aset",
+    rowHeader: true,
+    render: (row) => row.name,
+  },
+  {
+    key: "location",
+    header: "Koordinat",
+    className: "text-nowrap",
+    render: (row) => row.location,
+  },
+  {
+    key: "detail",
+    header: "Keterangan",
+    render: (row) => row.detail || "—",
+  },
+];
+
+function getTerminationReferences(plan: TerminationPlan) {
+  const references: TerminationReference[] = [];
+  const seen = new Set<string>();
+  const add = (reference: TerminationReference) => {
+    const key = `${reference.name}:${reference.location}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      references.push(reference);
+    }
+  };
+
+  plan.points.forEach((point, index) => {
+    add({
+      id: `point-${index}-${point.kind}`,
+      name: `Titik rencana ${String(index + 1).padStart(2, "0")}`,
+      location: `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`,
+      detail: point.kind,
+    });
+  });
+
+  (plan.deviceCandidates ?? [])
+    .filter((point) => point.kind !== "Tiang")
+    .forEach((point, index) => {
+      add({
+        id: `device-${index}-${point.kind}`,
+        name: candidateName(point, index),
+        location: `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`,
+        detail:
+          point.basis === "PLANNING"
+            ? ""
+            : point.reason,
+      });
+    });
+
+  (plan.routeEvidence ?? []).forEach((point) => {
+    add({
+      id: `asset-${point.id}`,
+      name: point.name,
+      location: `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`,
+      detail: `${point.type} · ${Math.round(point.distanceToRouteMeters)} m dari jalur · ${point.recordedCables} kabel tercatat`,
+    });
+  });
+
+  (plan.connectionCandidates ?? []).forEach((point, index) => {
+    add({
+      id: `connection-${point.cableId}-${index}`,
+      name: point.cableName,
+      location: `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`,
+      detail: `${point.recommendedKind ? `Potensi ${point.recommendedKind}` : "Jenis terminasi belum ditentukan"} · ${Math.round(point.distanceMeters)} m dari jalur`,
+    });
+  });
+
+  return references;
+}
+
 const labels: Record<string, string> = {
   WAITING: "Menunggu survei",
   IN_PROGRESS: "Dalam survei",
@@ -124,6 +211,13 @@ export function SurveysPage() {
   const visible = filtered.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
+  );
+  const terminationPlan = selected?.analysis.terminationPlan;
+  const terminationReferences = terminationPlan
+    ? getTerminationReferences(terminationPlan)
+    : [];
+  const hasSimulatedOdp = terminationPlan?.deviceCandidates?.some(
+    (point) => point.kind === "ODP" && point.basis === "PLANNING"
   );
   const refresh = () => client.invalidateQueries({ queryKey: ["surveys"] });
   const openSurvey = (survey: Survey) => {
@@ -373,9 +467,6 @@ export function SurveysPage() {
           <div className="card-body">
             <p>
               Jaringan hasil analisis: <b>{selected.analysis.network?.name}</b>
-              {selected.analysis.distanceMeters == null
-                ? ""
-                : ` · Estimasi kabel ${Math.round(selected.analysis.distanceMeters)} m`}
             </p>
             {Number.isFinite(selected.analysis.latitude) &&
               Number.isFinite(selected.analysis.longitude) && (
@@ -393,96 +484,44 @@ export function SurveysPage() {
                   />
                 </div>
               )}
-            {selected.analysis.terminationPlan && (
-              <section className="alert alert-warning">
-                <b>Rencana terminasi dan kabel · belum menjadi aset</b>
-                <ol>
-                  {selected.analysis.terminationPlan.points.map((point) => (
-                    <li
-                      key={`${point.kind}:${point.latitude}:${point.longitude}`}
-                    >
-                      {point.kind === "JOINT_CLOSURE"
-                        ? "Kandidat closure · perlu survei"
-                        : point.kind}{" "}
-                      · {point.latitude.toFixed(6)},{" "}
-                      {point.longitude.toFixed(6)}
-                    </li>
-                  ))}
-                </ol>
-                {selected.analysis.terminationPlan.upstreamRecommendation && (
-                  <div>
-                    Terminasi sumber:{" "}
-                    {
-                      selected.analysis.terminationPlan.upstreamRecommendation
-                        .type
-                    }{" "}
-                    ·{" "}
-                    {
-                      selected.analysis.terminationPlan.upstreamRecommendation
-                        .name
-                    }{" "}
-                    ·{" "}
-                    {
-                      selected.analysis.terminationPlan.upstreamRecommendation
-                        .recordedCables
-                    }{" "}
-                    relasi kabel tercatat.
-                  </div>
+            {terminationPlan && (
+              <section
+                aria-labelledby="survey-termination-plan-title"
+                className="survey-termination-plan"
+              >
+                <header className="survey-termination-plan-heading">
+                  <h4 id="survey-termination-plan-title">
+                    Rencana terminasi dan kabel
+                  </h4>
+                  <AtlasTag className="is-pending">Belum menjadi aset</AtlasTag>
+                </header>
+                {terminationReferences.length > 0 && (
+                  <details className="survey-termination-references">
+                    <summary>
+                      Rincian titik dan aset ({terminationReferences.length})
+                    </summary>
+                    {hasSimulatedOdp && (
+                      <p className="survey-termination-note">
+                        Titik simulasi ODP mengikuti pola jarak pada data KMZ;
+                        bukan jumlah pemasangan yang ditetapkan.
+                      </p>
+                    )}
+                    <DataTable
+                      columns={terminationReferenceColumns}
+                      density="compact"
+                      label="Rincian titik dan aset rencana"
+                      rows={terminationReferences}
+                      rowKey={(row) => row.id}
+                    />
+                  </details>
                 )}
-                {selected.analysis.terminationPlan.routeEvidence && (
-                  <div>
-                    Aset terdata dekat jalur:{" "}
-                    {selected.analysis.terminationPlan.routeEvidence.length
-                      ? selected.analysis.terminationPlan.routeEvidence
-                          .map(
-                            (point) =>
-                              `${point.name} (${point.type}, ${Math.round(point.distanceToRouteMeters)} m dari jalur)`
-                          )
-                          .join("; ")
-                      : "tidak ditemukan"}
-                    . Kedekatan dan jenis aset belum memastikan sambungan;
-                    periksa saat survei.
-                    {selected.analysis.terminationPlan
-                      .routeEvidenceIncomplete &&
-                      " Data aset di sepanjang jalur belum lengkap."}
-                  </div>
+                {(terminationPlan.routeEvidenceIncomplete ||
+                  terminationPlan.connectionCandidatesIncomplete) && (
+                  <p className="survey-termination-note">
+                    Sebagian aset atau ujung kabel belum tercakup dalam data
+                    analisis.
+                  </p>
                 )}
-                {selected.analysis.terminationPlan.deviceCandidates?.filter((point) => point.kind !== "Tiang").map(
-                  (point, index) => (
-                    <div
-                      key={`${point.kind}-${point.latitude}-${point.longitude}`}
-                    >
-                      {candidateName(point, index)}: {point.reason}
-                    </div>
-                  )
-                )}
-                {selected.analysis.terminationPlan.connectionCandidates?.map(
-                  (point, index) => (
-                    <div
-                      key={`${point.cableId}-${point.longitude}-${point.latitude}`}
-                    >
-                      {connectionName(index)}: ujung {point.cableName} ·{" "}
-                      {point.recommendedKind
-                        ? "opsi closure jika kabel disambungkan"
-                        : "jenis terminasi belum ditentukan"}
-                      ; kedekatan tidak memastikan sambungan diperlukan.
-                    </div>
-                  )
-                )}
-                <CablePlanDetails plan={selected.analysis.terminationPlan} networkName={selected.analysis.network?.name} />
-                <small>
-                  {selected.analysis.terminationPlan.capacityBasis ===
-                  "VERIFIED_SOURCE"
-                    ? "Kapasitas mengikuti kabel sumber terverifikasi. "
-                    : selected.analysis.terminationPlan.capacityBasis ===
-                        "UNVERIFIED_SOURCE"
-                      ? "Kapasitas mengikuti kabel kandidat; relasi ke tujuan atau pemakaian core belum terverifikasi. "
-                      : selected.analysis.terminationPlan.capacityBasis ===
-                          "SOURCE_UNKNOWN"
-                        ? "Kapasitas kabel belum dapat ditentukan dari data sumber. "
-                        : ""}
-                  Periksa spesifikasi kabel, sambungan, dan jalur saat survei.
-                </small>
               </section>
             )}
             {selected.analysis.proposal && (

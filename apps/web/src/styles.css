@@ -487,6 +487,41 @@ body {
   line-height: 1.5;
   color: var(--bs-secondary-color);
 }
+.survey-termination-plan {
+  padding: 14px 0;
+  margin: 16px 0;
+  border-block: 1px solid var(--bs-border-color);
+}
+.survey-termination-plan-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.survey-termination-plan-heading h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.survey-termination-references {
+  padding-top: 8px;
+  margin-top: 10px;
+  border-top: 1px solid var(--bs-border-color);
+}
+.survey-termination-references > summary {
+  padding: 4px 0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.survey-termination-note {
+  margin: 8px 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--bs-secondary-color);
+}
 .atlas-data-table small {
   margin-top: 4px;
   font-size: 11px;
