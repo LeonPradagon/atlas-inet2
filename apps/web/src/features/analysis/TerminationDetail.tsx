@@ -1,3 +1,5 @@
+import { DetailTable } from "../../components/DetailTable";
+
 export type TerminationResults = {
   searchRadiusMeters: number;
   points: {
@@ -76,63 +78,96 @@ export function TerminationDetail({ data }: { data?: TerminationResults }) {
           Tidak ada terminasi yang dikenali dalam radius pencarian.
         </p>
       )}
-      {data.points.length > 0 && <details>
-        <summary className="fw-semibold py-2">Lihat {data.points.length} terminasi ditemukan</summary>
-      {data.points.map((point) => (
-        <details className="border-top py-2" key={point.id}>
-          <summary>
-            <b>{point.name}</b> · {point.type} · {Math.round(point.distance)} m
+      {data.points.length > 0 && (
+        <details>
+          <summary className="fw-semibold py-2">
+            Lihat {data.points.length} terminasi ditemukan
           </summary>
-          <small className="text-secondary d-block">
-            Koordinat: {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}
-          </small>
-          {point.relatedDevices && point.relatedDevices.length > 0 && (
-            <div className="small">
-              Perangkat melalui kabel tercatat:{" "}
-              {point.relatedDevices
-                .map((device) => `${device.name} (${device.kind})`)
-                .join(", ")}
-            </div>
-          )}
-          {point.cables.length === 0 && (
-            <small>Belum ada kabel tercatat atau kandidat dalam 20 m.</small>
-          )}
-          {uniqueTerminationCables(point.cables).map((cable) => (
-            <div className="border rounded p-2 mt-2 small" key={cable.id}>
-              <b>{cable.name}</b>
-              <br />
-              {cable.recorded
-                ? "Relasi tercatat"
-                : `Kabel dekat pada peta · perlu verifikasi · ${Math.round(cable.distanceMeters)} m dari titik`}
-              <br />
-              Total core: {cable.totalCores || "Belum diketahui"} · Terpakai:{" "}
-              {cable.used} (nomor:{" "}
-              {cable.usedNumbers?.join(", ") ||
-                (cable.usedNumbers ? "—" : "jalankan analisis ulang")}
-              ) · Booked: {cable.booked} (nomor:{" "}
-              {cable.bookedNumbers?.join(", ") ||
-                (cable.bookedNumbers ? "—" : "jalankan analisis ulang")}
-              )
-              <br />
-              Tersedia:{" "}
-              {cable.verified && cable.totalCores > 0 && cable.available
-                ? `${cable.available.length} (nomor: ${cable.available.join(", ") || "—"})`
-                : "Belum terverifikasi atau kapasitas belum diketahui"}
-              <br />
-              Titik terdekat dari awal kabel:{" "}
-              {cable.start
-                ? `${cable.start.name} (${Math.round(cable.start.distanceMeters)} m)`
-                : "Belum diketahui"}
-              <br />
-              Titik terdekat dari ujung kabel:{" "}
-              {cable.end
-                ? `${cable.end.name} (${Math.round(cable.end.distanceMeters)} m)`
-                : "Belum diketahui"}
-            </div>
+          {data.points.map((point) => (
+            <details className="border-top py-2" key={point.id}>
+              <summary>
+                <b>{point.name}</b> · {point.type} ·{" "}
+                {Math.round(point.distance)} m
+              </summary>
+              <DetailTable
+                className="mt-2"
+                label={`Detail ${point.name}`}
+                rows={[
+                  {
+                    label: "Koordinat",
+                    value: `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`,
+                    valueClassName: "font-monospace",
+                  },
+                  ...(point.relatedDevices && point.relatedDevices.length > 0
+                    ? [
+                        {
+                          label: "Perangkat melalui kabel tercatat",
+                          value: point.relatedDevices
+                            .map((device) => `${device.name} (${device.kind})`)
+                            .join(", "),
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+              {point.cables.length === 0 && (
+                <small>
+                  Belum ada kabel tercatat atau kandidat dalam 20 m.
+                </small>
+              )}
+              {uniqueTerminationCables(point.cables).map((cable) => (
+                <div className="border rounded p-2 mt-2 small" key={cable.id}>
+                  <b className="d-block mb-1">{cable.name}</b>
+                  <DetailTable
+                    label={`Detail ${cable.name}`}
+                    rows={[
+                      {
+                        label: "Relasi",
+                        value: cable.recorded
+                          ? "Relasi tercatat"
+                          : `Kabel dekat pada peta · perlu verifikasi · ${Math.round(cable.distanceMeters)} m dari titik`,
+                      },
+                      {
+                        label: "Total core",
+                        value: cable.totalCores || "Belum diketahui",
+                      },
+                      {
+                        label: "Terpakai",
+                        value: `${cable.used} (nomor: ${cable.usedNumbers?.join(", ") || (cable.usedNumbers ? "—" : "jalankan analisis ulang")})`,
+                      },
+                      {
+                        label: "Booked",
+                        value: `${cable.booked} (nomor: ${cable.bookedNumbers?.join(", ") || (cable.bookedNumbers ? "—" : "jalankan analisis ulang")})`,
+                      },
+                      {
+                        label: "Tersedia",
+                        value:
+                          cable.verified &&
+                          cable.totalCores > 0 &&
+                          cable.available
+                            ? `${cable.available.length} (nomor: ${cable.available.join(", ") || "—"})`
+                            : "Belum terverifikasi atau kapasitas belum diketahui",
+                      },
+                      {
+                        label: "Titik terdekat dari awal kabel",
+                        value: cable.start
+                          ? `${cable.start.name} (${Math.round(cable.start.distanceMeters)} m)`
+                          : "Belum diketahui",
+                      },
+                      {
+                        label: "Titik terdekat dari ujung kabel",
+                        value: cable.end
+                          ? `${cable.end.name} (${Math.round(cable.end.distanceMeters)} m)`
+                          : "Belum diketahui",
+                      },
+                    ]}
+                  />
+                </div>
+              ))}
+            </details>
           ))}
         </details>
-      ))}
-      </details>}
+      )}
     </section>
   );
 }

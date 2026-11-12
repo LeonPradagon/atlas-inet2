@@ -9,6 +9,7 @@ import {
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { useEffect, useRef, useState } from "react";
 import { AtlasTag } from "../../components/AtlasTag";
+import { DetailTable } from "../../components/DetailTable";
 import { PageHeader } from "../../components/PageHeader";
 import { type ApiError, api, postJson } from "../../lib/api";
 import {
@@ -1629,33 +1630,37 @@ export function AddressAnalysisPage() {
                   </div>
                 )}
                 <div className="detail-label">HASIL KONVERSI</div>
-                <div className="result-address">
-                  <i className="bi bi-geo-alt-fill" />
-                  <span>{analyze.data.address}</span>
-                </div>
-                <div className="bg-body-tertiary d-flex align-items-center justify-content-between mt-3 w-100 gap-2 rounded border px-3 py-2">
-                  <div className="min-w-0">
-                    <small className="d-block text-secondary">Koordinat</small>
-                    <b className="font-monospace user-select-all text-break">
-                      {coordinates}
-                    </b>
-                  </div>
-                  <button
-                    aria-label="Salin koordinat"
-                    className="btn btn-sm btn-outline-primary flex-shrink-0"
-                    onClick={copyCoordinates}
-                    title={
-                      coordinateCopyStatus === "copied"
-                        ? "Tersalin"
-                        : "Salin koordinat"
-                    }
-                    type="button"
-                  >
-                    <i
-                      className={`bi ${coordinateCopyStatus === "copied" ? "bi-check2" : coordinateCopyStatus === "error" ? "bi-exclamation-triangle" : "bi-clipboard"}`}
-                    />
-                  </button>
-                </div>
+                <DetailTable
+                  label="Hasil konversi alamat"
+                  rows={[
+                    { label: "Alamat", value: analyze.data.address },
+                    {
+                      label: "Koordinat",
+                      value: (
+                        <span className="d-flex align-items-center justify-content-between gap-2">
+                          <span className="font-monospace user-select-all text-break">
+                            {coordinates}
+                          </span>
+                          <button
+                            aria-label="Salin koordinat"
+                            className="btn btn-sm btn-outline-primary flex-shrink-0"
+                            onClick={copyCoordinates}
+                            title={
+                              coordinateCopyStatus === "copied"
+                                ? "Tersalin"
+                                : "Salin koordinat"
+                            }
+                            type="button"
+                          >
+                            <i
+                              className={`bi ${coordinateCopyStatus === "copied" ? "bi-check2" : coordinateCopyStatus === "error" ? "bi-exclamation-triangle" : "bi-clipboard"}`}
+                            />
+                          </button>
+                        </span>
+                      ),
+                    },
+                  ]}
+                />
                 <a
                   className="btn btn-outline-primary mt-2 w-100"
                   href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinates)}`}
@@ -1691,45 +1696,41 @@ export function AddressAnalysisPage() {
                 <div className="detail-label">TERMINASI TERDEKAT</div>
                 {analyze.data.network ? (
                   <>
-                    <div className="nearest-network">
-                      <span className="network-icon">
-                        <i className="bi bi-bezier2" />
-                      </span>
-                      <div>
-                        <b>{analyze.data.network.name}</b>
-                        <small>
-                          {analyze.data.network.area} ·{" "}
-                          {analyze.data.network.cableType}
-                        </small>
-                      </div>
-                    </div>
+                    <DetailTable
+                      label="Informasi jaringan terdekat"
+                      rows={[
+                        {
+                          label: "Jaringan terdekat",
+                          value: analyze.data.network.name,
+                        },
+                        {
+                          label: "Area",
+                          value: analyze.data.network.area,
+                        },
+                        {
+                          label: "Jenis kabel",
+                          value: analyze.data.network.cableType,
+                        },
+                        {
+                          label: "Radius ditemukan",
+                          value: `${analyze.data.network.searchRadiusMeters ?? 1000} m`,
+                        },
+                        {
+                          label: "Jarak lurus",
+                          value: `${Math.round(analyze.data.network.straightDistanceMeters ?? 0)} m`,
+                        },
+                        {
+                          label: "Estimasi panjang kabel mengikuti jalan mobil",
+                          value:
+                            analyze.data.distanceMeters === null
+                              ? "Belum tersedia"
+                              : `${(analyze.data.distanceMeters / 1000).toFixed(2)} km`,
+                        },
+                      ]}
+                    />
                     <NetworkCapacityDetail
                       capacity={analyze.data.network.capacity}
                     />
-                    <small className="d-block mt-2">
-                      Ditemukan dalam radius{" "}
-                      {analyze.data.network.searchRadiusMeters ?? 1000} m ·
-                      Jarak lurus{" "}
-                      {Math.round(
-                        analyze.data.network.straightDistanceMeters ?? 0
-                      )}{" "}
-                      m
-                    </small>
-                    <div className="distance-card">
-                      <div>
-                        <small>
-                          Estimasi panjang kabel mengikuti jalan mobil
-                        </small>
-                        <strong>
-                          {analyze.data.distanceMeters === null
-                            ? "Belum tersedia"
-                            : `${(analyze.data.distanceMeters / 1000).toFixed(2)} km`}
-                        </strong>
-                      </div>
-                      <span className="distance-icon">
-                        <i className="bi bi-rulers" />
-                      </span>
-                    </div>
                   </>
                 ) : (
                   <div className="alert alert-secondary">

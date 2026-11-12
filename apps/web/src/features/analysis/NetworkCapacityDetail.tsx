@@ -1,3 +1,5 @@
+import { DetailTable } from "../../components/DetailTable";
+
 export type NetworkCapacity = {
   recommendation?: string;
   recommendationReason?: string;
@@ -9,7 +11,16 @@ export type NetworkCapacity = {
   usageVerified: boolean;
   verification?: { source?: string; note?: string; verifiedAt?: string } | null;
   fields: { label: string; value: unknown }[];
-  connectedCables: { id: string; name: string; totalCores: number; verified?: boolean; used?: number | null; booked?: number | null; available?: number | null; mappedCores?: number }[];
+  connectedCables: {
+    id: string;
+    name: string;
+    totalCores: number;
+    verified?: boolean;
+    used?: number | null;
+    booked?: number | null;
+    available?: number | null;
+    mappedCores?: number;
+  }[];
 };
 
 export function NetworkCapacityDetail({
@@ -49,20 +60,20 @@ export function NetworkCapacityDetail({
         </small>
       ) : (
         <>
-          <dl className="row small mb-0">
-            <dt className="col-7">Total core</dt>
-            <dd className="col-5">{capacity.totalCores}</dd>
-            <dt className="col-7">Terpakai tercatat</dt>
-            <dd className="col-5">{capacity.usedCores}</dd>
-            <dt className="col-7">Booked tercatat</dt>
-            <dd className="col-5">{capacity.bookedCores}</dd>
-            <dt className="col-7">Tersedia</dt>
-            <dd className="col-5">
-              {capacity.usageVerified
-                ? capacity.availableCores
-                : "Belum terverifikasi"}
-            </dd>
-          </dl>
+          <DetailTable
+            label={`Ringkasan kapasitas ${capacity.deviceType}`}
+            rows={[
+              { label: "Total core", value: capacity.totalCores },
+              { label: "Terpakai tercatat", value: capacity.usedCores },
+              { label: "Booked tercatat", value: capacity.bookedCores },
+              {
+                label: "Tersedia",
+                value: capacity.usageVerified
+                  ? capacity.availableCores
+                  : "Belum terverifikasi",
+              },
+            ]}
+          />
           {!capacity.usageVerified && (
             <small className="d-block text-warning">
               Jumlah core tersedia belum terverifikasi. Kapasitas total dari KMZ
@@ -89,16 +100,16 @@ export function NetworkCapacityDetail({
         </>
       )}
       {capacity.fields.length > 0 && (
-        <table className="table atlas-data-table atlas-data-table-compact table-sm small mt-2 mb-0">
-          <tbody>
-            {capacity.fields.map(({ label, value }) => (
-              <tr key={label}>
-                <th scope="row">{label}</th>
-                <td className="text-break">{String(value)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DetailTable
+          className="mt-2"
+          label={`Rincian kapasitas ${capacity.deviceType}`}
+          rows={capacity.fields.map(({ label, value }, index) => ({
+            key: `${label}-${index}`,
+            label,
+            value: String(value),
+            valueClassName: "text-break",
+          }))}
+        />
       )}
       <small className="d-block text-secondary mt-2">
         Port/splitter adalah kapasitas perangkat, berbeda dari jumlah core
@@ -117,11 +128,16 @@ export function NetworkCapacityDetail({
                 {cable.verified
                   ? ` · terpakai ${cable.used ?? 0} · dibooking ${cable.booked ?? 0} · tersedia ${cable.available ?? 0}`
                   : " · pemakaian core belum terverifikasi"}
-                {cable.mappedCores ? ` · ${cable.mappedCores} core dipetakan pada titik ini` : ""}
+                {cable.mappedCores
+                  ? ` · ${cable.mappedCores} core dipetakan pada titik ini`
+                  : ""}
               </li>
             ))}
           </ul>
-          <small className="d-block text-secondary">Jalankan ulang analisis setelah mengubah sambungan atau verifikasi core untuk memperbarui angka.</small>
+          <small className="d-block text-secondary">
+            Jalankan ulang analisis setelah mengubah sambungan atau verifikasi
+            core untuk memperbarui angka.
+          </small>
         </div>
       ) : (
         <small className="d-block text-secondary mt-2">

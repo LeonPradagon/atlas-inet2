@@ -371,6 +371,46 @@ body {
   min-width: 0;
   font-size: 12px;
 }
+.atlas-detail-table,
+.survey-map-popup dl {
+  width: 100%;
+  min-width: 0;
+  margin-bottom: 0;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--bs-body-color);
+}
+.survey-map-popup dl {
+  display: table;
+  margin-top: 10px;
+}
+.survey-map-popup dl > div {
+  display: table-row;
+}
+.table.atlas-detail-table > tbody > tr > :is(th, td),
+.survey-map-popup dl > div > :is(dt, dd) {
+  padding: 6px 8px;
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  border: 1px solid var(--bs-border-color);
+  color: var(--bs-body-color);
+  background: var(--bs-body-bg);
+}
+.table.atlas-detail-table > tbody > tr > th,
+.survey-map-popup dl dt {
+  width: 42%;
+  font-weight: 600;
+  background: var(--bs-tertiary-bg);
+}
+.survey-map-popup dl dt,
+.survey-map-popup dl dd {
+  display: table-cell;
+  margin: 0;
+}
 .atlas-data-table-compact thead th,
 .atlas-data-table-compact tbody :is(td, th) {
   padding: 7px 10px;
@@ -428,15 +468,6 @@ body {
 .cable-plan-facts-table {
   width: 100%;
   min-width: 0;
-}
-.cable-plan-facts-table .cable-plan-fact-label {
-  width: 42%;
-  font-weight: 500;
-  color: var(--bs-secondary-color);
-}
-.cable-plan-facts-table .cable-plan-fact-value {
-  overflow-wrap: anywhere;
-  text-align: right;
 }
 .cable-plan-spans {
   margin-top: 12px;

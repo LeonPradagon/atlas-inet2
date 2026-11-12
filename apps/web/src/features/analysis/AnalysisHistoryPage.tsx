@@ -11,6 +11,7 @@ import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DataTableShell } from "../../components/DataTable";
+import { DetailTable } from "../../components/DetailTable";
 import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
 import { api } from "../../lib/api";
@@ -1168,41 +1169,37 @@ export function AnalysisHistoryPage() {
               <div className="card-body">
                 {detail.data.analysisType === "ADDRESS" ? (
                   <>
-                    <div className="row g-3 mb-3">
-                      <div className="col-md-4">
-                        <small className="text-secondary d-block">Status</small>
-                        <b>{String(result.status ?? "—")}</b>
-                      </div>
-                      <div className="col-md-4">
-                        <small className="text-secondary d-block">
-                          Koordinat
-                        </small>
-                        <b className="font-monospace">
-                          {result.latitude != null && result.longitude != null
-                            ? `${result.latitude}, ${result.longitude}`
-                            : "—"}
-                        </b>
-                      </div>
-                      <div className="col-md-4">
-                        <small className="text-secondary d-block">
-                          Estimasi panjang kabel via jalan mobil
-                        </small>
-                        <b>
-                          {result.distanceMeters == null
-                            ? "—"
-                            : `${result.distanceMeters} m`}
-                        </b>
-                      </div>
-                      <div className="col-12">
-                        <small className="text-secondary d-block">
-                          Jaringan terdekat
-                        </small>
-                        <b>
-                          {(result.network as { name?: string } | null)?.name ??
-                            "—"}
-                        </b>
-                      </div>
-                    </div>
+                    <DetailTable
+                      className="mb-3"
+                      label="Ringkasan analisis alamat"
+                      rows={[
+                        {
+                          label: "Status",
+                          value: String(result.status ?? "—"),
+                        },
+                        {
+                          label: "Koordinat",
+                          value:
+                            result.latitude != null && result.longitude != null
+                              ? `${result.latitude}, ${result.longitude}`
+                              : "—",
+                          valueClassName: "font-monospace",
+                        },
+                        {
+                          label: "Estimasi panjang kabel via jalan mobil",
+                          value:
+                            result.distanceMeters == null
+                              ? "—"
+                              : `${result.distanceMeters} m`,
+                        },
+                        {
+                          label: "Jaringan terdekat",
+                          value:
+                            (result.network as { name?: string } | null)?.name ??
+                            "—",
+                        },
+                      ]}
+                    />
                     {relatedDrafts.length > 0 && (
                       <section className="mb-3">
                         <h4 className="h6">Draft FTTH tersimpan</h4>

@@ -1,4 +1,5 @@
 import { DataTable, type DataTableColumn } from "../../components/DataTable";
+import { DetailTable } from "../../components/DetailTable";
 import {
   cableName,
   describeCableEndpoints,
@@ -15,22 +16,6 @@ type CablePlanSpan = {
   distanceMeters: number;
   requiredCores: number;
 };
-
-const factColumns: readonly DataTableColumn<CablePlanFact>[] = [
-  {
-    key: "label",
-    header: "Informasi",
-    rowHeader: true,
-    className: "cable-plan-fact-label",
-    render: (row) => row.label,
-  },
-  {
-    key: "value",
-    header: "Rencana",
-    className: "cable-plan-fact-value",
-    render: (row) => row.value,
-  },
-];
 
 const spanColumns: readonly DataTableColumn<CablePlanSpan>[] = [
   {
@@ -98,15 +83,10 @@ export function CablePlanDetails({
             <h4 className="cable-plan-item-title">
               {label} <span>· {cable.type}</span>
             </h4>
-            <DataTable
-              columns={factColumns}
-              density="compact"
-              hover={false}
+            <DetailTable
+              className="cable-plan-facts-table"
               label={`Ringkasan ${label}`}
               rows={facts}
-              rowKey={(row) => row.label}
-              showHeader={false}
-              tableClassName="cable-plan-facts-table"
             />
           </section>
         );
@@ -128,7 +108,8 @@ export function CablePlanDetails({
 
       <small className="cable-plan-note">
         Kabel sumber: {describeSourceCable(plan)}. Rencana menggunakan satu core
-        masukan per ODP simulasi. {plan.sourceCable?.verified &&
+        masukan per ODP simulasi.{" "}
+        {plan.sourceCable?.verified &&
         plan.sourceCable.availableCount != null &&
         spans.length
           ? `Perkiraan sisa: ${Math.max(0, plan.sourceCable.availableCount - spans[0].requiredCores)} core${spans[0].requiredCores > plan.sourceCable.availableCount ? " (kapasitas tidak mencukupi)" : ""}. `
