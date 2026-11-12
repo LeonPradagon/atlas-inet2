@@ -15,6 +15,7 @@ import {
   type FilterSpecification,
   type GeoJSONSource,
   FullscreenControl,
+  type MapLayerMouseEvent,
   LngLatBounds,
   Map as MapLibreMap,
   Marker,
@@ -24,6 +25,7 @@ import {
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { DetailTable } from "../../components/DetailTable";
 import { PageHeader } from "../../components/PageHeader";
 import {
   api,
@@ -32,7 +34,10 @@ import {
   type NetworkAssetPage,
   networkQueryKeys,
 } from "../../lib/api";
-import type { TerminationPlan } from "../analysis/terminationPlan";
+import {
+  describeCableEndpoints,
+  type TerminationPlan,
+} from "../analysis/terminationPlan";
 import {
   addAtlasMapIcons,
   assetFeatures,
@@ -703,30 +708,53 @@ function geometryBounds(geometry: Geometry, bounds: LngLatBounds) {
     addBoundsCoordinates(bounds, geometry.coordinates);
   }
 }
-function nearestPointFeature(
+function pointCandidatesAtCursor(
   map: MapLibreMap,
-  point: {
-    x: number;
-    y: number;
-  }
+  point: { x: number; y: number }
 ) {
-  const nearby = map.queryRenderedFeatures([point.x, point.y], {
-    layers: ["network-point-hit", "network-icons"],
+  const features = map.queryRenderedFeatures([point.x, point.y], {
+    layers: ["network-icons"],
   });
-  const points = nearby.filter(
+  const points = features.filter(
     (
       feature
-    ): feature is (typeof nearby)[number] & {
+    ): feature is (typeof features)[number] & {
       geometry: Point;
     } => feature.geometry.type === "Point"
   );
-  return points.sort((a, b) => {
-    const distance = (feature: typeof a) => {
+  const uniquePoints = new Map<string, (typeof points)[number]>();
+  for (const feature of points) {
+    const id = String(feature.properties?.id ?? feature.id ?? "");
+    if (id && !uniquePoints.has(id)) {
+      uniquePoints.set(id, feature);
+    }
+  }
+  const sorted = [...uniquePoints.values()].sort((a, b) => {
+    const distance = (feature: (typeof points)[number]) => {
       const projected = map.project(feature.geometry.coordinates as Coordinate);
       return (projected.x - point.x) ** 2 + (projected.y - point.y) ** 2;
     };
     return distance(a) - distance(b);
-  })[0];
+  });
+  const closest = sorted[0];
+  if (!closest) {
+    return [];
+  }
+  const closestPoint = map.project(closest.geometry.coordinates as Coordinate);
+  const closestDistance = Math.hypot(
+    closestPoint.x - point.x,
+    closestPoint.y - point.y
+  );
+  // Keep the chooser focused on icons that actually overlap the click. The
+  // invisible 18px hit circles included many nearby assets at this map scale.
+  const overlapDistance = closestDistance + 6;
+  return sorted.filter((feature) => {
+    const projected = map.project(feature.geometry.coordinates as Coordinate);
+    return (
+      Math.hypot(projected.x - point.x, projected.y - point.y) <=
+      overlapDistance
+    );
+  });
 }
 function pointFeatureAtCursor(
   map: MapLibreMap,
@@ -975,28 +1003,91 @@ function VerificationStatus({ asset }: { asset: NetworkAsset }) {
     </small>
   );
 }
+type SurveyMapRecord = {
+  id: string;
+  address: string;
+  status: string;
+  findings?: Record<string, string> | null;
+  analysis: {
+    latitude?: number;
+    longitude?: number;
+    distanceMeters?: number | null;
+    network?: { name?: string } | null;
+    proposal?: {
+      kind: string;
+      cores: number | null;
+      latitude: number;
+      longitude: number;
+    };
+    routeGeometry?: Geometry | null;
+    terminationPlan?: TerminationPlan;
+  };
+};
+const surveyStatusLabels: Record<string, string> = {
+  WAITING: "Menunggu survei",
+  IN_PROGRESS: "Dalam survei",
+  REVIEW: "Menunggu verifikasi",
+  VERIFIED: "Terverifikasi",
+  REVISION: "Perlu revisi",
+};
+function formatMapCoordinate(latitude: number, longitude: number) {
+  return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+}
+function getSurveyPhotoLocation(survey: SurveyMapRecord) {
+  const latitude = Number(survey.findings?.imageLatitude);
+  const longitude = Number(survey.findings?.imageLongitude);
+  return survey.findings?.imageLatitude &&
+    survey.findings.imageLongitude &&
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    Math.abs(latitude) <= 90 &&
+    Math.abs(longitude) <= 180
+    ? { latitude, longitude }
+    : null;
+}
+function createSurveyMapPopup(
+  title: string,
+  facts: Array<[string, string | number | null | undefined]>
+) {
+  const content = document.createElement("div");
+  content.className = "survey-map-popup";
+  const heading = document.createElement("header");
+  heading.className = "map-asset-popup-header";
+  const titleElement = document.createElement("h3");
+  titleElement.textContent = title;
+  heading.append(titleElement);
+  content.append(heading);
+
+  const table = document.createElement("table");
+  table.className = "table atlas-detail-table map-asset-popup-table";
+  table.setAttribute("aria-label", `Detail ${title}`);
+  const body = document.createElement("tbody");
+  for (const [label, value] of facts) {
+    if (value == null || String(value).trim() === "") {
+      continue;
+    }
+    const row = document.createElement("tr");
+    const term = document.createElement("th");
+    term.scope = "row";
+    term.textContent = label;
+    const description = document.createElement("td");
+    description.textContent = String(value);
+    row.append(term, description);
+    body.append(row);
+  }
+  table.append(body);
+  content.append(table);
+  return content;
+}
+function isMapMarkerClickTarget(target: EventTarget | null) {
+  return target instanceof Element && target.closest(".maplibregl-marker") !== null;
+}
 export function MapPage() {
   const [savedMapSelection] = useState(readSavedMapSelection);
   const proposalSurveys = useQuery({
     queryKey: ["surveys"],
     queryFn: () =>
-      api<
-        {
-          id: string;
-          address: string;
-          status: string;
-          analysis: {
-            proposal?: {
-              kind: string;
-              cores: number | null;
-              latitude: number;
-              longitude: number;
-            };
-            routeGeometry?: Geometry | null;
-            terminationPlan?: TerminationPlan;
-          };
-        }[]
-      >("/surveys"),
+      api<SurveyMapRecord[]>("/surveys"),
   });
   const mapImportsQuery = useQuery({
     queryKey: ["network-map-imports"],
@@ -1275,11 +1366,23 @@ export function MapPage() {
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeDistance, setRouteDistance] = useState<number | null>(null);
   const [assetPopup, setAssetPopup] = useState<NetworkAsset | null>(null);
+  const [assetChoices, setAssetChoices] = useState<NetworkAsset[] | null>(null);
+  const [assetChoiceSearch, setAssetChoiceSearch] = useState("");
+  const visibleAssetChoices = assetChoices?.filter((asset) => {
+    const query = assetChoiceSearch.trim().toLocaleLowerCase("id-ID");
+    return (
+      !query ||
+      [asset.name, asset.area, assetIconCategory(asset)]
+        .join(" ")
+        .toLocaleLowerCase("id-ID")
+        .includes(query)
+    );
+  });
   const [popupAnchor, setPopupAnchor] = useState<Coordinate | null>(null);
   const [popupPosition, setPopupPosition] = useState({ left: 12, top: 54, maxWidth: 440, maxHeight: 300 });
   const popupElement = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!assetPopup) {
+    if (!assetPopup && !assetChoices?.length) {
       return;
     }
     const closeOnOutsidePointer = (event: PointerEvent) => {
@@ -1290,16 +1393,19 @@ export function MapPage() {
         return;
       }
       setAssetPopup(null);
+      setAssetChoices(null);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
     };
-  }, [assetPopup]);
+  }, [assetChoices, assetPopup]);
   useEffect(() => {
     const instance = map.current;
     const element = popupElement.current;
-    if (!(instance && element && assetPopup && popupAnchor)) {
+    if (
+      !(instance && element && (assetPopup || assetChoices?.length) && popupAnchor)
+    ) {
       return;
     }
     const position = () => {
@@ -1331,7 +1437,7 @@ export function MapPage() {
       instance.off("resize", position);
       observer.disconnect();
     };
-  }, [assetPopup, popupAnchor]);
+  }, [assetChoices, assetPopup, popupAnchor]);
   const [fileModal, setFileModal] = useState<"import" | "download" | null>(
     null
   );
@@ -2554,7 +2660,43 @@ export function MapPage() {
         instance.moveLayer("selected-ftth-boundary-line");
       }
       instance.on("click", (event) => {
+        if (isMapMarkerClickTarget(event.originalEvent.target)) {
+          return;
+        }
         if (modeRef.current !== "idle") {
+          return;
+        }
+        const pointAssets = pointCandidatesAtCursor(instance, event.point)
+          .map((feature) =>
+            knownAssetsRef.current.find(
+              (asset) => asset.id === String(feature.properties?.id ?? feature.id)
+            )
+          )
+          .filter(
+            (asset): asset is NetworkAsset => asset !== undefined
+          );
+        const uniquePointAssets = [
+          ...new Map(pointAssets.map((asset) => [asset.id, asset])).values(),
+        ];
+        if (uniquePointAssets.length) {
+          const anchor: Coordinate = [event.lngLat.lng, event.lngLat.lat];
+          // A rendered point is the intended target even when its KMZ record
+          // is classified as a cable. Keep the coincident line from taking
+          // over the cable-detail panel for this click.
+          setSelectedId("");
+          setAssetPage(1);
+          setSearch("");
+          setIsSegmentPickerOpen(false);
+          setAssetListTab("network");
+          setPopupAnchor(anchor);
+          if (uniquePointAssets.length > 1) {
+            setAssetPopup(null);
+            setAssetChoices(uniquePointAssets);
+            setAssetChoiceSearch("");
+          } else {
+            setAssetChoices(null);
+            setAssetPopup(uniquePointAssets[0]);
+          }
           return;
         }
         const features = instance.queryRenderedFeatures(event.point, {
@@ -2575,24 +2717,28 @@ export function MapPage() {
         const boundary = features.find(
           (item) => item.layer.id === "network-polygons"
         );
+        const pointFeature = pointFeatureAtCursor(instance, event.point);
         const feature =
+          pointFeature ??
           cable ??
-          pointFeatureAtCursor(instance, event.point) ??
           boundary ??
-          nearestPointFeature(instance, event.point) ??
           features[0];
         const id = String(feature?.properties?.id ?? "");
         if (id) {
           const clickedAsset = knownAssetsRef.current.find(
             (asset) => asset.id === id
           );
-          setSelectedId(id);
+          const isPointHit = feature?.geometry.type === "Point";
+          setSelectedId(isPointHit ? "" : id);
           const isCable =
-            clickedAsset?.assetType === "segment" ||
-            ["LineString", "MultiLineString"].includes(
-              String(feature?.properties?.geometryType)
-            );
-          if (isCable) {
+            !isPointHit &&
+            (clickedAsset?.assetType === "segment" ||
+              ["LineString", "MultiLineString"].includes(
+                String(feature?.properties?.geometryType)
+              ));
+          if (isPointHit) {
+            setAssetListTab("network");
+          } else if (isCable) {
             setAssetListTab("cables");
             setCableFamilyFilter("all");
             setCableStatusFilter("all");
@@ -2604,12 +2750,11 @@ export function MapPage() {
             setSearch("");
             setIsSegmentPickerOpen(false);
           }
-          if (clickedAsset && !isCable) {
-            setAssetListTab(
-              clickedAsset.assetType === "segment" ? "cables" : "network"
-            );
+          if (clickedAsset && !isCable && !isPointHit) {
+            setAssetListTab("network");
           }
           setPopupAnchor([event.lngLat.lng, event.lngLat.lat]);
+          setAssetChoices(null);
           setAssetPopup(clickedAsset ?? null);
         }
       });
@@ -2707,121 +2852,241 @@ export function MapPage() {
     if (!instance || !mapReady) {
       return;
     }
-    const surveys = (proposalSurveys.data ?? []).filter(
-      (survey) => survey.analysis.proposal
+    const completedSurveys = (proposalSurveys.data ?? []).filter(
+      (survey) => survey.status === "VERIFIED"
     );
-    const plans = (proposalSurveys.data ?? []).filter(
-      (survey) => survey.analysis.terminationPlan
-    );
-    const markers = surveys.map((survey) => {
-      const proposal = survey.analysis.proposal!;
-      const label = document.createElement("div");
-      label.style.cssText =
-        "width:22px;height:22px;border:3px dashed #e77a12;border-radius:50%;background:white;cursor:pointer";
-      label.setAttribute(
-        "aria-label",
-        `Usulan ${proposal.kind}, ${proposal.cores === null ? "core belum ditentukan" : `${proposal.cores} core`}`
-      );
-      const content = document.createElement("div");
-      content.textContent = `Rencana / belum menjadi aset · ${proposal.kind} · ${proposal.cores === null ? "core belum ditentukan" : `${proposal.cores} core`} · ${survey.address} · ${survey.status}`;
-      return new Marker({ element: label })
-        .setLngLat([proposal.longitude, proposal.latitude])
-        .setPopup(new Popup().setDOMContent(content))
+    const markers: Marker[] = [];
+    const addMarker = (
+      coordinates: Coordinate,
+      ariaLabel: string,
+      content: HTMLElement,
+      style = "width:22px;height:22px;border:3px dashed #e77a12;border-radius:50%;background:white;cursor:pointer"
+    ) => {
+      const element = document.createElement("div");
+      element.style.cssText = style;
+      element.setAttribute("aria-label", ariaLabel);
+      element.setAttribute("role", "button");
+      element.setAttribute("tabindex", "0");
+      const marker = new Marker({ element })
+        .setLngLat(coordinates)
+        .setPopup(
+          new Popup({ closeButton: true, maxWidth: "460px" }).setDOMContent(
+            content
+          )
+        )
         .addTo(instance);
-    });
-    for (const survey of plans) {
-      for (const point of survey.analysis.terminationPlan!.routeEvidence ??
-        []) {
+      markers.push(marker);
+    };
+    for (const survey of completedSurveys) {
+      const proposal = survey.analysis.proposal;
+      const photoLocation = getSurveyPhotoLocation(survey);
+      const analysisLocation = proposal
+        ? { latitude: proposal.latitude, longitude: proposal.longitude }
+        : Number.isFinite(survey.analysis.latitude) &&
+            Number.isFinite(survey.analysis.longitude)
+          ? {
+              latitude: survey.analysis.latitude!,
+              longitude: survey.analysis.longitude!,
+            }
+          : null;
+      const markerLocation = photoLocation ?? analysisLocation;
+      const findings = survey.findings ?? {};
+      const sharedFacts: Array<[
+        string,
+        string | number | null | undefined
+      ]> = [
+        ["Status survei", surveyStatusLabels[survey.status] ?? survey.status],
+        ["Alamat survei", survey.address],
+        ["Jaringan sumber", survey.analysis.network?.name],
+        ["Titik sambungan aktual", findings.connection],
+        ["Jalur kabel aktual", findings.route],
+        [
+          "Panjang aktual",
+          findings.length ? `${findings.length} m` : undefined,
+        ],
+        ["Kapasitas / core", findings.capacity],
+        ["Bukti survei", findings.evidence],
+      ];
+
+      if (markerLocation) {
+        const coordinate = formatMapCoordinate(
+          markerLocation.latitude,
+          markerLocation.longitude
+        );
+        const proposalCoordinate = proposal
+          ? formatMapCoordinate(proposal.latitude, proposal.longitude)
+          : undefined;
+        const isPhotoLocation = photoLocation !== null;
+        const coreCount = proposal?.cores;
+        addMarker(
+          [markerLocation.longitude, markerLocation.latitude],
+          `Survei terverifikasi · ${proposal?.kind ?? "titik lokasi"} · ${survey.address}`,
+          createSurveyMapPopup("Lokasi survei terverifikasi", [
+            ...sharedFacts,
+            [
+              isPhotoLocation ? "Koordinat foto GPS" : "Koordinat titik survei",
+              coordinate,
+            ],
+            proposalCoordinate && isPhotoLocation
+              ? ["Koordinat awal analisis", proposalCoordinate]
+              : ["Jenis usulan", proposal?.kind],
+            [
+              "Kapasitas usulan",
+              coreCount == null ? undefined : `${coreCount} core`,
+            ],
+            [
+              "Catatan lokasi",
+              isPhotoLocation
+                ? "Posisi diambil dari metadata GPS foto survei."
+                : "Posisi mengikuti titik analisis awal; koordinat foto GPS tidak tersedia.",
+            ],
+          ])
+        );
+      }
+
+      const plan = survey.analysis.terminationPlan;
+      if (!plan) {
+        continue;
+      }
+      for (const point of plan.routeEvidence ?? []) {
         if (point.id === survey.analysis.terminationPlan!.targetId) {
           continue;
         }
-        const label = document.createElement("div");
-        label.style.cssText =
-          "width:32px;height:32px;border:3px solid #00a6b2;border-radius:50%;background:transparent;cursor:pointer";
-        label.setAttribute(
-          "aria-label",
-          `Aset ${point.type} dekat jalur: ${point.name}`
-        );
-        const content = document.createElement("div");
-        content.textContent = `${point.name} · ${point.type} · ${Math.round(point.distanceToRouteMeters)} m dari jalur · ${point.recordedCables} relasi kabel tercatat. Sambungan ke rencana perlu survei.`;
-        markers.push(
-          new Marker({ element: label })
-            .setLngLat([point.longitude, point.latitude])
-            .setPopup(new Popup().setDOMContent(content))
-            .addTo(instance)
-        );
-      }
-      for (const point of survey.analysis.terminationPlan!.deviceCandidates ??
-        []) {
-        const label = document.createElement("div");
-        label.style.cssText =
-          "width:22px;height:22px;border:3px dashed #e77a12;border-radius:50%;background:white;cursor:pointer";
-        label.setAttribute("aria-label", `Opsi ${point.kind}`);
-        const content = document.createElement("div");
-        content.textContent = `Opsi ${point.kind} · ${point.reason}`;
-        markers.push(
-          new Marker({ element: label })
-            .setLngLat([point.longitude, point.latitude])
-            .setPopup(new Popup().setDOMContent(content))
-            .addTo(instance)
+        addMarker(
+          [point.longitude, point.latitude],
+          `Aset terdata ${point.type} · ${point.name}`,
+          createSurveyMapPopup("Aset terdata di dekat jalur", [
+            ["Nama aset", point.name],
+            ["Jenis aset", point.type],
+            [
+              "Koordinat aset",
+              formatMapCoordinate(point.latitude, point.longitude),
+            ],
+            ["Jarak dari jalur usulan", `${Math.round(point.distanceToRouteMeters)} m`],
+            ["Kabel tercatat", `${point.recordedCables} relasi`],
+            ...sharedFacts.slice(0, 2),
+            ["Catatan", "Kedekatan tidak memastikan sambungan fisik."],
+          ]),
+          "width:32px;height:32px;border:3px solid #00a6b2;border-radius:50%;background:transparent;cursor:pointer"
         );
       }
-      for (const point of survey.analysis.terminationPlan!
-        .connectionCandidates ?? []) {
-        const label = document.createElement("div");
-        label.style.cssText =
-          "width:22px;height:22px;border:3px dashed #e77a12;border-radius:50%;background:white;cursor:pointer";
-        label.setAttribute(
-          "aria-label",
-          `${point.recommendedKind ? "Opsi closure" : "Potensi sambungan"}: ${point.cableName}`
-        );
-        const content = document.createElement("div");
-        content.textContent = `Ujung ${point.cableName} dekat jalur. ${point.recommendedKind ? "Closure adalah opsi jika kabel ini disambungkan." : "Jenis terminasi belum ditentukan."} Kedekatan tidak memastikan sambungan diperlukan.`;
-        markers.push(
-          new Marker({ element: label })
-            .setLngLat([point.longitude, point.latitude])
-            .setPopup(new Popup().setDOMContent(content))
-            .addTo(instance)
+      for (const [index, point] of (plan.deviceCandidates ?? []).entries()) {
+        addMarker(
+          [point.longitude, point.latitude],
+          `${point.basis === "PLANNING" ? "Simulasi" : "Kandidat"} ${point.kind}`,
+          createSurveyMapPopup(
+            `${point.basis === "PLANNING" ? "Titik simulasi" : "Kandidat aset"} · ${point.kind}`,
+            [
+              ["Nomor titik", `${point.kind} ${String(index + 1).padStart(2, "0")}`],
+              ["Koordinat titik", formatMapCoordinate(point.latitude, point.longitude)],
+              ["Jarak dari jalur", point.distanceToEvidenceMeters == null ? undefined : `${Math.round(point.distanceToEvidenceMeters)} m`],
+              ["Dasar penempatan", point.reason],
+              ...sharedFacts.slice(0, 2),
+              ["Status", "Titik rencana, bukan aset aktif."],
+            ]
+          )
         );
       }
-      for (const point of survey.analysis.terminationPlan!.points) {
-        const label = document.createElement("div");
-        label.style.cssText =
-          "width:22px;height:22px;border:3px dashed #e77a12;border-radius:50%;background:white;cursor:pointer";
-        label.setAttribute(
-          "aria-label",
-          `Kandidat ${point.kind === "JOINT_CLOSURE" ? "closure" : point.kind} · perlu survei`
+      for (const point of plan.connectionCandidates ?? []) {
+        addMarker(
+          [point.longitude, point.latitude],
+          `Potensi sambungan · ${point.cableName}`,
+          createSurveyMapPopup("Potensi sambungan kabel", [
+            ["Kabel", point.cableName],
+            ["Jenis terminasi", point.recommendedKind ?? "Belum ditentukan"],
+            ["Koordinat titik", formatMapCoordinate(point.latitude, point.longitude)],
+            ["Jarak dari jalur", `${Math.round(point.distanceMeters)} m`],
+            ...sharedFacts.slice(0, 2),
+            ["Catatan", "Kedekatan belum memastikan sambungan diperlukan."],
+          ])
         );
-        const content = document.createElement("div");
-        content.textContent = `Kandidat ${point.kind === "JOINT_CLOSURE" ? "closure" : point.kind} · ${survey.address} · ${survey.status} · perlu survei, belum menjadi aset`;
-        markers.push(
-          new Marker({ element: label })
-            .setLngLat([point.longitude, point.latitude])
-            .setPopup(new Popup().setDOMContent(content))
-            .addTo(instance)
+      }
+      for (const point of plan.points) {
+        addMarker(
+          [point.longitude, point.latitude],
+          `Titik rencana ${point.kind}`,
+          createSurveyMapPopup("Titik rencana terminasi", [
+            ["Jenis titik", point.kind === "JOINT_CLOSURE" ? "Closure" : point.kind],
+            ["Koordinat titik", formatMapCoordinate(point.latitude, point.longitude)],
+            ["Kabel sumber", plan.sourceCable?.name],
+            ...sharedFacts.slice(0, 2),
+            ["Status titik", "Usulan survei terverifikasi; belum menjadi aset aktif."],
+          ])
         );
       }
     }
-    const features: Feature[] = [
-      ...surveys.flatMap((survey) =>
-        survey.analysis.routeGeometry && !survey.analysis.terminationPlan
-          ? [
-              {
-                type: "Feature" as const,
-                geometry: survey.analysis.routeGeometry,
-                properties: {},
-              },
-            ]
-          : []
-      ),
-      ...plans.flatMap((survey) =>
-        survey.analysis.terminationPlan!.cables.map((cable) => ({
+    const features: Feature[] = completedSurveys.flatMap((survey) => {
+      const plan = survey.analysis.terminationPlan;
+      const findings = survey.findings ?? {};
+      const photoLocation = getSurveyPhotoLocation(survey);
+      if (plan) {
+        const endpoints = describeCableEndpoints(
+          plan,
+          survey.analysis.network?.name
+        );
+        return plan.cables.map((cable, index) => ({
           type: "Feature" as const,
           geometry: cable.geometry,
-          properties: {},
-        }))
-      ),
-    ];
+          properties: {
+            surveyAddress: survey.address,
+            surveyStatus: surveyStatusLabels[survey.status] ?? survey.status,
+            networkName: survey.analysis.network?.name ?? "",
+            cableName: `Kabel ${String(index + 1).padStart(2, "0")}`,
+            cableType: cable.type,
+            capacity: cable.cores == null ? "Belum ditentukan" : `${cable.cores} core`,
+            requiredCores: plan.requirement?.requiredCores == null
+              ? "Belum ditentukan"
+              : `${plan.requirement.requiredCores} core`,
+            estimatedLength: `${Math.round(cable.distanceMeters)} m`,
+            sourceCable: plan.sourceCable?.name ?? "Belum ditentukan",
+            endpointFrom: endpoints.from,
+            endpointTo: endpoints.to,
+            photoLocation: photoLocation
+              ? formatMapCoordinate(photoLocation.latitude, photoLocation.longitude)
+              : "",
+            actualRoute: findings.route ?? "",
+            actualLength: findings.length ? `${findings.length} m` : "",
+            actualCapacity: findings.capacity ?? "",
+            evidence: findings.evidence ?? "",
+          },
+        }));
+      }
+      if (survey.analysis.routeGeometry) {
+        return [
+          {
+            type: "Feature" as const,
+            geometry: survey.analysis.routeGeometry,
+            properties: {
+              surveyAddress: survey.address,
+              surveyStatus: surveyStatusLabels[survey.status] ?? survey.status,
+              networkName: survey.analysis.network?.name ?? "",
+              cableName: "Rute hasil analisis",
+              cableType: survey.analysis.proposal?.kind ?? "Belum ditentukan",
+              capacity:
+                survey.analysis.proposal?.cores == null
+                  ? "Belum ditentukan"
+                  : `${survey.analysis.proposal.cores} core`,
+              requiredCores: "Belum ditentukan",
+              estimatedLength:
+                survey.analysis.distanceMeters == null
+                  ? "Belum ditentukan"
+                  : `${Math.round(survey.analysis.distanceMeters)} m`,
+              sourceCable: survey.analysis.network?.name ?? "Belum ditentukan",
+              endpointFrom: survey.analysis.network?.name ?? "Belum ditentukan",
+              endpointTo: "Lokasi survei",
+              photoLocation: photoLocation
+                ? formatMapCoordinate(photoLocation.latitude, photoLocation.longitude)
+                : "",
+              actualRoute: findings.route ?? "",
+              actualLength: findings.length ? `${findings.length} m` : "",
+              actualCapacity: findings.capacity ?? "",
+              evidence: findings.evidence ?? "",
+            },
+          },
+        ];
+      }
+      return [];
+    });
     if (instance.getSource("survey-proposal-routes")) {
       (instance.getSource("survey-proposal-routes") as GeoJSONSource).setData({
         type: "FeatureCollection",
@@ -2843,7 +3108,57 @@ export function MapPage() {
         },
       });
     }
+    const onPlannedRouteClick = (event: MapLayerMouseEvent) => {
+      if (isMapMarkerClickTarget(event.originalEvent.target)) {
+        return;
+      }
+      const properties = event.features?.[0]?.properties;
+      if (!properties) {
+        return;
+      }
+      new Popup({ closeButton: true, maxWidth: "460px" })
+        .setLngLat(event.lngLat)
+        .setDOMContent(
+          createSurveyMapPopup("Jalur usulan survei", [
+            ["Status survei", properties.surveyStatus],
+            ["Alamat survei", properties.surveyAddress],
+            ["Jaringan sumber", properties.networkName],
+            ["Nama ruas", properties.cableName],
+            ["Jenis kabel", properties.cableType],
+            ["Kapasitas", properties.capacity],
+            ["Core dibutuhkan", properties.requiredCores],
+            ["Perkiraan panjang", properties.estimatedLength],
+            ["Kabel sumber", properties.sourceCable],
+            ["Dari", properties.endpointFrom],
+            ["Ke", properties.endpointTo],
+            ["Koordinat foto GPS", properties.photoLocation],
+            ["Jalur aktual hasil survei", properties.actualRoute],
+            ["Panjang aktual", properties.actualLength],
+            ["Kapasitas / core aktual", properties.actualCapacity],
+            ["Bukti survei", properties.evidence],
+            [
+              "Lokasi pada jalur",
+              formatMapCoordinate(event.lngLat.lat, event.lngLat.lng),
+            ],
+            ["Status aset", "Masih berupa rencana, belum menjadi aset aktif."],
+          ])
+        )
+        .addTo(instance);
+    };
+    const onPlannedRouteEnter = () => {
+      instance.getCanvas().style.cursor = "pointer";
+    };
+    const onPlannedRouteLeave = () => {
+      instance.getCanvas().style.cursor = "";
+    };
+    instance.on("click", "survey-proposal-routes", onPlannedRouteClick);
+    instance.on("mouseenter", "survey-proposal-routes", onPlannedRouteEnter);
+    instance.on("mouseleave", "survey-proposal-routes", onPlannedRouteLeave);
     return () => {
+      instance.off("click", "survey-proposal-routes", onPlannedRouteClick);
+      instance.off("mouseenter", "survey-proposal-routes", onPlannedRouteEnter);
+      instance.off("mouseleave", "survey-proposal-routes", onPlannedRouteLeave);
+      instance.getCanvas().style.cursor = "";
       for (const marker of markers) {
         marker.remove();
       }
@@ -2867,6 +3182,7 @@ export function MapPage() {
     setAssetPage(1);
     setSelectedId("");
     setAssetPopup(null);
+    setAssetChoices(null);
   }, [mapReady, provinceCode, provinces]);
   useEffect(() => {
     if (
@@ -3088,6 +3404,7 @@ export function MapPage() {
     setSelectedImportIds(next);
     setSelectedId("");
     setAssetPopup(null);
+    setAssetChoices(null);
     setSelectedIconCategories(null);
     setAssetPage(1);
     if (isSelected) {
@@ -3138,6 +3455,7 @@ export function MapPage() {
     setActiveImportId(nextActiveId);
     setSelectedId("");
     setAssetPopup(null);
+    setAssetChoices(null);
     setSelectedIconCategories(null);
     setAssetPage(1);
     setFileError("");
@@ -3375,6 +3693,7 @@ export function MapPage() {
     setSearch("");
     setIsSegmentPickerOpen(false);
     setAssetPopup(null);
+    setAssetChoices(null);
     await focusGeometry(asset.id, asset.geometry);
   };
   return (
@@ -3779,13 +4098,16 @@ export function MapPage() {
           {Boolean(
             proposalSurveys.data?.some(
               (survey) =>
-                survey.analysis.proposal || survey.analysis.terminationPlan
+                survey.status === "VERIFIED" &&
+                (survey.analysis.proposal || survey.analysis.terminationPlan)
             )
           ) && (
             <div className="alert alert-warning small">
-              Lingkaran dan garis oranye putus-putus adalah usulan survei, belum
-              menjadi aset aktif. Lingkaran biru kehijauan menandai aset terdata
-              dekat jalur, bukan bukti sambungan.
+              Penanda oranye dan garis putus-putus menunjukkan usulan survei
+              terverifikasi yang belum menjadi aset aktif. Klik titik atau
+              jalur untuk melihat alamat, koordinat, dan hasil pemeriksaan.
+              Lingkaran biru kehijauan menandai aset terdata dekat jalur, bukan
+              bukti sambungan.
             </div>
           )}
           {((!mapReady && !mapError) ||
@@ -4002,8 +4324,77 @@ export function MapPage() {
               Peta tidak dapat dimuat. Periksa koneksi internet Anda.
             </div>
           )}
-          {assetPopup &&
+          {(assetPopup || assetChoices?.length) &&
             (() => {
+              if (assetChoices?.length) {
+                return (
+                  <div
+                    aria-label="Pilih aset pada titik ini"
+                    className="map-asset-popup map-asset-chooser"
+                    ref={popupElement}
+                    role="dialog"
+                    style={popupPosition}
+                  >
+                    <header className="map-asset-popup-header">
+                      <div>
+                        <h3>Pilih aset pada titik ini</h3>
+                        <small>
+                          {assetChoices.length} aset bertumpuk di area klik.
+                        </small>
+                      </div>
+                      <button
+                        aria-label="Tutup pilihan aset"
+                        className="btn-close"
+                        onClick={() => setAssetChoices(null)}
+                        type="button"
+                      />
+                    </header>
+                    <input
+                      aria-label="Cari aset di titik ini"
+                      className="form-control form-control-sm map-asset-choice-search"
+                      onChange={(event) => setAssetChoiceSearch(event.target.value)}
+                      placeholder="Cari nama atau jenis aset"
+                      type="search"
+                      value={assetChoiceSearch}
+                    />
+                    <div className="map-asset-choice-list">
+                      {visibleAssetChoices?.map((asset) => (
+                        <button
+                          aria-label={`Pilih ${assetIconCategory(asset)} · ${asset.name}`}
+                          className="map-asset-choice-option"
+                          key={asset.id}
+                          onClick={() => {
+                            setAssetChoices(null);
+                            setSelectedId("");
+                            setAssetPage(1);
+                            setSearch("");
+                            setIsSegmentPickerOpen(false);
+                            setAssetListTab("network");
+                            setAssetPopup(asset);
+                          }}
+                          type="button"
+                        >
+                          <span className="map-asset-choice-name">
+                            {asset.name}
+                          </span>
+                          <small>
+                            {assetIconCategory(asset)}
+                            {asset.area ? ` · ${asset.area}` : ""}
+                          </small>
+                        </button>
+                      ))}
+                      {!visibleAssetChoices?.length && (
+                        <p className="map-asset-choice-empty">
+                          Tidak ada aset yang cocok dengan pencarian.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              if (!assetPopup) {
+                return null;
+              }
               const coordinate = firstCoordinate(assetPopup.geometry);
               const popupLength =
                 assetPopup.id === selectedSegment?.id
@@ -4129,24 +4520,22 @@ export function MapPage() {
                     <button
                       aria-label="Tutup"
                       className="btn-close"
-                      onClick={() => setAssetPopup(null)}
+                      onClick={() => {
+                        setAssetPopup(null);
+                        setAssetChoices(null);
+                      }}
                       type="button"
                     />
                   </header>
-                  <table
-                    aria-label="Atribut detail aset"
-                    className="table atlas-data-table atlas-data-table-compact map-asset-popup-table"
-                  >
-                    <tbody>
-                      {fields.map(([label, value], index) => (
-                        // biome-ignore lint/suspicious/noArrayIndexKey: labels can repeat (fixed fields plus raw attributes) and the rows are stateless
-                        <tr key={index}>
-                          <th scope="row">{label}</th>
-                          <td>{String(value)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <DetailTable
+                    className="map-asset-popup-table"
+                    label="Atribut detail aset"
+                    rows={fields.map(([label, value], index) => ({
+                      key: String(index),
+                      label,
+                      value: String(value),
+                    }))}
+                  />
                   {assetPopup.source === "kml" &&
                     assetPopup.assetType === "segment" && (
                       <div className="border-top small mt-3 pt-2">
@@ -5303,8 +5692,9 @@ export function MapPage() {
                                             : undefined;
                                           const targetSegmentName = selectedPeer?.peerSegmentName ??
                                             (connection?.connectionType === "splice" &&
-                                              connection.peerSegmentId === end?.peerSegmentId
-                                              ? end?.peerSegmentName
+                                              end != null &&
+                                              connection.peerSegmentId === end.peerSegmentId
+                                              ? end.peerSegmentName
                                               : null);
                                           const target =
                                             connection?.connectionType === "splice"
@@ -5787,24 +6177,21 @@ export function MapPage() {
                       <div className="asset-info-group detail-meta-group">
                         <b>Jalur kabel</b>
                         {from || to ? (
-                          <div className="route-endpoints">
-                            <span>
-                              <small>Dari</small>
-                              <strong>
-                                {String(from ?? "Tidak dicantumkan di KMZ")}
-                              </strong>
-                            </span>
-                            <i
-                              aria-hidden="true"
-                              className="bi bi-arrow-right"
-                            />
-                            <span>
-                              <small>Ke</small>
-                              <strong>
-                                {String(to ?? "Tidak dicantumkan di KMZ")}
-                              </strong>
-                            </span>
-                          </div>
+                          <DetailTable
+                            label="Ujung jalur kabel"
+                            rows={[
+                              {
+                                label: "Dari",
+                                value: String(
+                                  from ?? "Tidak dicantumkan di KMZ"
+                                ),
+                              },
+                              {
+                                label: "Ke",
+                                value: String(to ?? "Tidak dicantumkan di KMZ"),
+                              },
+                            ]}
+                          />
                         ) : (
                           <small className="text-secondary d-block mt-1">
                             KMZ ini tidak mencantumkan field asal dan tujuan
@@ -5816,14 +6203,14 @@ export function MapPage() {
                             <summary>
                               Atribut kabel dari KMZ ({attributes.length})
                             </summary>
-                            <div className="import-detail-list mt-2">
-                              {attributes.map(([key, value]) => (
-                                <div key={key}>
-                                  <span>{key}</span>
-                                  <b>{String(value)}</b>
-                                </div>
-                              ))}
-                            </div>
+                            <DetailTable
+                              className="mt-2"
+                              label="Atribut kabel dari KMZ"
+                              rows={attributes.map(([key, value]) => ({
+                                label: key,
+                                value: String(value),
+                              }))}
+                            />
                           </details>
                         )}
                       </div>
@@ -5831,29 +6218,27 @@ export function MapPage() {
                   })()}
                   <div className="asset-info-group detail-meta-group">
                     <b>Spesifikasi kabel</b>
-                    <div className="detail-spec-grid">
-                      <div>
-                        <span>Standar legenda</span>
-                        <b>
-                          {selectedLegend?.category} ·{" "}
-                          {selectedLegend?.termination} · garis{" "}
-                          {selectedLegend?.cableLineWidth ?? "—"} px
-                        </b>
-                      </div>
-                      {[
-                        ["Tipe kabel", selectedSegment.cableType],
-                        ["Metode instalasi", selectedSegment.installation],
-                        [
-                          "Sisi jalan",
-                          `Sisi ${selectedSegment.side.toLowerCase()}`,
-                        ],
-                      ].map(([label, value]) => (
-                        <div key={label}>
-                          <span>{label}</span>
-                          <b>{value}</b>
-                        </div>
-                      ))}
-                    </div>
+                    <DetailTable
+                      label="Spesifikasi kabel"
+                      rows={[
+                        {
+                          label: "Standar legenda",
+                          value: `${selectedLegend?.category} · ${selectedLegend?.termination} · garis ${selectedLegend?.cableLineWidth ?? "—"} px`,
+                        },
+                        {
+                          label: "Tipe kabel",
+                          value: selectedSegment.cableType,
+                        },
+                        {
+                          label: "Metode instalasi",
+                          value: selectedSegment.installation,
+                        },
+                        {
+                          label: "Sisi jalan",
+                          value: `Sisi ${selectedSegment.side.toLowerCase()}`,
+                        },
+                      ]}
+                    />
                   </div>
                   {(selectedSegment.pole ||
                     selectedSegment.poleHeight ||
@@ -5865,23 +6250,20 @@ export function MapPage() {
                           ? "Informasi aset"
                           : "Data aset dari sumber impor"}
                       </b>
-                      <div className="detail-spec-grid">
-                        {(
-                          [
-                            ["Tiang", selectedSegment.pole],
-                            ["Tinggi tiang", selectedSegment.poleHeight],
-                            ["ODC", selectedSegment.odc],
-                            ["ODP", selectedSegment.odp],
-                          ] as const
-                        )
+                      <DetailTable
+                        label="Informasi aset kabel"
+                        rows={[
+                          ["Tiang", selectedSegment.pole],
+                          ["Tinggi tiang", selectedSegment.poleHeight],
+                          ["ODC", selectedSegment.odc],
+                          ["ODP", selectedSegment.odp],
+                        ]
                           .filter(([, value]) => value)
-                          .map(([label, value]) => (
-                            <div key={label}>
-                              <span>{label}</span>
-                              <b>{value}</b>
-                            </div>
-                          ))}
-                      </div>
+                          .map(([label, value]) => ({
+                            label: String(label),
+                            value: String(value),
+                          }))}
+                      />
                     </div>
                   )}
                 </div>
@@ -5990,61 +6372,60 @@ export function MapPage() {
                   tanpa perubahan.
                 </p>
                 <div className="detail-section-heading">Ringkasan aset</div>
-                <div className="asset-info mb-3">
-                  <div>
-                    <span>Jenis aset</span>
-                    <b>
-                      {(
+                <DetailTable
+                  className="mb-3"
+                  label="Ringkasan aset impor"
+                  rows={[
+                    {
+                      label: "Jenis aset",
+                      value: (
                         {
                           odc: "ODC",
                           odp: "ODP",
                           closure: "Closure",
                           tiang: "Tiang",
                         } as Record<string, string>
-                      )[networkAssetKind(selectedImported)] ?? "Aset jaringan"}
-                    </b>
-                  </div>
-                  <div>
-                    <span>Area</span>
-                    <b>{selectedImported.area || "Belum dicantumkan"}</b>
-                  </div>
-                  <div>
-                    <span>Sumber</span>
-                    <b>
-                      {selectedImported.source === "kml"
+                      )[networkAssetKind(selectedImported)] ?? "Aset jaringan",
+                    },
+                    {
+                      label: "Area",
+                      value: selectedImported.area || "Belum dicantumkan",
+                    },
+                    {
+                      label: "Sumber",
+                      value: selectedImported.source === "kml"
                         ? "KML/KMZ"
-                        : selectedImported.source}
-                    </b>
-                  </div>
-                  <div>
-                    <span>Standar legenda</span>
-                    <b>
-                      {selectedLegend?.category} · {selectedLegend?.termination}{" "}
-                      · ikon {selectedLegend?.size}× · label{" "}
-                      {selectedLegend?.labelSize}×
-                    </b>
-                  </div>
-                </div>
-                <div className="import-detail-list">
-                  {Object.entries(selectedImported.attributes ?? {})
-                    .filter(([key]) => key !== "__kmlStyle")
-                    .map(([key, value]) => (
-                      <div key={key}>
-                        <span>{key}</span>
-                        <b>{String(value)}</b>
-                      </div>
-                    ))}
-                  {(selectedImported.geometryType ||
-                    selectedImported.geometry?.type) && (
-                    <div>
-                      <span>Tipe geometri</span>
-                      <b>
-                        {selectedImported.geometryType ??
-                          selectedImported.geometry?.type}
-                      </b>
-                    </div>
-                  )}
-                </div>
+                        : selectedImported.source,
+                    },
+                    {
+                      label: "Standar legenda",
+                      value: `${selectedLegend?.category} · ${selectedLegend?.termination} · ikon ${selectedLegend?.size}× · label ${selectedLegend?.labelSize}×`,
+                    },
+                  ]}
+                />
+                <DetailTable
+                  label="Atribut aset impor"
+                  rows={[
+                    ...Object.entries(selectedImported.attributes ?? {})
+                      .filter(([key]) => key !== "__kmlStyle")
+                      .map(([key, value]) => ({
+                        label: key,
+                        value: String(value),
+                      })),
+                    ...((selectedImported.geometryType ||
+                    selectedImported.geometry?.type)
+                      ? [
+                          {
+                            label: "Tipe geometri",
+                            value: String(
+                              selectedImported.geometryType ??
+                                selectedImported.geometry?.type
+                            ),
+                          },
+                        ]
+                      : []),
+                  ]}
+                />
               </>
             ) : (
               <div className="asset-detail-empty">
