@@ -14,6 +14,7 @@ import JSZip from "jszip";
 import {
   type FilterSpecification,
   type GeoJSONSource,
+  FullscreenControl,
   LngLatBounds,
   Map as MapLibreMap,
   Marker,
@@ -1275,7 +1276,7 @@ export function MapPage() {
   const [routeDistance, setRouteDistance] = useState<number | null>(null);
   const [assetPopup, setAssetPopup] = useState<NetworkAsset | null>(null);
   const [popupAnchor, setPopupAnchor] = useState<Coordinate | null>(null);
-  const [popupPosition, setPopupPosition] = useState({ left: 12, top: 54 });
+  const [popupPosition, setPopupPosition] = useState({ left: 12, top: 54, maxWidth: 440, maxHeight: 300 });
   const popupElement = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!assetPopup) {
@@ -1311,11 +1312,13 @@ export function MapPage() {
           ? point.x + 18
           : point.x - width - 18;
       setPopupPosition({
-        left: Math.max(12, Math.min(left, container.clientWidth - width - 12)),
-        top: Math.max(
-          54,
+        left: container.offsetLeft + Math.max(12, Math.min(left, container.clientWidth - width - 12)),
+        top: container.offsetTop + Math.max(
+          12,
           Math.min(point.y - height / 2, container.clientHeight - height - 12)
         ),
+        maxWidth: Math.max(0, container.clientWidth - 24),
+        maxHeight: Math.max(0, container.clientHeight - 24),
       });
     };
     position();
@@ -2091,6 +2094,7 @@ export function MapPage() {
     const resizeObserver = new ResizeObserver(() => instance.resize());
     resizeObserver.observe(mapElement.current);
     instance.addControl(new NavigationControl(), "top-right");
+    instance.addControl(new FullscreenControl({ container: mapElement.current.parentElement ?? undefined }), "top-right");
     instance.on("error", (event) => {
       if (!("sourceId" in event && event.sourceId === "satellite-imagery")) {
         setMapError(true);
