@@ -1512,6 +1512,22 @@ export function MapPage() {
       ),
     [allNetworkFeatures]
   );
+  const cableLabelFeatures = useMemo(
+    () => lineCollection(allNetworkFeatures.flatMap((feature) => {
+      if (feature.properties.assetType !== "segment") return [];
+      const lines = feature.geometry.type === "LineString"
+        ? [feature.geometry.coordinates]
+        : feature.geometry.type === "MultiLineString" ? feature.geometry.coordinates : [];
+      const line = lines.reduce<Position[]>((longest, current) => current.length > longest.length ? current : longest, []);
+      if (line.length < 2) return [];
+      const index = Math.floor((line.length - 1) / 2);
+      const a = line[index];
+      const b = line[index + 1];
+      const coordinates = line.length % 2 ? a : [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      return [{ ...feature, geometry: { type: "Point" as const, coordinates } }];
+    })),
+    [allNetworkFeatures]
+  );
   const pointFeatures = useMemo(
     () =>
       lineCollection(
@@ -2239,6 +2255,7 @@ export function MapPage() {
         type: "geojson",
         data: shapeFeatures,
       });
+      instance.addSource("network-cable-labels", { type: "geojson", data: cableLabelFeatures });
       instance.addSource("network-points-data", {
         type: "geojson",
         data: pointFeatures,
@@ -2317,6 +2334,24 @@ export function MapPage() {
           "line-color": ["coalesce", ["get", "lineColor"], "#3454d1"],
           "line-width": ["coalesce", ["get", "lineWidth"], 4],
           "line-opacity": ["coalesce", ["get", "lineOpacity"], 0.9],
+        },
+      });
+      instance.addLayer({
+        id: "network-cable-labels",
+        type: "symbol",
+        source: "network-cable-labels",
+        layout: {
+          "text-field": ["to-string", ["coalesce", ["get", "sourceLabel"], ["get", "name"], ""]],
+          "text-font": ["Open Sans Semibold"],
+          "text-size": 12,
+          "text-allow-overlap": false,
+          "text-ignore-placement": false,
+          "text-padding": 3,
+        },
+        paint: {
+          "text-color": "#ffffff",
+          "text-halo-color": "#17233b",
+          "text-halo-width": 2,
         },
       });
       instance.addSource("selected-cable-highlight", {
@@ -3235,7 +3270,10 @@ export function MapPage() {
     (
       map.current?.getSource("network-points-data") as GeoJSONSource | undefined
     )?.setData(pointFeatures);
-  }, [shapeFeatures, pointFeatures]);
+    (
+      map.current?.getSource("network-cable-labels") as GeoJSONSource | undefined
+    )?.setData(cableLabelFeatures);
+  }, [shapeFeatures, pointFeatures, cableLabelFeatures]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: mapReady is the trigger: push a boundary set before the map finished loading
   useEffect(() => {
     (
