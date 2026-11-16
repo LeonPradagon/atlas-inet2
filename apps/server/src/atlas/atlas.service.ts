@@ -155,7 +155,8 @@ export class AtlasService {
     historyId: string,
     rowNumber: number,
     proposal?: unknown,
-    plan?: unknown
+    plan?: unknown,
+    routeId?: unknown
   ) {
     if (
       !(/^[0-9a-f-]{36}$/iu.test(historyId) && Number.isInteger(rowNumber)) ||
@@ -175,6 +176,20 @@ export class AtlasService {
       throw new BadRequestException({
         message: "Hasil analisis tidak tersedia atau sudah diajukan.",
       });
+    }
+    if (candidate.analysis?.inputMode === "connection") {
+      if (rowNumber !== 0 || !["A", "B"].includes(String(routeId)) || proposal !== undefined || plan !== undefined) {
+        throw new BadRequestException({ message: "Survei koneksi memerlukan routeId A/B tanpa geometri atau rencana klien." });
+      }
+      const route = candidate.analysis.routes?.find((r: { id: string }) => r.id === routeId);
+      if (!route || !route.terminationPlan || !route.legs?.some((l: { kind: string }) => l.kind === "existing")) throw new BadRequestException({ message: "Rute koneksi tersimpan tidak tersedia." });
+      const newLegs = route.legs.filter((l: { kind: string }) => l.kind === "new");
+      // A connection has two disconnected access cables. The reused span stays in route evidence,
+      // never in the plan consumed by asset publishing. No linear cables=points+1 rule applies here.
+      if (newLegs.length !== 2 || route.terminationPlan.cables?.length !== 2 || route.terminationPlan.points?.length !== 0 || route.terminationPlan.cables.some((c: { geometry: unknown }, i: number) => JSON.stringify(c.geometry) !== JSON.stringify(newLegs[i].geometry))) throw new BadRequestException({ message: "Rencana kabel akses tersimpan tidak valid." });
+      candidate.analysis = { ...candidate.analysis, selectedRouteId: routeId, routes: [route], network: { id: route.destination.id, name: route.destination.name }, terminationPlan: route.terminationPlan };
+    } else if (routeId !== undefined) {
+      throw new BadRequestException({ message: "routeId hanya berlaku untuk analisis koneksi." });
     }
     if (
       !(
@@ -333,7 +348,11 @@ export class AtlasService {
         `survey:${userId}`,
       ]);
       const { rows: duplicates } = await client.query(
-        `SELECT id FROM network_surveys WHERE requested_by=$1 AND ((history_id=$2 AND row_number=$3) OR (analysis->'network'->>'id'=$4 AND round((analysis->>'latitude')::numeric,6)=$5::numeric AND round((analysis->>'longitude')::numeric,6)=$6::numeric)) LIMIT 1`,
+        `SELECT id FROM network_surveys WHERE requested_by=$1 AND ((history_id=$2 AND row_number=$3) OR
+          (CASE WHEN $7::jsonb->>'inputMode'='connection' THEN
+            analysis->>'inputMode'='connection' AND analysis->'start'->>'longitude'=$7::jsonb->'start'->>'longitude' AND analysis->'start'->>'latitude'=$7::jsonb->'start'->>'latitude'
+            AND analysis->'end'->>'longitude'=$7::jsonb->'end'->>'longitude' AND analysis->'end'->>'latitude'=$7::jsonb->'end'->>'latitude'
+          ELSE COALESCE(analysis->>'inputMode','')<>'connection' AND analysis->'network'->>'id'=$4 AND round((analysis->>'latitude')::numeric,6)=$5::numeric AND round((analysis->>'longitude')::numeric,6)=$6::numeric END)) LIMIT 1`,
         [
           userId,
           historyId,
@@ -341,6 +360,7 @@ export class AtlasService {
           candidate.analysis.network?.id ?? null,
           candidate.analysis.latitude.toFixed(6),
           candidate.analysis.longitude.toFixed(6),
+          JSON.stringify(candidate.analysis),
         ]
       );
       if (duplicates.length) {
@@ -2862,7 +2882,21 @@ export class AtlasService {
     if (!points.length) {
       return { points: [], searchRadiusMeters: radius };
     }
-    const { rows: cables } = await this.db.query(
+    const { rows: cables } = await this.db.query<{
+      pointId: string;
+      id: string;
+      name: string;
+      totalCores: number;
+      recorded: boolean;
+      distanceMeters: number;
+      verified: boolean;
+      used: number;
+      booked: number;
+      usedNumbers: number[];
+      bookedNumbers: number[];
+      available: number[];
+      geometry: unknown;
+    }>(
       `SELECT p.id AS "pointId", c.id,c.name,c.total_cores AS "totalCores",
         (EXISTS(SELECT 1 FROM network_asset_relations r WHERE r.asset_id=p.id AND r.segment_id=c.id) OR EXISTS(SELECT 1 FROM network_core_mappings m JOIN network_cores mc ON mc.id IN (m.core_a_id,m.core_b_id) WHERE m.node_asset_id=p.id AND mc.asset_id=c.id)) AS recorded,
         ST_Distance(p.geometry::geography,c.geometry::geography) AS "distanceMeters",
@@ -3032,7 +3066,8 @@ export class AtlasService {
   async nearestNetwork(
     longitude: number,
     latitude: number,
-    allowExpand2km = false
+    allowExpand2km = false,
+    assetId?: string
   ) {
     for (const radius of allowExpand2km ? [500, 1000, 2000] : [500, 1000]) {
       const { rows } = await this.db.query<{
@@ -3060,9 +3095,10 @@ export class AtlasService {
         WHERE a.asset_type='asset' AND GeometryType(a.geometry)='POINT'
           AND lower(concat_ws(' ',a.name,a.attributes->>'folderPath',a.attributes->>'assetKind',a.attributes->>'Tipe Perangkat',a.attributes->>'tipe_perangkat')) ~ '(^|[^a-z0-9])(olt|otb|odc|odp|fat|closure|slack|coil|cs[-_ ]?[0-9]+c|slk[-_ ]?[0-9]+|spl[-_ ]?1[:_-][0-9]+)([^a-z0-9]|$)'
           AND COALESCE(a.attributes->>'source','') <> 'ftth-design'
+          AND ($4::text IS NULL OR a.id=$4)
           AND ST_DWithin(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography,$3)
         ORDER BY         ST_Distance(a.geometry::geography,ST_SetSRID(ST_MakePoint($1,$2),4326)::geography),a.id LIMIT 1`,
-        [longitude, latitude, radius]
+        [longitude, latitude, radius, assetId ?? null]
       );
       if (rows[0]) {
         const asset = rows[0];

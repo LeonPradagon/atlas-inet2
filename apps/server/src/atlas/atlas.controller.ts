@@ -28,6 +28,7 @@ import { AtlasService } from "./atlas.service";
 import { BulkAnalysisService } from "./bulk-analysis.service";
 import { analyzeCoordinates } from "./address-analysis";
 import type { CoreRequirement } from "./termination-plan";
+import { ConnectionService, type ConnectionInput, validateConnectionInput } from "./connection.service";
 
 function queryValues(query: Record<string, unknown>, key: string) {
   const value = query[key];
@@ -181,7 +182,8 @@ export class AtlasController {
     private readonly imports: NetworkImportService,
     @Inject(RoutingService) private readonly routing: RoutingService,
     @Inject(GeocodingService) private readonly geocoding: GeocodingService,
-    @Inject(BulkAnalysisService) private readonly bulk: BulkAnalysisService
+    @Inject(BulkAnalysisService) private readonly bulk: BulkAnalysisService,
+    @Inject(ConnectionService) private readonly connection?: ConnectionService
   ) {}
 
   @Get("dashboard")
@@ -629,6 +631,15 @@ export class AtlasController {
     return this.atlas.markNotificationRead(id, user.id);
   }
 
+  @Post("analysis/connection")
+  async analyzeConnection(@Req() req: IncomingMessage, @Body() body: ConnectionInput) {
+    const user = await this.auth.requireUser(req);
+    const input = validateConnectionInput(body);
+    const result = await this.connection!.analyze(input);
+    const historyId = await this.atlas.saveAnalysisHistory(user.id, "ADDRESS", result.address, { ...input, inputMode: "connection" }, result);
+    return { ...result, historyId };
+  }
+
   @Post("analysis/address")
   async analyzeAddress(
     @Req() req: IncomingMessage,
@@ -993,6 +1004,7 @@ export class AtlasController {
       rowNumber?: number;
       proposal?: unknown;
       plan?: unknown;
+      routeId?: unknown;
     }
   ) {
     const user = await this.auth.requireUser(req);
@@ -1001,7 +1013,8 @@ export class AtlasController {
       String(body.historyId ?? ""),
       Number(body.rowNumber ?? 0),
       body.proposal,
-      body.plan
+      body.plan,
+      body.routeId
     );
   }
 

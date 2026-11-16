@@ -40,3 +40,64 @@ Dari `apps/server`, jalankan `npm test`. Unit test geocoding dan impor jaringan 
 ### Pengujian transaksi
 
 Dari `apps/server`, jalankan `npm run test:integration:local`. Script membuat database PostGIS baru dengan nama acak berawalan `atlas_test_`, menjalankan skenario FIFO, konkurensi, rollback, relasi, laporan, dan akses HTTP ADMIN/PRESALES dengan sesi pengujian, lalu menutup koneksi dan menghapus database tersebut. Akun dan data aplikasi tidak dipakai sebagai data pengujian. Pengguna database perlu izin membuat database; pengujian ini tidak memvalidasi login Better Auth atau provider geocoding/routing.
+# Two-point network analysis
+
+Authenticated `POST /api/analysis/connection` (controller path `analysis/connection`):
+
+```json
+{
+  "start": { "longitude": 106.299322745, "latitude": -6.174154567, "label": "A" },
+  "end": { "longitude": 106.293075471, "latitude": -6.175394679, "label": "B" },
+  "allowExpand2km": false,
+  "coreRequirement": { "services": 1, "reserve": 0 }
+}
+```
+
+Coordinates are mandatory; existing frontend geocoding endpoints can resolve addresses first. Labels, expansion, and core requirement are optional. Invalid, non-finite, out-of-range, and equal coordinates return HTTP 400. Authentication runs before analysis.
+
+The standalone response includes `mode: "connection"`, `inputMode: "connection"`, `status`, `message`, `historyId`, `start`, `end`, `address`, `latitude`, `longitude`, `network`, `terminationPlan`, `terminalToleranceMeters: 20`, `searchRadiusMeters`, `selectionStrategy`, and `routes`.
+
+Each route has:
+
+```ts
+{
+  id: 'A' | 'B';
+  distanceMeters: number;
+  newCableMeters: number;
+  existingNetworkMeters: number;
+  unverifiedGapMeters: number;
+  source: { id: string; name: string; coordinate: [number, number] };
+  destination: { id: string; name: string; coordinate: [number, number] };
+  networkConfirmation: 'recorded' | 'survey_required';
+  capacityConfirmation: 'survey_required';
+  legs: {
+    kind: 'new' | 'existing'; name: string; segmentId?: string;
+    distanceMeters: number;
+    geometry: { type: 'LineString'; coordinates: [number, number][] };
+    confirmation: 'recorded' | 'survey_required';
+  }[];
+  terminalLinks: { name: string; terminalId?: string; gapMeters: number;
+    geometry: { type: 'LineString'; coordinates: [number, number][] };
+    confirmation: string; basis: 'termination_attachment_gap' }[];
+  roadSnapGaps: { name: string; gapMeters: number;
+    geometry: { type: 'LineString'; coordinates: [number, number][] };
+    confirmation: 'survey_required'; basis: 'road_snap_gap' }[];
+  terminationPlan: object;
+}
+```
+
+`distanceMeters = newCableMeters + existingNetworkMeters + unverifiedGapMeters`. Gap geometry is evidence for survey, not an existing cable or a planned new asset. New cable legs use road routing; snapped-road gaps are disclosed separately. No straight-line replacement is returned when access routing fails.
+
+Status is `PLANNING_CONNECTION` for geometric candidates, `RECORDED_CONNECTION` for recorded network continuity, `NO_CONFIRMED_NETWORK_CONNECTION` with no routes when no network path exists, or `ACCESS_ROUTING_UNAVAILABLE` with no routes when access routing fails. Capacity and new cable feasibility always require survey. Recorded allocation status alone never establishes connectivity. Shared termination proximity may form an unconfirmed interchange within 20 m; crossings elsewhere do not. Known different companies cannot be joined by proximity. Unknown ownership is explicitly unverified. Disconnected MultiLineString parts are excluded rather than bridged.
+
+The graph searches actual cable polylines, retains bends and midspan attachments, and checks continuous mapped core identities across splices. It considers up to twelve nearest-access terminal pairs, continuing after inaccessible access routes until two distinct routes are found. This bounded candidate selection is **not a globally optimal A-to-B route**. Alternative routes may use different access terminals. Consecutive pieces of one segment are merged; duplicate geometries are removed.
+
+History is saved as `ADDRESS`, input `inputMode: "connection"`. To submit a survey, use authenticated `POST /api/surveys`:
+
+```json
+{ "historyId": "<returned UUID>", "routeId": "A" }
+```
+
+`routeId` must select a persisted A/B route. Omit `plan` and `proposal`; connection surveys reject client geometry. `rowNumber` can be omitted or zero. The server selects the stored route and its plan, retaining both endpoints and selected route evidence. The plan contains only two disconnected new access cables and zero new points; reused segments are never included as new plan cables. The original single-address linear plan validator is unchanged. Duplicate checks distinguish both endpoints; a history row can be submitted only once.
+
+Verification: `npm run build` and `node --import tsx --test test/connection-routing.test.cjs`.

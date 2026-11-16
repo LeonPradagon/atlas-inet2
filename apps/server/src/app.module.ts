@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AtlasController } from "./atlas/atlas.controller";
 import { AtlasService } from "./atlas/atlas.service";
 import { BulkAnalysisService } from "./atlas/bulk-analysis.service";
+import { ConnectionService } from "./atlas/connection.service";
 import { AuthController } from "./auth/auth.controller";
 import { AuthService } from "./auth/auth.service";
 import { BookingController } from "./booking/booking.controller";
@@ -26,6 +27,7 @@ import { NetworkImportService } from "./network/network-import.service";
     BookingService,
     AtlasService,
     BulkAnalysisService,
+    ConnectionService,
     NetworkImportService,
     AuthService,
     RoutingService,
