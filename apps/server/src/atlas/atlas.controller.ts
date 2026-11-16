@@ -880,7 +880,7 @@ export class AtlasController {
   @Get("analysis/bulk/jobs/:id")
   async bulkJobProgress(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
-    return this.bulk.progress(user.id, id);
+    return this.bulk.progress(user.id, id, user.role === "ADMIN");
   }
 
   @Get("analysis/bulk/jobs/:id/rows")
@@ -899,14 +899,15 @@ export class AtlasController {
       Number(page) || 1,
       Number(pageSize) || 50,
       search ?? "",
-      status ?? ""
+      status ?? "",
+      user.role === "ADMIN"
     );
   }
 
   @Get("analysis/bulk/jobs/:id/map-points")
   async bulkJobMapPoints(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
-    return this.bulk.mapPoints(user.id, id);
+    return this.bulk.mapPoints(user.id, id, user.role === "ADMIN");
   }
 
   @Post("analysis/bulk/jobs/:id/rows/:row/expand")
@@ -967,7 +968,8 @@ export class AtlasController {
       user.id,
       type as "ADDRESS" | "BULK" | "FTTH_DESIGN" | undefined,
       parsedPage,
-      parsedPageSize
+      parsedPageSize,
+      user.role === "ADMIN"
     );
   }
 
@@ -1019,7 +1021,7 @@ export class AtlasController {
     @Param("id") id: string
   ) {
     const user = await this.auth.requireUser(req);
-    return this.atlas.getAnalysisHistory(user.id, id);
+    return this.atlas.getAnalysisHistory(user.id, id, user.role === "ADMIN");
   }
 
   @Delete("analysis/history/:id")

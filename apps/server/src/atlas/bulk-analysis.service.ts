@@ -115,7 +115,7 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
     }));
   }
 
-  async progress(userId: string, jobId: string) {
+  async progress(userId: string, jobId: string, admin = false) {
     const { rows } = await this.db.query(
       `SELECT j.id AS "jobId",j.history_id AS "historyId",j.file_name AS "fileName",j.status,
       j.total_rows AS total,j.processed_rows AS processed,j.succeeded_rows AS succeeded,j.failed_rows AS failed,
@@ -126,8 +126,8 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
           AND d.input->>'sourceAnalysisId'=j.history_id::text
           AND COALESCE(d.input->>'sourceRow','') ~ '^[1-9][0-9]*$'
         ORDER BY 1) AS "savedDraftRows"
-      FROM analysis_bulk_jobs j WHERE j.id=$1 AND j.user_id=$2`,
-      [jobId, userId]
+      FROM analysis_bulk_jobs j WHERE j.id=$1 AND ($3::boolean OR j.user_id=$2)`,
+      [jobId, userId, admin]
     );
     if (!rows[0]) {
       throw new NotFoundException({
@@ -143,9 +143,10 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
     page = 1,
     pageSize = 50,
     search = "",
-    status = ""
+    status = "",
+    admin = false
   ) {
-    await this.progress(userId, jobId);
+    await this.progress(userId, jobId, admin);
     const safePage = Math.max(1, Math.floor(page) || 1);
     const safeSize = Math.max(1, Math.min(100, Math.floor(pageSize) || 50));
     const { rows: items } = await this.db.query(
@@ -176,8 +177,8 @@ export class BulkAnalysisService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async mapPoints(userId: string, jobId: string) {
-    await this.progress(userId, jobId);
+  async mapPoints(userId: string, jobId: string, admin = false) {
+    await this.progress(userId, jobId, admin);
     const { rows } = await this.db.query(
       `SELECT row_number AS row,input->>'address' AS address,
       COALESCE(NULLIF(result->>'latitude','')::double precision,NULLIF(input->>'latitude','')::double precision) AS latitude,

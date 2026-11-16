@@ -1488,10 +1488,8 @@ export function MapPage() {
     return [...counts].sort(([a], [b]) => a.localeCompare(b, "id"));
   }, [mapAssetsQuery.data]);
   const activeIconCategories = useMemo(
-    () =>
-      selectedIconCategories ??
-      iconCategoryCounts.map(([category]) => category),
-    [selectedIconCategories, iconCategoryCounts]
+    () => selectedIconCategories ?? [],
+    [selectedIconCategories]
   );
   useEffect(() => {
     if (selectedIconCategories === null) {
@@ -2496,6 +2494,7 @@ export function MapPage() {
           "line-dasharray": [2, 1],
         },
       });
+      instance.moveLayer("network-cable-labels");
       instance.addSource("route-points", {
         type: "geojson",
         data: routePointFeatures,
@@ -3132,16 +3131,19 @@ export function MapPage() {
         type: "geojson",
         data: { type: "FeatureCollection", features },
       });
-      instance.addLayer({
-        id: "survey-proposal-routes",
-        type: "line",
-        source: "survey-proposal-routes",
-        paint: {
-          "line-color": "#e77a12",
-          "line-width": 3,
-          "line-dasharray": [2, 2],
+      instance.addLayer(
+        {
+          id: "survey-proposal-routes",
+          type: "line",
+          source: "survey-proposal-routes",
+          paint: {
+            "line-color": "#e77a12",
+            "line-width": 3,
+            "line-dasharray": [2, 2],
+          },
         },
-      });
+        "network-cable-labels"
+      );
     }
     const onPlannedRouteClick = (event: MapLayerMouseEvent) => {
       if (isMapMarkerClickTarget(event.originalEvent.target)) {

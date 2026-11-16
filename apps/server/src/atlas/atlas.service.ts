@@ -586,7 +586,8 @@ export class AtlasService {
     userId: string,
     type?: "ADDRESS" | "BULK" | "FTTH_DESIGN",
     page = 1,
-    pageSize = 25
+    pageSize = 25,
+    admin = false
   ) {
     const { rows } = await this.db.query(
       `WITH filtered AS (
@@ -597,7 +598,7 @@ export class AtlasService {
           h.created_at AS "createdAt",j.id AS "bulkJobId",j.status AS "jobStatus",j.processed_rows AS "processedRows",
           j.succeeded_rows AS "succeededRows",j.failed_rows AS "failedRows"
         FROM analysis_history h LEFT JOIN analysis_bulk_jobs j ON j.history_id=h.id
-        WHERE h.user_id=$1 AND ($2::text IS NULL OR h.analysis_type=$2)
+        WHERE ($5::boolean OR h.user_id=$1) AND ($2::text IS NULL OR h.analysis_type=$2)
           AND NOT (h.analysis_type='FTTH_DESIGN' AND EXISTS (
             SELECT 1 FROM analysis_history a
             WHERE a.user_id=h.user_id AND a.analysis_type IN ('ADDRESS','BULK')
@@ -618,7 +619,7 @@ export class AtlasService {
       )
       SELECT page_rows.*,total_rows.total FROM total_rows LEFT JOIN page_rows ON TRUE
       ORDER BY page_rows."createdAt" DESC NULLS LAST,page_rows.id DESC NULLS LAST`,
-      [userId, type ?? null, pageSize, (page - 1) * pageSize]
+      [userId, type ?? null, pageSize, (page - 1) * pageSize, admin]
     );
     return {
       items: rows.filter((row) => row.id),
@@ -627,28 +628,29 @@ export class AtlasService {
       total: rows[0]?.total ?? 0,
     };
   }
-  async getAnalysisHistory(userId: string, id: string) {
+  async getAnalysisHistory(userId: string, id: string, admin = false) {
     const { rows } = await this.db.query(
-      `SELECT h.id,h.analysis_type AS "analysisType",h.title,h.input,h.result,h.created_at AS "createdAt",
+      `SELECT h.id,h.user_id AS "ownerId",h.analysis_type AS "analysisType",h.title,h.input,h.result,h.created_at AS "createdAt",
       j.id AS "bulkJobId",j.status AS "jobStatus",j.total_rows AS "totalRows",j.processed_rows AS "processedRows",
       j.succeeded_rows AS "succeededRows",j.failed_rows AS "failedRows"
-      FROM analysis_history h LEFT JOIN analysis_bulk_jobs j ON j.history_id=h.id WHERE h.user_id=$1 AND h.id=$2`,
-      [userId, id]
+      FROM analysis_history h LEFT JOIN analysis_bulk_jobs j ON j.history_id=h.id WHERE ($3::boolean OR h.user_id=$1) AND h.id=$2`,
+      [userId, id, admin]
     );
     if (!rows[0]) {
       throw new NotFoundException({
         message: "Riwayat analisis tidak ditemukan.",
       });
     }
-    if (!["BULK", "ADDRESS"].includes(rows[0].analysisType)) {
-      return rows[0];
+    const { ownerId, ...history } = rows[0];
+    if (!["BULK", "ADDRESS"].includes(history.analysisType)) {
+      return history;
     }
     const { rows: drafts } = await this.db.query(
       `SELECT id,title,input,result,created_at AS "createdAt"
       FROM analysis_history WHERE user_id=$1 AND analysis_type='FTTH_DESIGN'
         AND (input->>'sourceAnalysisId'=$2 OR input->>'sourceAnalysisId' IS NULL)
       ORDER BY created_at DESC`,
-      [userId, id]
+      [ownerId, id]
     );
     const latitude = Number(rows[0].result?.latitude);
     const longitude = Number(rows[0].result?.longitude);
@@ -697,7 +699,7 @@ export class AtlasService {
         }
       );
     });
-    return { ...rows[0], relatedDrafts };
+    return { ...history, relatedDrafts };
   }
   async deleteAnalysisHistory(userId: string, id: string) {
     await this.db.transaction(async (client) => {
