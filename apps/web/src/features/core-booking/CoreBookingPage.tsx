@@ -210,7 +210,7 @@ export function CoreBookingPage() {
       picCustomer: String(form.get("picCustomer")),
       picCustomerEmail: String(form.get("picCustomerEmail")),
       picCustomerPhone: String(form.get("picCustomerPhone")),
-      segments: selectedSegments.map((segment) => ({ segmentId: segment.id, cores: segmentCores[segment.id] ?? 1 })),
+      segments: selectedSegments.map((segment) => ({ segmentId: segment.id, cores: segmentCores[segment.id] ?? 1, segmentFrom: String(form.get(`segmentFrom-${segment.id}`) ?? "").trim(), segmentTo: String(form.get(`segmentTo-${segment.id}`) ?? "").trim() })),
     });
   };
   return (
@@ -395,7 +395,7 @@ export function CoreBookingPage() {
                       </small>
                     </td>
                     <td>
-                      {booking.segments.map((segment) => <div key={segment.segmentId}><span className="cable-name">{segment.name}</span><small className="d-block text-muted">{segment.area} · {segment.cores} core</small></div>)}
+                      {booking.segments.map((segment) => <div key={segment.segmentId}><span className="cable-name">{segment.name}</span><small className="d-block text-muted">{segment.area} · {segment.cores} core</small>{segment.segmentFrom && segment.segmentTo && <small className="d-block text-muted">{segment.segmentFrom} → {segment.segmentTo}</small>}</div>)}
                       {booking.status === "Waiting List" && (
                         <small className="d-block text-warning">
                           Menunggu kapasitas tersedia
@@ -560,6 +560,10 @@ export function CoreBookingPage() {
                   <label className="form-label" htmlFor={`booking-cores-${segment.id}`}>Jumlah core · {segment.name}</label>
                   <input className="form-control" id={`booking-cores-${segment.id}`} max={segment.totalCores} min="1" onChange={(event) => setSegmentCores((current) => ({ ...current, [segment.id]: Number(event.target.value) }))} required type="number" value={segmentCores[segment.id] ?? 1} />
                   <small className="text-muted">{segment.idleCores} tersedia dari {segment.totalCores} core</small>
+                  <div className="row g-2 mt-1">
+                    <div className="col-sm-6"><label className="form-label" htmlFor={`booking-from-${segment.id}`}>Segmen dari</label><input className="form-control" id={`booking-from-${segment.id}`} maxLength={200} name={`segmentFrom-${segment.id}`} placeholder="Titik awal" required /></div>
+                    <div className="col-sm-6"><label className="form-label" htmlFor={`booking-to-${segment.id}`}>Segmen ke</label><input className="form-control" id={`booking-to-${segment.id}`} maxLength={200} name={`segmentTo-${segment.id}`} placeholder="Titik akhir" required /></div>
+                  </div>
                 </div>
               ))}
               <div className="row g-3">

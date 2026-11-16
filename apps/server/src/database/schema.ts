@@ -543,6 +543,8 @@ export const bookingSegments = pgTable("booking_segments", {
   bookingId: text("booking_id").notNull().references(() => bookings.id, { onDelete: "cascade" }),
   segmentId: text("segment_id").notNull().references(() => networkAssets.id),
   cores: integer().notNull(),
+  segmentFrom: text("segment_from").notNull().default(""),
+  segmentTo: text("segment_to").notNull().default(""),
 }, (table) => [
   primaryKey({ columns: [table.bookingId, table.segmentId] }),
   check("booking_segments_cores_check", sql`${table.cores} > 0`),

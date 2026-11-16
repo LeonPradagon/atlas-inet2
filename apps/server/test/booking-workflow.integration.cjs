@@ -48,10 +48,13 @@ async function main() {
     await q(`INSERT INTO network_assets(id,name,asset_type,source,total_cores,attributes) VALUES ('second','Second','segment','managed',2,'{}')`);
     await q(`INSERT INTO network_cores(asset_id,core_number,status) VALUES ('second',1,'Available'),('second',2,'Available')`);
     await q(`UPDATE network_cores SET status='Available' WHERE asset_id='segment'`);
-    const multiInput = { ...input, segments: [{ segmentId: 'segment', cores: 1 }, { segmentId: 'second', cores: 2 }] };
+    const multiInput = { ...input, segments: [{ segmentId: 'segment', cores: 1, segmentFrom: ' ODC A ', segmentTo: 'ODP B' }, { segmentId: 'second', cores: 2, segmentFrom: 'ODP B', segmentTo: 'Lokasi pelanggan' }] };
     const multi = await service.createBooking(multiInput, 'presales');
     assert.equal(multi.status, 'Pending Approval');
     assert.equal((await service.listBookings()).find((item) => item.id === multi.id).segments.length, 2);
+    const multiSegments = (await service.listBookings()).find((item) => item.id === multi.id).segments;
+    assert.deepEqual(multiSegments.map(({ segmentId, segmentFrom, segmentTo }) => ({ segmentId, segmentFrom, segmentTo })).sort((a, b) => a.segmentId.localeCompare(b.segmentId)), [{ segmentId: 'second', segmentFrom: 'ODP B', segmentTo: 'Lokasi pelanggan' }, { segmentId: 'segment', segmentFrom: 'ODC A', segmentTo: 'ODP B' }]);
+    await assert.rejects(() => service.createBooking({ ...input, segments: [{ segmentId: 'segment', cores: 1, segmentFrom: ' ', segmentTo: 'B' }] }, 'presales'));
     await service.approveBooking(multi.id, 'admin');
     assert.equal((await q('SELECT count(*)::int AS n FROM booking_cores WHERE booking_id=$1', [multi.id])).rows[0].n, 3);
     const queued = await service.createBooking(multiInput, 'presales');
@@ -72,7 +75,9 @@ async function main() {
     assert.equal((await q("SELECT count(*)::int AS n FROM network_cores WHERE asset_id IN ('segment','second') AND status='Available'")).rows[0].n, 4);
     const legacy = await service.createBooking(input, 'presales');
     await q('DELETE FROM booking_segments WHERE booking_id=$1', [legacy.id]);
-    assert.equal((await service.listBookings()).find((item) => item.id === legacy.id).segments.length, 1);
+    const legacySegments = (await service.listBookings()).find((item) => item.id === legacy.id).segments;
+    assert.equal(legacySegments.length, 1);
+    assert.equal(legacySegments[0].segmentFrom, '');
     assert.equal((await service.approveBooking(legacy.id, 'admin')).status, 'Booked');
     await service.releaseBooking(legacy.id, 'presales');
     console.log('PASS: one multi-segment request, waiting notification, approval, release and PO');

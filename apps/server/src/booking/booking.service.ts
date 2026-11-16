@@ -31,7 +31,7 @@ export type CreateBookingInput = {
   picPresales?: string;
   segmentId?: string;
   cores?: number;
-  segments?: { segmentId: string; cores: number }[];
+  segments?: { segmentId: string; cores: number; segmentFrom?: string; segmentTo?: string }[];
 };
 
 const usageVerified = sql<boolean>`(${or(
@@ -108,9 +108,9 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       .from(bookings)
       .innerJoin(networkAssets, eq(networkAssets.id, bookings.segmentId))
       .orderBy(desc(bookings.requestedAt), desc(bookings.id));
-    const segments = await this.db.orm.select({ bookingId: bookingSegments.bookingId, segmentId: bookingSegments.segmentId, cores: bookingSegments.cores, name: networkAssets.name, area: networkAssets.area })
+    const segments = await this.db.orm.select({ bookingId: bookingSegments.bookingId, segmentId: bookingSegments.segmentId, cores: bookingSegments.cores, segmentFrom: bookingSegments.segmentFrom, segmentTo: bookingSegments.segmentTo, name: networkAssets.name, area: networkAssets.area })
       .from(bookingSegments).innerJoin(networkAssets, eq(networkAssets.id, bookingSegments.segmentId));
-    return rows.map((row) => ({ ...row, segments: segments.filter((item) => item.bookingId === row.id).map(({ bookingId: _id, ...item }) => item).concat(segments.some((item) => item.bookingId === row.id) ? [] : [{ segmentId: row.segmentId, cores: row.cores, name: row.segmentName, area: row.area }]) }));
+    return rows.map((row) => ({ ...row, segments: segments.filter((item) => item.bookingId === row.id).map(({ bookingId: _id, ...item }) => item).concat(segments.some((item) => item.bookingId === row.id) ? [] : [{ segmentId: row.segmentId, cores: row.cores, segmentFrom: "", segmentTo: "", name: row.segmentName, area: row.area }]) }));
   }
 
   async getBookingDuration() {
@@ -149,7 +149,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       picCustomer = input.picCustomer?.trim(),
       picPresales = input.picPresales?.trim();
     const segments = input.segments ?? [{ segmentId: input.segmentId ?? "", cores: Number(input.cores) }];
-    if (!Array.isArray(segments) || !segments.length || segments.some((item) => !item || typeof item.segmentId !== "string" || !item.segmentId || !Number.isInteger(item.cores) || item.cores < 1) || new Set(segments.map((item) => item.segmentId)).size !== segments.length) {
+    if (!Array.isArray(segments) || !segments.length || segments.some((item) => !item || typeof item.segmentId !== "string" || !item.segmentId || !Number.isInteger(item.cores) || item.cores < 1 || (item.segmentFrom !== undefined && (typeof item.segmentFrom !== "string" || !item.segmentFrom.trim() || item.segmentFrom.length > 200)) || (item.segmentTo !== undefined && (typeof item.segmentTo !== "string" || !item.segmentTo.trim() || item.segmentTo.length > 200)) || (item.segmentFrom === undefined) !== (item.segmentTo === undefined)) || new Set(segments.map((item) => item.segmentId)).size !== segments.length) {
       throw new BadRequestException({ message: "Pilih segmen unik dengan jumlah core yang valid." });
     }
     const sorted = [...segments].sort((a, b) => a.segmentId.localeCompare(b.segmentId));
@@ -224,7 +224,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         segmentId,
         status,
       });
-      await tx.insert(bookingSegments).values(sorted.map((item) => ({ bookingId: id, ...item })));
+      await tx.insert(bookingSegments).values(sorted.map((item) => ({ bookingId: id, ...item, segmentFrom: item.segmentFrom?.trim() ?? "", segmentTo: item.segmentTo?.trim() ?? "" })));
       if (status === "Pending Approval") await notifyAdmins(
         client,
         "Persetujuan booking core diperlukan",

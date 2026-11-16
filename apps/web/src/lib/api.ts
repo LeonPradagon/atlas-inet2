@@ -89,7 +89,7 @@ export type Booking = {
   picPresales: string;
   requestedBy: string | null;
   segmentId: string;
-  segments: { segmentId: string; name: string; area: string; cores: number }[];
+  segments: { segmentId: string; name: string; area: string; cores: number; segmentFrom: string; segmentTo: string }[];
   cores: number;
   status:
     | "Pending Approval"
