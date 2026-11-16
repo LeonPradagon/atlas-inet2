@@ -15,6 +15,13 @@ type GraphHopperResponse = {
   }[];
 };
 
+type RoutedPath = {
+  distanceMeters: number;
+  durationSeconds: number;
+  geometry: { type: "LineString"; coordinates: Coordinate[] };
+  roadClasses: (string | null)[];
+};
+
 @Injectable()
 export class RoutingService {
   async status(): Promise<"ok" | "unavailable"> {
@@ -41,6 +48,14 @@ export class RoutingService {
     return this.route(coordinates, "car");
   }
 
+  async previewNetworkAlternatives(coordinates: Coordinate[]) {
+    return this.routePaths(
+      coordinates,
+      process.env.NETWORK_SHORTEST_ROUTING_PROFILE ?? "car_shortest",
+      true
+    );
+  }
+
   async previewFtth(coordinates: Coordinate[]) {
     const profiles = [
       ...new Set([
@@ -64,6 +79,21 @@ export class RoutingService {
   }
 
   private async route(coordinates: Coordinate[], profile: string) {
+    const [route] = await this.routePaths(coordinates, profile);
+    if (!route) {
+      throw new BadGatewayException({
+        message:
+          "GraphHopper tidak menemukan rute pada data jalan yang tersedia.",
+      });
+    }
+    return route;
+  }
+
+  private async routePaths(
+    coordinates: Coordinate[],
+    profile: string,
+    alternatives = false
+  ): Promise<RoutedPath[]> {
     const baseUrl = process.env.ROUTING_URL;
     if (!baseUrl) {
       throw new ServiceUnavailableException({
@@ -79,7 +109,11 @@ export class RoutingService {
     query.set("profile", profile);
     query.set("points_encoded", "false");
     query.append("details", "road_class");
-    if (profile === "bike" || profile === "foot") {
+    if (alternatives) {
+      query.set("algorithm", "alternative_route");
+      query.set("alternative_route.max_paths", "2");
+    }
+    if (alternatives || profile === "bike" || profile === "foot") {
       query.set("ch.disable", "true");
     }
     let response: Response;
@@ -107,30 +141,34 @@ export class RoutingService {
         message: "Respons GraphHopper tidak valid.",
       });
     }
-    const route = result.paths?.[0];
-    if (!route?.points?.coordinates?.length) {
+    const routes = (result.paths ?? []).filter(
+      (route) => route.points?.coordinates?.length
+    );
+    if (!routes.length) {
       throw new BadGatewayException({
         message:
           "Tidak ditemukan jalur jalan yang menghubungkan titik-titik tersebut. Pastikan semua titik berada di Pulau Jawa dan terhubung ke jalan pada data OSM.",
       });
     }
-    const roadClasses: (string | null)[] = Array(
-      Math.max(0, route.points.coordinates.length - 1)
-    ).fill(null);
-    for (const [from, to, roadClass] of route.details?.road_class ?? []) {
-      for (
-        let index = from;
-        index < to && index < roadClasses.length;
-        index++
-      ) {
-        roadClasses[index] = roadClass;
+    return routes.map((route) => {
+      const roadClasses: (string | null)[] = Array(
+        Math.max(0, route.points.coordinates.length - 1)
+      ).fill(null);
+      for (const [from, to, roadClass] of route.details?.road_class ?? []) {
+        for (
+          let index = from;
+          index < to && index < roadClasses.length;
+          index++
+        ) {
+          roadClasses[index] = roadClass;
+        }
       }
-    }
-    return {
-      distanceMeters: route.distance,
-      durationSeconds: route.time / 1000,
-      geometry: route.points,
-      roadClasses,
-    };
+      return {
+        distanceMeters: route.distance,
+        durationSeconds: route.time / 1000,
+        geometry: route.points,
+        roadClasses,
+      };
+    });
   }
 }
