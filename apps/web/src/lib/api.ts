@@ -84,12 +84,17 @@ export type Booking = {
   id: string;
   customer: string;
   picCustomer: string;
+  picCustomerEmail: string;
+  picCustomerPhone: string;
   picPresales: string;
+  requestedBy: string | null;
   segmentId: string;
+  segments: { segmentId: string; name: string; area: string; cores: number }[];
   cores: number;
   status:
     | "Pending Approval"
     | "Booked"
+    | "Used"
     | "Waiting List"
     | "Rejected"
     | "Released"

@@ -36,6 +36,20 @@
       "when": 1794387600000,
       "tag": "20261111090000_core_end_topology",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794804073676,
+      "tag": "20261116044113_worthless_serpent_society",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794814023695,
+      "tag": "20261116072703_smart_energizer",
+      "breakpoints": true
     }
   ]
 }

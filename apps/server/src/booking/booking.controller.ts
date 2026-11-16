@@ -37,7 +37,7 @@ export class BookingController {
     @Body() body: CreateBookingInput
   ) {
     const user = await this.auth.requireUser(req);
-    return this.booking.createBooking(body, user.id);
+    return this.booking.createBooking({ ...body, picPresales: user.name }, user.id);
   }
 
   @Post("bookings/:id/approve")
@@ -56,6 +56,18 @@ export class BookingController {
   async releaseBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
     return this.booking.releaseBooking(id, user.id);
+  }
+
+  @Post("bookings/:id/resubmit")
+  async resubmitBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
+    const user = await this.auth.requireUser(req);
+    return this.booking.resubmitBooking(id, user.id);
+  }
+
+  @Post("bookings/:id/po-issued")
+  async purchaseOrderIssued(@Req() req: IncomingMessage, @Param("id") id: string) {
+    const user = await this.auth.requireAdmin(req);
+    return this.booking.markPurchaseOrderIssued(id, user.id);
   }
 
   @Get("settings/booking-duration")

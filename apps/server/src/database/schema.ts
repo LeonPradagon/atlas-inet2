@@ -487,6 +487,8 @@ export const bookings = pgTable(
     expiresAt: timestamp("expires_at", { mode: "date", withTimezone: true }),
     id: text().primaryKey().notNull(),
     picCustomer: text("pic_customer").notNull(),
+    picCustomerEmail: text("pic_customer_email").notNull().default(""),
+    picCustomerPhone: text("pic_customer_phone").notNull().default(""),
     picPresales: text("pic_presales").notNull(),
     rejectedAt: timestamp("rejected_at", { mode: "date", withTimezone: true }),
     rejectedBy: text("rejected_by"),
@@ -532,10 +534,19 @@ export const bookings = pgTable(
     check("bookings_cores_check", sql`cores > 0`),
     check(
       "bookings_status_check",
-      sql`status = ANY (ARRAY['Pending Approval'::text, 'Booked'::text, 'Waiting List'::text, 'Rejected'::text, 'Released'::text, 'Expired'::text])`
+      sql`status = ANY (ARRAY['Pending Approval'::text, 'Booked'::text, 'Waiting List'::text, 'Rejected'::text, 'Released'::text, 'Expired'::text, 'Used'::text])`
     ),
   ]
 );
+
+export const bookingSegments = pgTable("booking_segments", {
+  bookingId: text("booking_id").notNull().references(() => bookings.id, { onDelete: "cascade" }),
+  segmentId: text("segment_id").notNull().references(() => networkAssets.id),
+  cores: integer().notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.bookingId, table.segmentId] }),
+  check("booking_segments_cores_check", sql`${table.cores} > 0`),
+]);
 
 export const indonesiaSubdistricts = pgTable(
   "indonesia_subdistricts",

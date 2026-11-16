@@ -2777,7 +2777,7 @@ export class AtlasService {
       count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
       count(c.id) FILTER (WHERE c.status='Available')::int AS "availableCores",
       count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
-      (SELECT count(*)::int FROM bookings b WHERE b.segment_id=a.id AND b.status='Waiting List') AS "waitingList",
+      (SELECT count(*)::int FROM bookings b WHERE b.status='Waiting List' AND (EXISTS (SELECT 1 FROM booking_segments bs WHERE bs.booking_id=b.id AND bs.segment_id=a.id) OR (b.segment_id=a.id AND NOT EXISTS (SELECT 1 FROM booking_segments bs WHERE bs.booking_id=b.id)))) AS "waitingList",
       a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('assetId',linked.id,'kind',r.kind,'name',linked.name,'poleHeight',linked.pole_height) ORDER BY r.kind,linked.name)
         FROM network_asset_relations r JOIN network_assets linked ON linked.id=r.asset_id WHERE r.segment_id=a.id),'[]'::jsonb) AS "relatedAssets"

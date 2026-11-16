@@ -17,6 +17,7 @@ import {
   appSettings,
   auditLogs,
   bookingCores,
+  bookingSegments,
   bookings,
   networkAssets,
   networkCores,
@@ -25,9 +26,12 @@ import {
 export type CreateBookingInput = {
   customer?: string;
   picCustomer?: string;
+  picCustomerEmail?: string;
+  picCustomerPhone?: string;
   picPresales?: string;
   segmentId?: string;
   cores?: number;
+  segments?: { segmentId: string; cores: number }[];
 };
 
 const usageVerified = sql<boolean>`(${or(
@@ -82,7 +86,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async listBookings() {
-    return this.db.orm
+    const rows = await this.db.orm
       .select({
         approvedAt: bookings.approvedAt,
         area: networkAssets.area,
@@ -91,7 +95,10 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         expiresAt: bookings.expiresAt,
         id: bookings.id,
         picCustomer: bookings.picCustomer,
+        picCustomerEmail: bookings.picCustomerEmail,
+        picCustomerPhone: bookings.picCustomerPhone,
         picPresales: bookings.picPresales,
+        requestedBy: bookings.requestedBy,
         rejectedAt: bookings.rejectedAt,
         requestedAt: bookings.requestedAt,
         segmentId: bookings.segmentId,
@@ -101,6 +108,9 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       .from(bookings)
       .innerJoin(networkAssets, eq(networkAssets.id, bookings.segmentId))
       .orderBy(desc(bookings.requestedAt), desc(bookings.id));
+    const segments = await this.db.orm.select({ bookingId: bookingSegments.bookingId, segmentId: bookingSegments.segmentId, cores: bookingSegments.cores, name: networkAssets.name, area: networkAssets.area })
+      .from(bookingSegments).innerJoin(networkAssets, eq(networkAssets.id, bookingSegments.segmentId));
+    return rows.map((row) => ({ ...row, segments: segments.filter((item) => item.bookingId === row.id).map(({ bookingId: _id, ...item }) => item).concat(segments.some((item) => item.bookingId === row.id) ? [] : [{ segmentId: row.segmentId, cores: row.cores, name: row.segmentName, area: row.area }]) }));
   }
 
   async getBookingDuration() {
@@ -138,8 +148,13 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
     const customer = input.customer?.trim(),
       picCustomer = input.picCustomer?.trim(),
       picPresales = input.picPresales?.trim();
-    const cores = Number(input.cores),
-      segmentId = input.segmentId;
+    const segments = input.segments ?? [{ segmentId: input.segmentId ?? "", cores: Number(input.cores) }];
+    if (!Array.isArray(segments) || !segments.length || segments.some((item) => !item || typeof item.segmentId !== "string" || !item.segmentId || !Number.isInteger(item.cores) || item.cores < 1) || new Set(segments.map((item) => item.segmentId)).size !== segments.length) {
+      throw new BadRequestException({ message: "Pilih segmen unik dengan jumlah core yang valid." });
+    }
+    const sorted = [...segments].sort((a, b) => a.segmentId.localeCompare(b.segmentId));
+    const segmentId = sorted[0].segmentId;
+    const cores = sorted.reduce((sum, item) => sum + item.cores, 0);
     if (
       !(
         customer &&
@@ -156,12 +171,15 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
     }
     return this.db.transaction(async (client) => {
       const tx = drizzle({ client });
+      await client.query('SELECT id FROM network_assets WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE', [sorted.map((item) => item.segmentId)]);
+      let insufficient = false;
+      for (const segment of sorted) {
       const assets = await tx
         .select({ totalCores: networkAssets.totalCores, usageVerified })
         .from(networkAssets)
         .where(
           and(
-            eq(networkAssets.id, segmentId),
+            eq(networkAssets.id, segment.segmentId),
             eq(networkAssets.assetType, "segment")
           )
         )
@@ -181,33 +199,43 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
             "Pemakaian core segmen belum terverifikasi. Minta ADMIN memverifikasi segmen pada halaman peta jaringan.",
         });
       }
-      if (cores > assets[0].totalCores) {
+      if (segment.cores > assets[0].totalCores) {
         throw new BadRequestException({
           message: "Jumlah booking melebihi kapasitas total segmen.",
         });
       }
+      const available = await tx.select({ id: networkCores.id }).from(networkCores)
+        .where(and(eq(networkCores.assetId, segment.segmentId), eq(networkCores.status, "Available")))
+        .limit(segment.cores);
+      if (available.length < segment.cores) insufficient = true;
+      }
+      const status = insufficient ? "Waiting List" : "Pending Approval";
       const id = `BKG-${randomUUID().toUpperCase()}`;
       await tx.insert(bookings).values({
         cores,
         customer,
         id,
         picCustomer,
+        picCustomerEmail: input.picCustomerEmail?.trim() ?? "",
+        picCustomerPhone: input.picCustomerPhone?.trim() ?? "",
         picPresales,
         requestedAt: sql`clock_timestamp()`,
         requestedBy: userId,
         segmentId,
-        status: "Pending Approval",
+        status,
       });
-      await notifyAdmins(
+      await tx.insert(bookingSegments).values(sorted.map((item) => ({ bookingId: id, ...item })));
+      if (status === "Pending Approval") await notifyAdmins(
         client,
         "Persetujuan booking core diperlukan",
-        `${customer} meminta ${cores} core pada segmen ${segmentId}.`,
+        `${customer} meminta ${cores} core pada ${sorted.length} segmen.`,
         id
       );
       await audit(client, userId, "BOOKING_CREATED", "BOOKING", id, {
         cores,
         segmentId,
-        status: "Pending Approval",
+        segments: sorted,
+        status,
       });
       return {
         cores,
@@ -216,7 +244,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         picCustomer,
         picPresales,
         segmentId,
-        status: "Pending Approval",
+        status,
       };
     });
   }
@@ -224,18 +252,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
   async approveBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
       const tx = drizzle({ client });
-      const targets = await tx
-        .select({ segmentId: bookings.segmentId })
-        .from(bookings)
-        .where(eq(bookings.id, id));
-      if (!targets.length) {
-        throw new NotFoundException({ message: "Booking tidak ditemukan." });
-      }
-      await tx
-        .select({ id: networkAssets.id })
-        .from(networkAssets)
-        .where(eq(networkAssets.id, targets[0].segmentId))
-        .for("update");
+      const segments = await lockBookingSegments(client, id);
       const [booking] = await tx
         .select()
         .from(bookings)
@@ -247,23 +264,29 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
             "Hanya booking yang menunggu persetujuan yang dapat disetujui.",
         });
       }
+      const available: number[] = [];
+      let enough = true;
+      for (const segment of segments) {
+        const rows = await tx.select({ id: networkCores.id }).from(networkCores)
+          .where(and(eq(networkCores.assetId, segment.segmentId), eq(networkCores.status, "Available")))
+          .orderBy(networkCores.coreNumber).limit(segment.cores).for("update");
+        if (rows.length < segment.cores) enough = false;
+        available.push(...rows.map((row) => row.id));
+      }
+      const status = enough ? "Booked" : "Waiting List";
+      if (status === "Booked") await assignCores(client, id, available);
+      const [setting] = await tx.select({ value: appSettings.value }).from(appSettings)
+        .where(eq(appSettings.key, "booking_duration_days"));
       await tx
         .update(bookings)
         .set({
           approvedAt: sql`clock_timestamp()`,
           approvedBy: userId,
-          status: "Waiting List",
+          status,
+          expiresAt: status === "Booked" ? sql`now()+(${Number(setting?.value ?? 30)}||' days')::interval` : null,
         })
         .where(eq(bookings.id, id));
-      const allocatedBookingIds = await allocateWaiting(
-        client,
-        booking.segmentId,
-        userId
-      );
-      const [{ status }] = await tx
-        .select({ status: bookings.status })
-        .from(bookings)
-        .where(eq(bookings.id, id));
+      const allocatedBookingIds = status === "Booked" ? [id] : [];
       await audit(client, userId, "BOOKING_APPROVED", "BOOKING", id, {
         allocatedBookingIds,
         cores: booking.cores,
@@ -273,10 +296,10 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       const message =
         status === "Booked"
           ? `Booking ${id} disetujui dan ${booking.cores} core telah dialokasikan.`
-          : `Booking ${id} disetujui dan masuk waiting list karena kapasitas belum mencukupi.`;
+          : `Kapasitas booking ${id} tidak lagi mencukupi. Ajukan ulang setelah tersedia.`;
       await notifyPresales(
         client,
-        "Booking core disetujui",
+        status === "Booked" ? "Booking core disetujui" : "Booking masuk waiting list",
         message,
         booking.requestedBy,
         id
@@ -288,18 +311,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
   async rejectBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
       const tx = drizzle({ client });
-      const targets = await tx
-        .select({ segmentId: bookings.segmentId })
-        .from(bookings)
-        .where(eq(bookings.id, id));
-      if (!targets.length) {
-        throw new NotFoundException({ message: "Booking tidak ditemukan." });
-      }
-      await tx
-        .select({ id: networkAssets.id })
-        .from(networkAssets)
-        .where(eq(networkAssets.id, targets[0].segmentId))
-        .for("update");
+      const segments = await lockBookingSegments(client, id);
       const [booking] = await tx
         .select()
         .from(bookings)
@@ -334,21 +346,49 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  async resubmitBooking(id: string, userId: string) {
+    return this.db.transaction(async (client) => {
+      const tx = drizzle({ client });
+      const [target] = await tx.select().from(bookings).where(eq(bookings.id, id));
+      if (!target || target.requestedBy !== userId) throw new NotFoundException({ message: "Booking tidak ditemukan." });
+      const segments = await lockBookingSegments(client, id);
+      const [booking] = await tx.select().from(bookings).where(eq(bookings.id, id)).for("update");
+      if (booking.status !== "Waiting List") throw new ConflictException({ message: "Hanya waiting list yang dapat diajukan ulang." });
+      for (const segment of segments) {
+        const available = await tx.select({ id: networkCores.id }).from(networkCores)
+          .where(and(eq(networkCores.assetId, segment.segmentId), eq(networkCores.status, "Available"))).limit(segment.cores);
+        if (available.length < segment.cores) throw new ConflictException({ message: "Core tersedia belum mencukupi di semua segmen." });
+      }
+      await tx.update(bookings).set({ status: "Pending Approval", requestedAt: sql`clock_timestamp()`, approvedAt: null, approvedBy: null }).where(eq(bookings.id, id));
+      await notifyAdmins(client, "Persetujuan booking core diperlukan", `${booking.customer} mengajukan ulang booking ${id}.`, id);
+      await audit(client, userId, "BOOKING_RESUBMITTED", "BOOKING", id, { segmentId: booking.segmentId });
+      return { id, status: "Pending Approval" };
+    });
+  }
+
+  async markPurchaseOrderIssued(id: string, userId: string) {
+    return this.db.transaction(async (client) => {
+      const tx = drizzle({ client });
+      const [target] = await tx.select({ segmentId: bookings.segmentId }).from(bookings).where(eq(bookings.id, id));
+      if (!target) throw new NotFoundException({ message: "Booking tidak ditemukan." });
+      const segments = await lockBookingSegments(client, id);
+      const [booking] = await tx.select().from(bookings).where(eq(bookings.id, id)).for("update");
+      if (booking.status !== "Booked") throw new ConflictException({ message: "Hanya booking aktif yang dapat ditandai PO terbit." });
+      const cores = await tx.select({ id: networkCores.id, status: networkCores.status, segmentId: networkCores.assetId }).from(networkCores)
+        .innerJoin(bookingCores, eq(bookingCores.coreId, networkCores.id)).where(eq(bookingCores.bookingId, id)).for("update");
+      if (cores.length !== booking.cores || cores.some((core) => core.status !== "Booked") || segments.some((segment) => cores.filter((core) => core.segmentId === segment.segmentId).length !== segment.cores)) throw new ConflictException({ message: "Alokasi core tidak sesuai; periksa data booking." });
+      await tx.update(networkCores).set({ status: "Used" }).where(inArray(networkCores.id, cores.map((core) => core.id)));
+      await tx.update(bookings).set({ status: "Used", expiresAt: null }).where(eq(bookings.id, id));
+      await audit(client, userId, "BOOKING_PO_ISSUED", "BOOKING", id, { cores: booking.cores, segmentId: booking.segmentId });
+      await notifyPresales(client, "PO terbit", `PO booking ${id} terbit dan core ditandai terpakai.`, booking.requestedBy, id);
+      return { id, status: "Used" };
+    });
+  }
+
   async releaseBooking(id: string, userId: string) {
     return this.db.transaction(async (client) => {
       const tx = drizzle({ client });
-      const targets = await tx
-        .select({ segmentId: bookings.segmentId })
-        .from(bookings)
-        .where(eq(bookings.id, id));
-      if (!targets.length) {
-        throw new NotFoundException({ message: "Booking tidak ditemukan." });
-      }
-      await tx
-        .select({ id: networkAssets.id })
-        .from(networkAssets)
-        .where(eq(networkAssets.id, targets[0].segmentId))
-        .for("update");
+      const segments = await lockBookingSegments(client, id);
       const [booking] = await tx
         .select()
         .from(bookings)
@@ -376,11 +416,9 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         .update(bookings)
         .set({ releasedAt: sql`now()`, status: "Released" })
         .where(eq(bookings.id, id));
-      const allocatedBookingIds = await allocateWaiting(
-        client,
-        booking.segmentId,
-        userId
-      );
+      const allocatedBookingIds: string[] = [];
+      const notified = new Set<string>();
+      for (const segment of segments) await allocateWaiting(client, segment.segmentId, userId, notified);
       await audit(client, userId, "BOOKING_RELEASED", "BOOKING", id, {
         allocatedBookingIds,
         cores: booking.cores,
@@ -389,7 +427,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       await notifyPresales(
         client,
         "Booking core dilepas",
-        `${booking.customer}: ${booking.cores} core dilepas. ${allocatedBookingIds.length} permintaan waiting list dialokasikan.`,
+        `${booking.customer}: ${booking.cores} core dilepas. Pemilik waiting list yang memenuhi kapasitas akan diberi notifikasi.`,
         booking.requestedBy ?? userId,
         id
       );
@@ -410,14 +448,10 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       )
       .orderBy(bookings.expiresAt)
       .limit(50);
-    for (const { id, segmentId } of rows) {
+    for (const { id } of rows) {
       await this.db.transaction(async (client) => {
         const tx = drizzle({ client });
-        await tx
-          .select({ id: networkAssets.id })
-          .from(networkAssets)
-          .where(eq(networkAssets.id, segmentId))
-          .for("update");
+        const segments = await lockBookingSegments(client, id);
         const locked = await tx
           .select()
           .from(bookings)
@@ -457,10 +491,9 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
           booking.requestedBy,
           id
         );
-        const allocatedBookingIds = await allocateWaiting(
-          client,
-          booking.segmentId
-        );
+        const allocatedBookingIds: string[] = [];
+        const notified = new Set<string>();
+        for (const segment of segments) await allocateWaiting(client, segment.segmentId, null, notified);
         await audit(client, null, "BOOKING_EXPIRED", "BOOKING", id, {
           allocatedBookingIds,
           cores: booking.cores,
@@ -471,79 +504,39 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
   }
 }
 
-export async function allocateWaiting(
-  client: PoolClient,
-  segmentId: string,
-  actorId: string | null = null
-) {
-  const tx = drizzle({ client });
-  const queue = await tx
-    .select()
-    .from(bookings)
-    .where(
-      and(
-        eq(bookings.segmentId, segmentId),
-        eq(bookings.status, "Waiting List")
-      )
-    )
-    .orderBy(
-      sql`COALESCE(${bookings.approvedAt},${bookings.requestedAt})`,
-      bookings.requestedAt,
-      bookings.id
-    )
-    .for("update");
-  const settings = await tx
-    .select({ value: appSettings.value })
-    .from(appSettings)
-    .where(eq(appSettings.key, "booking_duration_days"));
-  const days = Number(settings[0]?.value ?? 30);
-  const allocated: string[] = [];
-  for (const booking of queue) {
-    const available = await tx
-      .select({ id: networkCores.id })
-      .from(networkCores)
-      .where(
-        and(
-          eq(networkCores.assetId, segmentId),
-          eq(networkCores.status, "Available")
-        )
-      )
-      .orderBy(networkCores.coreNumber)
-      .limit(booking.cores)
-      .for("update");
-    if (available.length !== booking.cores) {
-      break;
-    }
-    await assignCores(
-      client,
-      booking.id,
-      available.map((row) => row.id)
+async function lockBookingSegments(client: PoolClient, id: string) {
+  const { rows } = await client.query<{ segmentId: string; cores: number }>(
+    `SELECT segment_id AS "segmentId", cores FROM booking_segments WHERE booking_id=$1
+     UNION ALL SELECT segment_id, cores FROM bookings WHERE id=$1 AND NOT EXISTS (SELECT 1 FROM booking_segments WHERE booking_id=$1)
+     ORDER BY "segmentId"`, [id]);
+  if (!rows.length) throw new NotFoundException({ message: "Booking tidak ditemukan." });
+  await client.query('SELECT id FROM network_assets WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE', [rows.map((row) => row.segmentId)]);
+  return rows;
+}
+
+export async function allocateWaiting(client: PoolClient, segmentId: string, _actorId: string | null = null, notified = new Set<string>()) {
+  // Callers may already hold a single segment lock; do not lock waiting bookings here.
+  const { rows } = await client.query<{ id: string; customer: string; requestedBy: string }>(`
+    SELECT b.id,b.customer,b.requested_by AS "requestedBy"
+    FROM bookings b
+    WHERE b.status='Waiting List' AND b.requested_by IS NOT NULL
+      AND (EXISTS (SELECT 1 FROM booking_segments s WHERE s.booking_id=b.id AND s.segment_id=$1)
+           OR (b.segment_id=$1 AND NOT EXISTS (SELECT 1 FROM booking_segments s WHERE s.booking_id=b.id)))
+      AND NOT EXISTS (
+        SELECT 1 FROM (
+          SELECT s.segment_id,s.cores FROM booking_segments s WHERE s.booking_id=b.id
+          UNION ALL SELECT b.segment_id,b.cores WHERE NOT EXISTS (SELECT 1 FROM booking_segments s WHERE s.booking_id=b.id)
+        ) requested WHERE (SELECT count(*) FROM network_cores c WHERE c.asset_id=requested.segment_id AND c.status='Available') < requested.cores
+      )`, [segmentId]);
+  for (const booking of rows) {
+    if (notified.has(booking.id)) continue;
+    notified.add(booking.id);
+    await client.query(
+    `INSERT INTO notifications(user_id,title,message,booking_id) VALUES($1,$2,$3,$4)`,
+    [booking.requestedBy, "Core tersedia untuk waiting list", `${booking.customer}: core tersedia di semua segmen. Ajukan ulang booking ${booking.id} untuk persetujuan ADMIN.`, booking.id]
     );
-    await tx
-      .update(bookings)
-      .set({
-        expiresAt: sql`now()+(${days}||' days')::interval`,
-        status: "Booked",
-      })
-      .where(eq(bookings.id, booking.id));
-    await audit(
-      client,
-      actorId,
-      "WAITING_LIST_ALLOCATED",
-      "BOOKING",
-      booking.id,
-      { cores: booking.cores, segmentId }
-    );
-    await notifyPresales(
-      client,
-      "Waiting list dialokasikan",
-      `${booking.customer}: ${booking.cores} core tersedia dan booking ${booking.id} aktif.`,
-      booking.requestedBy,
-      booking.id
-    );
-    allocated.push(booking.id);
   }
-  return allocated;
+  return [] as string[];
 }
 
 async function assignCores(

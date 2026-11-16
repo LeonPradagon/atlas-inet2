@@ -1,0 +1,85 @@
+"use strict";
+const assert = require("node:assert/strict");
+const { randomBytes } = require("node:crypto");
+const { Pool } = require("pg");
+
+async function main() {
+  const adminUrl = new URL(process.env.DATABASE_URL);
+  adminUrl.pathname = "/postgres";
+  const admin = new Pool({ connectionString: adminUrl.toString() });
+  const name = `atlas_booking_test_${randomBytes(6).toString("hex")}`;
+  let db;
+  let created = false;
+  try {
+    await admin.query(`CREATE DATABASE "${name}"`);
+    created = true;
+    const testUrl = new URL(process.env.DATABASE_URL);
+    testUrl.pathname = `/${name}`;
+    process.env.DATABASE_URL = testUrl.toString();
+    const { Database } = require("../dist/database/database");
+    const { migrateDatabase } = require("../dist/database/migration-runner");
+    const { BookingService } = require("../dist/booking/booking.service");
+    db = new Database();
+    await migrateDatabase(db.pool);
+    const q = (sql, values) => db.query(sql, values);
+    await q(`INSERT INTO "user"(id,name,email,role) VALUES ('admin','Admin','admin@test.local','ADMIN'),('presales','Presales','presales@test.local','PRESALES'),('other','Other','other@test.local','PRESALES')`);
+    await q(`INSERT INTO network_assets(id,name,asset_type,source,total_cores,attributes) VALUES ('segment','Segment','segment','managed',2,'{}')`);
+    await q(`INSERT INTO network_cores(asset_id,core_number,status) VALUES ('segment',1,'Available'),('segment',2,'Available')`);
+    const service = new BookingService(db);
+    const input = { segmentId: 'segment', cores: 2, customer: 'Customer', picCustomer: 'PIC', picCustomerEmail: 'pic@test.local', picCustomerPhone: '123', picPresales: 'Presales' };
+    const first = await service.createBooking(input, 'presales');
+    assert.equal(first.status, 'Pending Approval');
+    assert.equal((await service.approveBooking(first.id, 'admin')).status, 'Booked');
+    const waiting = await service.createBooking(input, 'presales');
+    assert.equal(waiting.status, 'Waiting List');
+    await assert.rejects(() => service.resubmitBooking(waiting.id, 'presales'));
+    await service.releaseBooking(first.id, 'presales');
+    assert.equal((await q('SELECT status FROM bookings WHERE id=$1', [waiting.id])).rows[0].status, 'Waiting List');
+    assert.equal((await q("SELECT count(*)::int AS n FROM notifications WHERE user_id='presales' AND booking_id=$1 AND title='Core tersedia untuk waiting list'", [waiting.id])).rows[0].n, 1);
+    await assert.rejects(() => service.resubmitBooking(waiting.id, 'other'));
+    assert.equal((await service.resubmitBooking(waiting.id, 'presales')).status, 'Pending Approval');
+    assert.equal((await service.approveBooking(waiting.id, 'admin')).status, 'Booked');
+    assert.equal((await service.markPurchaseOrderIssued(waiting.id, 'admin')).status, 'Used');
+    assert.equal((await q("SELECT count(*)::int AS n FROM network_cores WHERE asset_id='segment' AND status='Used'")).rows[0].n, 2);
+    assert.equal((await q('SELECT expires_at FROM bookings WHERE id=$1', [waiting.id])).rows[0].expires_at, null);
+    await assert.rejects(() => service.markPurchaseOrderIssued(waiting.id, 'admin'));
+    console.log('PASS: waiting notification, owner resubmission, approval, and PO transition');
+
+    await q(`INSERT INTO network_assets(id,name,asset_type,source,total_cores,attributes) VALUES ('second','Second','segment','managed',2,'{}')`);
+    await q(`INSERT INTO network_cores(asset_id,core_number,status) VALUES ('second',1,'Available'),('second',2,'Available')`);
+    await q(`UPDATE network_cores SET status='Available' WHERE asset_id='segment'`);
+    const multiInput = { ...input, segments: [{ segmentId: 'segment', cores: 1 }, { segmentId: 'second', cores: 2 }] };
+    const multi = await service.createBooking(multiInput, 'presales');
+    assert.equal(multi.status, 'Pending Approval');
+    assert.equal((await service.listBookings()).find((item) => item.id === multi.id).segments.length, 2);
+    await service.approveBooking(multi.id, 'admin');
+    assert.equal((await q('SELECT count(*)::int AS n FROM booking_cores WHERE booking_id=$1', [multi.id])).rows[0].n, 3);
+    const queued = await service.createBooking(multiInput, 'presales');
+    assert.equal(queued.status, 'Waiting List');
+    await assert.rejects(() => service.resubmitBooking(queued.id, 'presales'));
+    await service.releaseBooking(multi.id, 'presales');
+    assert.equal((await q("SELECT count(*)::int AS n FROM notifications WHERE user_id='presales' AND booking_id=$1 AND title='Core tersedia untuk waiting list'", [queued.id])).rows[0].n, 1);
+    assert.equal((await service.resubmitBooking(queued.id, 'presales')).status, 'Pending Approval');
+    await service.approveBooking(queued.id, 'admin');
+    await service.markPurchaseOrderIssued(queued.id, 'admin');
+    assert.equal((await q("SELECT count(*)::int AS n FROM booking_cores bc JOIN network_cores c ON c.id=bc.core_id WHERE bc.booking_id=$1 AND c.status='Used'", [queued.id])).rows[0].n, 3);
+    await assert.rejects(() => service.createBooking({ ...input, segments: [{ segmentId: 'segment', cores: 1 }, { segmentId: 'segment', cores: 1 }] }, 'presales'));
+    await q(`UPDATE network_cores SET status='Available' WHERE asset_id IN ('segment','second')`);
+    const expiring = await service.createBooking(multiInput, 'presales');
+    await service.approveBooking(expiring.id, 'admin');
+    await q("UPDATE bookings SET expires_at=now()-interval '1 second' WHERE id=$1", [expiring.id]);
+    await service.expireBookings();
+    assert.equal((await q("SELECT count(*)::int AS n FROM network_cores WHERE asset_id IN ('segment','second') AND status='Available'")).rows[0].n, 4);
+    const legacy = await service.createBooking(input, 'presales');
+    await q('DELETE FROM booking_segments WHERE booking_id=$1', [legacy.id]);
+    assert.equal((await service.listBookings()).find((item) => item.id === legacy.id).segments.length, 1);
+    assert.equal((await service.approveBooking(legacy.id, 'admin')).status, 'Booked');
+    await service.releaseBooking(legacy.id, 'presales');
+    console.log('PASS: one multi-segment request, waiting notification, approval, release and PO');
+  } finally {
+    if (db) await db.pool.end();
+    if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+    await admin.end();
+  }
+}
+main().catch((error) => { console.error(error); process.exitCode = 1; });

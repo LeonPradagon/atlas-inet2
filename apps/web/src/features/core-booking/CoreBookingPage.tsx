@@ -25,9 +25,11 @@ export function CoreBookingPage() {
     );
   const [toast, setToast] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [selectedSegmentIds, setSelectedSegmentIds] = useState<string[]>([]);
+  const [segmentCores, setSegmentCores] = useState<Record<string, number>>({});
   const { data: user } = useQuery({
     queryKey: ["me"],
-    queryFn: () => api<{ role: string }>("/me"),
+    queryFn: () => api<{ id: string; name: string; role: string }>("/me"),
   });
   const { data: duration } = useQuery({
     queryKey: ["booking-duration"],
@@ -65,13 +67,9 @@ export function CoreBookingPage() {
         allocated: string | null;
         allocatedBookingIds: string[];
       }>(`/bookings/${booking.id}/release`, { method: "POST" }),
-    onSuccess: async (result, booking) => {
+    onSuccess: async (_result, booking) => {
       await invalidateNetwork();
-      setToast(
-        result.allocated
-          ? `Booking dilepas dan ${result.allocatedBookingIds.length} permintaan waiting list dialokasikan.`
-          : `Booking ${booking.id} dilepas.`
-      );
+      setToast(`Booking ${booking.id} dilepas. Pemilik waiting list yang memenuhi kapasitas akan diberi notifikasi.`);
       window.setTimeout(() => setToast(""), 4500);
     },
     onError: (error) =>
@@ -90,7 +88,7 @@ export function CoreBookingPage() {
       setToast(
         result.status === "Booked"
           ? `Booking ${booking.id} disetujui dan core dialokasikan.`
-          : `Booking ${booking.id} disetujui dan masuk waiting list.`
+          : `Kapasitas tidak lagi mencukupi; booking ${booking.id} masuk waiting list.`
       );
       window.setTimeout(() => setToast(""), 4500);
     },
@@ -124,7 +122,7 @@ export function CoreBookingPage() {
       await invalidateNetwork();
       setShowForm(false);
       setToast(
-        `Booking ${booking.id} diajukan dan menunggu persetujuan ADMIN.`
+        booking.status === "Waiting List" ? `Booking ${booking.id} masuk waiting list.` : `Booking ${booking.id} diajukan dan menunggu persetujuan ADMIN.`
       );
       window.setTimeout(() => setToast(""), 4500);
     },
@@ -132,6 +130,16 @@ export function CoreBookingPage() {
       setToast(
         error instanceof Error ? error.message : "Booking tidak dapat dibuat."
       ),
+  });
+  const resubmit = useMutation({
+    mutationFn: (booking: Booking) => api(`/bookings/${booking.id}/resubmit`, { method: "POST" }),
+    onSuccess: async () => { await invalidateNetwork(); setToast("Booking diajukan ulang untuk persetujuan ADMIN."); },
+    onError: (error) => setToast(error instanceof Error ? error.message : "Booking tidak dapat diajukan ulang."),
+  });
+  const issuePo = useMutation({
+    mutationFn: (booking: Booking) => api(`/bookings/${booking.id}/po-issued`, { method: "POST" }),
+    onSuccess: async () => { await invalidateNetwork(); setToast("PO ditandai terbit dan core menjadi terpakai."); },
+    onError: (error) => setToast(error instanceof Error ? error.message : "PO tidak dapat ditandai terbit."),
   });
   const updateDuration = useMutation({
     mutationFn: (days: number) =>
@@ -148,13 +156,6 @@ export function CoreBookingPage() {
         error instanceof Error ? error.message : "Durasi tidak dapat disimpan."
       ),
   });
-  const waiting = bookings
-    .filter((item) => item.status === "Waiting List")
-    .sort(
-      (a, b) =>
-        Date.parse(a.approvedAt ?? a.requestedAt) -
-          Date.parse(b.approvedAt ?? b.requestedAt) || a.id.localeCompare(b.id)
-    );
   const filtered = bookings.filter(
     (item) => filter === "Semua" || item.status === filter
   );
@@ -164,6 +165,8 @@ export function CoreBookingPage() {
     page * bookingPageSize
   );
   const bookableSegments = networkSegments;
+  const selectedSegments = bookableSegments.filter((segment) => selectedSegmentIds.includes(segment.id));
+  const needsWaitingList = selectedSegments.some((segment) => (segmentCores[segment.id] ?? 1) > segment.idleCores);
   const bookedCount = bookings.filter(
     (item) => item.status === "Booked"
   ).length;
@@ -202,14 +205,12 @@ export function CoreBookingPage() {
   const addBooking = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const segmentId = String(form.get("segmentId"));
-    const cores = Number(form.get("cores"));
     create.mutate({
       customer: String(form.get("customer")),
       picCustomer: String(form.get("picCustomer")),
-      picPresales: String(form.get("picPresales")),
-      segmentId,
-      cores,
+      picCustomerEmail: String(form.get("picCustomerEmail")),
+      picCustomerPhone: String(form.get("picCustomerPhone")),
+      segments: selectedSegments.map((segment) => ({ segmentId: segment.id, cores: segmentCores[segment.id] ?? 1 })),
     });
   };
   return (
@@ -332,8 +333,7 @@ export function CoreBookingPage() {
             <div>
               <h3>Permintaan core</h3>
               <p>
-                Booking baru menunggu persetujuan ADMIN. Booking yang disetujui
-                langsung dialokasikan atau masuk antrean kapasitas.
+                Permintaan dengan core tersedia menunggu persetujuan ADMIN. Waiting list diberi notifikasi ketika kapasitas tersedia untuk diajukan ulang.
               </p>
             </div>
             <div className="filter-tabs">
@@ -342,6 +342,7 @@ export function CoreBookingPage() {
                   "Semua",
                   "Pending Approval",
                   "Booked",
+                  "Used",
                   "Waiting List",
                   "Rejected",
                 ] as const
@@ -394,27 +395,17 @@ export function CoreBookingPage() {
                       </small>
                     </td>
                     <td>
-                      <span className="cable-name">{booking.segmentName}</span>
-                      <small className="d-block text-muted">
-                        {booking.area}
-                      </small>
+                      {booking.segments.map((segment) => <div key={segment.segmentId}><span className="cable-name">{segment.name}</span><small className="d-block text-muted">{segment.area} · {segment.cores} core</small></div>)}
                       {booking.status === "Waiting List" && (
                         <small className="d-block text-warning">
-                          Antrean #
-                          {waiting
-                            .filter(
-                              (item) => item.segmentId === booking.segmentId
-                            )
-                            .findIndex((item) => item.id === booking.id) +
-                            1}{" "}
-                          pada segmen
+                          Menunggu kapasitas tersedia
                         </small>
                       )}
                     </td>
                     <td>
                       <b>{booking.cores} core</b>
                     </td>
-                    <td>{booking.picCustomer}</td>
+                    <td>{booking.picCustomer}<small className="d-block text-muted">{booking.picCustomerEmail}</small><small className="d-block text-muted">{booking.picCustomerPhone}</small></td>
                     <td>{booking.picPresales}</td>
                     <td>
                       <span
@@ -471,6 +462,12 @@ export function CoreBookingPage() {
                           Release
                         </button>
                       )}
+                      {booking.status === "Booked" && user?.role === "ADMIN" && (
+                        <button className="btn btn-sm btn-primary ms-1" disabled={issuePo.isPending} type="button" onClick={async () => { if (await confirmAction(`Tandai PO booking ${booking.id} sudah terbit? Core akan menjadi terpakai.`)) issuePo.mutate(booking); }}>PO terbit</button>
+                      )}
+                      {booking.status === "Waiting List" && booking.requestedBy === user?.id && (
+                        <button className="btn btn-sm btn-primary" disabled={resubmit.isPending} onClick={() => resubmit.mutate(booking)} type="button">Ajukan ulang</button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -512,7 +509,7 @@ export function CoreBookingPage() {
             <div className="modal-heading">
               <div>
                 <h3 id="booking-title">Buat booking core</h3>
-                <p>Permintaan akan menunggu persetujuan ADMIN.</p>
+                <p>Periksa ketersediaan core sebelum mengajukan permintaan.</p>
               </div>
               <button
                 aria-label="Tutup"
@@ -538,37 +535,35 @@ export function CoreBookingPage() {
                 placeholder="Nama perusahaan"
                 required
               />
-              <label className="form-label" htmlFor="booking-segment-id">
-                Segmen jaringan
-              </label>
-              <select
-                className="form-select mb-3"
-                id="booking-segment-id"
-                name="segmentId"
-                required
-              >
-                {bookableSegments.map((segment) => (
-                  <option key={segment.id} value={segment.id}>
-                    {segment.name} · {segment.idleCores} core tersedia
-                  </option>
-                ))}
-              </select>
-              <div className="row g-3">
-                <div className="col-6">
-                  <label className="form-label" htmlFor="booking-cores">
-                    Jumlah core
-                  </label>
-                  <input
-                    className="form-control"
-                    defaultValue="2"
-                    id="booking-cores"
-                    min="1"
-                    name="cores"
-                    required
-                    type="number"
-                  />
+              <fieldset className="mb-3">
+                <legend className="form-label fs-6">Cek ketersediaan segmen</legend>
+                <small className="text-muted d-block mb-2">Pilih satu atau beberapa segmen untuk melihat kapasitasnya.</small>
+                <div className="border rounded p-2" style={{ maxHeight: 180, overflowY: "auto" }}>
+                  {bookableSegments.map((segment) => (
+                    <label className="form-check d-block mb-1" key={segment.id}>
+                      <input
+                        checked={selectedSegmentIds.includes(segment.id)}
+                        className="form-check-input"
+                        onChange={(event) => {
+                          const checked = event.target.checked;
+                          setSelectedSegmentIds((current) => checked ? [...current, segment.id] : current.filter((id) => id !== segment.id));
+                        }}
+                        type="checkbox"
+                      />
+                      <span className="form-check-label">{segment.name} · {segment.idleCores} dari {segment.totalCores} core tersedia</span>
+                    </label>
+                  ))}
                 </div>
-                <div className="col-6">
+              </fieldset>
+              {selectedSegments.map((segment) => (
+                <div className="mb-3" key={segment.id}>
+                  <label className="form-label" htmlFor={`booking-cores-${segment.id}`}>Jumlah core · {segment.name}</label>
+                  <input className="form-control" id={`booking-cores-${segment.id}`} max={segment.totalCores} min="1" onChange={(event) => setSegmentCores((current) => ({ ...current, [segment.id]: Number(event.target.value) }))} required type="number" value={segmentCores[segment.id] ?? 1} />
+                  <small className="text-muted">{segment.idleCores} tersedia dari {segment.totalCores} core</small>
+                </div>
+              ))}
+              <div className="row g-3">
+                <div className="col-12">
                   <label className="form-label" htmlFor="booking-pic-customer">
                     PIC customer
                   </label>
@@ -581,6 +576,10 @@ export function CoreBookingPage() {
                   />
                 </div>
               </div>
+              <label className="form-label mt-3" htmlFor="booking-customer-email">Email PIC customer</label>
+              <input className="form-control" id="booking-customer-email" name="picCustomerEmail" required type="email" />
+              <label className="form-label mt-3" htmlFor="booking-customer-phone">Telepon PIC customer</label>
+              <input className="form-control" id="booking-customer-phone" name="picCustomerPhone" required type="tel" />
               <label className="form-label mt-3" htmlFor="booking-pic-presales">
                 PIC presales
               </label>
@@ -588,9 +587,10 @@ export function CoreBookingPage() {
                 className="form-control"
                 id="booking-pic-presales"
                 name="picPresales"
-                placeholder="Nama PIC presales"
-                required
+                value={user?.name ?? ""}
+                readOnly
               />
+              {selectedSegments.length > 0 && <p className="mt-3 mb-0">{needsWaitingList ? "Ada segmen yang core-nya belum cukup; seluruh permintaan akan masuk waiting list." : "Core tersedia di semua segmen; permintaan akan dikirim untuk persetujuan ADMIN."}</p>}
               <div className="modal-actions">
                 <button
                   className="btn btn-light"
@@ -601,11 +601,11 @@ export function CoreBookingPage() {
                 </button>
                 <button
                   className="btn btn-primary"
-                  disabled={create.isPending || !bookableSegments.length}
+                  disabled={create.isPending || !selectedSegments.length}
                   type="submit"
                 >
                   <i className="bi bi-check2 me-2" />
-                  Simpan booking
+                  {needsWaitingList ? "Masuk waiting list" : "Ajukan persetujuan"}
                 </button>
               </div>
             </form>
@@ -620,6 +620,7 @@ function bookingStatusLabel(status: Booking["status"]) {
   return {
     "Pending Approval": "Menunggu Persetujuan",
     Booked: "Aktif",
+    Used: "Terpakai",
     "Waiting List": "Waiting List",
     Rejected: "Ditolak",
     Released: "Dilepas",
@@ -631,6 +632,7 @@ function bookingStatusClass(status: Booking["status"]) {
   return {
     "Pending Approval": "is-pending",
     Booked: "is-booked",
+    Used: "is-booked",
     "Waiting List": "is-waiting",
     Rejected: "is-rejected",
     Released: "is-released",
@@ -642,6 +644,7 @@ function bookingStatusIcon(status: Booking["status"]) {
   return {
     "Pending Approval": "bi-hourglass-split",
     Booked: "bi-check-circle-fill",
+    Used: "bi-check-circle-fill",
     "Waiting List": "bi-clock-fill",
     Rejected: "bi-x-circle-fill",
     Released: "bi-arrow-counterclockwise",
