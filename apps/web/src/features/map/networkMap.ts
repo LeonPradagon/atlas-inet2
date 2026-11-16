@@ -1,5 +1,5 @@
 import type { Feature, Geometry } from "geojson";
-import type { Map as MapLibreMap } from "maplibre-gl";
+import { type Map as MapLibreMap, Popup } from "maplibre-gl";
 import { api, type NetworkAsset } from "../../lib/api";
 import { kmzLegend } from "./kmzLegend";
 
@@ -597,6 +597,266 @@ export function cableLengthMeters(geometry: Geometry | null): number | null {
       }, 0),
     0
   );
+}
+
+export function addNetworkAssetHitLayers(map: MapLibreMap, sourceId: string) {
+  map.addLayer({
+    id: "asset-line-hit",
+    type: "line",
+    source: sourceId,
+    filter: ["==", ["geometry-type"], "LineString"],
+    paint: { "line-width": 18, "line-opacity": 0.01 },
+  });
+  map.addLayer({
+    id: "asset-point-hit",
+    type: "circle",
+    source: sourceId,
+    filter: ["==", ["geometry-type"], "Point"],
+    paint: { "circle-radius": 16, "circle-opacity": 0.01 },
+  });
+}
+
+export function addNetworkAssetLayers(
+  map: MapLibreMap,
+  sourceId: string,
+  options: { idPrefix?: string; insertLinesBefore?: string } = {}
+) {
+  const prefix = options.idPrefix ?? "network-asset";
+  const ids = {
+    areas: `${prefix}-areas`,
+    icons: `${prefix}-icons`,
+    labels: `${prefix}-labels`,
+    lines: `${prefix}-lines`,
+  };
+  const addLayer = <T extends Parameters<MapLibreMap["addLayer"]>[0]>(
+    layer: T,
+    beforeId?: string
+  ) => {
+    if (beforeId) {
+      map.addLayer(layer, beforeId);
+    } else {
+      map.addLayer(layer);
+    }
+  };
+
+  addLayer(
+    {
+      id: ids.areas,
+      type: "fill",
+      source: sourceId,
+      filter: [
+        "all",
+        ["==", ["geometry-type"], "Polygon"],
+        ["!=", ["get", "fillEnabled"], false],
+      ],
+      paint: {
+        "fill-color": ["get", "fillColor"],
+        "fill-opacity": ["min", ["get", "fillOpacity"], 0.15],
+      },
+    },
+    options.insertLinesBefore
+  );
+  addLayer(
+    {
+      id: ids.lines,
+      type: "line",
+      source: sourceId,
+      filter: [
+        "any",
+        ["==", ["geometry-type"], "LineString"],
+        [
+          "all",
+          ["==", ["geometry-type"], "Polygon"],
+          ["!=", ["get", "outlineEnabled"], false],
+        ],
+      ],
+      paint: {
+        "line-color": ["get", "lineColor"],
+        "line-width": ["get", "lineWidth"],
+        "line-opacity": ["get", "lineOpacity"],
+      },
+    },
+    options.insertLinesBefore
+  );
+  addLayer({
+    id: ids.icons,
+    type: "symbol",
+    source: sourceId,
+    filter: ["==", ["geometry-type"], "Point"],
+    layout: {
+      "icon-image": [
+        "coalesce",
+        ["image", ["get", "iconImageId"]],
+        ["image", ["get", "fallbackIconImageId"]],
+        ["image", ["get", "atlasIconId"]],
+      ],
+      "icon-size": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        12,
+        ["*", ["get", "legendIconScale"], 0.35],
+        14,
+        ["*", ["get", "legendIconScale"], 0.5],
+        16,
+        ["*", ["get", "legendIconScale"], 0.75],
+        18,
+        ["get", "legendIconScale"],
+      ],
+      "icon-anchor": ["get", "iconAnchor"],
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+    },
+    paint: { "icon-opacity": ["get", "iconOpacity"] },
+  });
+  addLayer({
+    id: ids.labels,
+    type: "symbol",
+    source: sourceId,
+    minzoom: 17,
+    filter: [
+      "all",
+      ["==", ["geometry-type"], "Point"],
+      [">", ["get", "legendLabelSize"], 0],
+    ],
+    layout: {
+      "text-field": ["get", "sourceLabel"],
+      "text-size": ["*", ["get", "legendLabelSize"], 10],
+      "text-offset": [0, 1.5],
+      "text-padding": 8,
+      "text-allow-overlap": false,
+      "text-ignore-placement": false,
+    },
+    paint: {
+      "text-color": ["get", "labelColor"],
+      "text-opacity": ["get", "labelOpacity"],
+      "text-halo-color": [
+        "match",
+        ["get", "labelColor"],
+        "#ffffff",
+        "#263238",
+        "#ffffff",
+      ],
+      "text-halo-width": 1.5,
+    },
+  });
+  return ids;
+}
+
+export function createNetworkAssetPopup() {
+  return new Popup({
+    maxWidth: "460px",
+    closeButton: true,
+    className: "analysis-asset-popup",
+  });
+}
+
+export function findNetworkAssetAtPoint(
+  map: MapLibreMap,
+  point: { x: number; y: number },
+  assetsById: ReadonlyMap<string, NetworkAsset>,
+  layerIds: string[]
+) {
+  for (const layerId of layerIds) {
+    const feature = map.queryRenderedFeatures([point.x, point.y], {
+      layers: [layerId],
+    })[0];
+    const assetId = feature?.properties?.id;
+    if (assetId != null) {
+      const asset = assetsById.get(String(assetId));
+      if (asset) {
+        return asset;
+      }
+    }
+  }
+}
+
+export function createNetworkAssetPopupContent(
+  asset: NetworkAsset,
+  options: {
+    extraSummaryRows?: [string, string][];
+    extraSectionTitle?: string;
+    extraRows?: { label: string; value: unknown; className?: string }[];
+  } = {}
+) {
+  const content = document.createElement("div");
+  content.className = "analysis-asset-popup-body";
+  const title = document.createElement("strong");
+  title.textContent = String(asset.attributes?.name ?? asset.name);
+  content.append(title);
+
+  const formatLength = (meters: number) =>
+    meters >= 1000
+      ? `${(meters / 1000).toLocaleString("id-ID", { maximumFractionDigits: 2 })} km (${meters.toLocaleString("id-ID", { maximumFractionDigits: 1 })} m)`
+      : `${meters.toLocaleString("id-ID", { maximumFractionDigits: 1 })} m`;
+  const cableLength = cableLengthMeters(asset.geometry);
+  const summaryRows = [...(options.extraSummaryRows ?? [])];
+  if (cableLength !== null) {
+    summaryRows.unshift([
+      "Panjang total kabel eksisting",
+      formatLength(cableLength),
+    ]);
+  }
+  if (summaryRows.length) {
+    const summary = document.createElement("section");
+    summary.className = "analysis-cable-length";
+    summary.setAttribute("aria-label", "Panjang kabel");
+    for (const [label, value] of summaryRows) {
+      const row = document.createElement("div");
+      const heading = document.createElement("small");
+      const length = document.createElement("strong");
+      heading.textContent = label;
+      length.textContent = value;
+      row.append(heading, length);
+      summary.append(row);
+    }
+    const note = document.createElement("small");
+    note.textContent =
+      "Kabel eksisting dihitung dari geometri KMZ. Estimasi kabel baru mengikuti rute jalan dan belum termasuk cadangan/slack.";
+    summary.append(note);
+    content.append(summary);
+  }
+
+  const table = document.createElement("table");
+  table.className = "map-asset-popup-table";
+  const body = document.createElement("tbody");
+  const appendRow = (label: string, value: unknown, className = "") => {
+    const row = document.createElement("tr");
+    const heading = document.createElement("th");
+    const cell = document.createElement("td");
+    heading.scope = "row";
+    heading.textContent = label;
+    cell.className = `text-break ${className}`.trim();
+    cell.textContent = String(value ?? "");
+    row.append(heading, cell);
+    body.append(row);
+  };
+  const saved = asset.attributes?.__kmlDetailFields;
+  const rows: [string, unknown][] = Array.isArray(saved)
+    ? saved.filter(
+        (row): row is [string, unknown] =>
+          Array.isArray(row) && row.length === 2 && typeof row[0] === "string"
+      )
+    : Object.entries(asset.attributes ?? {}).filter(
+        ([key]) => !key.startsWith("__") && key !== "name"
+      );
+  for (const [label, value] of rows) {
+    appendRow(label, value);
+  }
+  if (options.extraSectionTitle) {
+    const heading = document.createElement("tr");
+    const cell = document.createElement("th");
+    cell.colSpan = 2;
+    cell.textContent = options.extraSectionTitle;
+    heading.append(cell);
+    body.append(heading);
+  }
+  for (const row of options.extraRows ?? []) {
+    appendRow(row.label, row.value, row.className);
+  }
+  table.append(body);
+  content.append(table);
+  return content;
 }
 
 export function loadNetworkMapIcons(

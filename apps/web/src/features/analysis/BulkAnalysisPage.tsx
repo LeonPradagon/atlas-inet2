@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ExcelJS from "exceljs";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DataTable, type DataTableColumn } from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
 import { api, postJson } from "../../lib/api";
@@ -9,7 +9,9 @@ import { bulkJobStatusLabel } from "./bulkJobStatus";
 import {
   NearestNetworkMap,
   NetworkLocationsMap,
+  type NetworkRouteOption,
   type NetworkSearchResult,
+  resultForRoute,
 } from "./NearestNetworkMap";
 import { NetworkCapacityDetail } from "./NetworkCapacityDetail";
 import { SubmitSurveyButton } from "./SubmitSurveyButton";
@@ -101,6 +103,9 @@ export function BulkAnalysisPage() {
   const [selectedRowNumber, setSelectedRowNumber] = useState<number | null>(
     null
   );
+  const [selectedRouteId, setSelectedRouteId] = useState<
+    NetworkRouteOption["id"]
+  >("A");
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -156,15 +161,26 @@ export function BulkAnalysisPage() {
     enabled: Boolean(jobId),
     refetchInterval: activeJob ? 5000 : false,
   });
-  const selectMapRow = useCallback((row: number) => {
+  const selectResultRow = useCallback((row: number) => {
     setSelectedRowNumber(row);
+    setSelectedRouteId("A");
+  }, []);
+  const selectMapRow = useCallback((row: number) => {
+    selectResultRow(row);
     setPage(Math.floor((row - 1) / 50) + 1);
     setSearch("");
     setStatusFilter("");
-  }, []);
+  }, [selectResultRow]);
   const job = jobQuery.data;
   const rows = pageQuery.data?.rows ?? [];
   const selectedRow = rows.find((row) => row.row === selectedRowNumber);
+  const selectedRowResult = useMemo(
+    () =>
+      selectedRow?.result
+        ? resultForRoute(selectedRow.result, selectedRouteId)
+        : null,
+    [selectedRow?.result, selectedRouteId]
+  );
   const clearCurrentJob = () => {
     const url = new URL(window.location.href);
     url.searchParams.delete("jobId");
@@ -174,6 +190,7 @@ export function BulkAnalysisPage() {
     setSearch("");
     setStatusFilter("");
     setSelectedRowNumber(null);
+    setSelectedRouteId("A");
     setError("");
     setSelectedFile(null);
     if (input.current) {
@@ -408,7 +425,7 @@ export function BulkAnalysisPage() {
             className="btn btn-link p-0 text-start"
             onClick={(event) => {
               event.stopPropagation();
-              setSelectedRowNumber(row.row);
+            selectResultRow(row.row);
             }}
             type="button"
           >
@@ -422,7 +439,7 @@ export function BulkAnalysisPage() {
     },
     {
       key: "network",
-      header: "Jaringan terdekat",
+      header: "Tujuan Rute A",
       render: (row) => row.network?.name ?? "—",
     },
     {
@@ -440,7 +457,7 @@ export function BulkAnalysisPage() {
     },
     {
       key: "distance",
-      header: "Estimasi panjang kabel mengikuti jalan mobil",
+      header: "Jarak Rute A",
       render: (row) =>
         row.distanceMeters == null
           ? "Belum tersedia"
@@ -478,7 +495,10 @@ export function BulkAnalysisPage() {
           Number.isFinite(row.longitude) &&
           Math.abs(row.latitude ?? Infinity) <= 90 &&
           Math.abs(row.longitude ?? Infinity) <= 180;
-        const plan = row.result?.terminationPlan;
+        const routeId = selectedRowNumber === row.row ? selectedRouteId : "A";
+        const plan = row.result
+          ? resultForRoute(row.result, routeId).terminationPlan
+          : undefined;
         const canSubmitSurvey =
           row.status === "OK" &&
           validCoordinates &&
@@ -779,7 +799,7 @@ export function BulkAnalysisPage() {
               columns={columns}
               density="compact"
               label="Hasil analisis massal"
-              onRowClick={(row) => setSelectedRowNumber(row.row)}
+              onRowClick={(row) => selectResultRow(row.row)}
               rowAriaLabel={(row) => `Buka detail lokasi ${row.address}`}
               rowClassName={(row) => {
                 const classes: string[] = [];
@@ -813,16 +833,20 @@ export function BulkAnalysisPage() {
                 </button>
               </div>
             </div>
-            {selectedRow?.result &&
+            {selectedRow && selectedRowResult &&
               Number.isFinite(selectedRow.latitude) &&
               Number.isFinite(selectedRow.longitude) && (
                 <section className="mt-4">
                   <h4 className="h6">{selectedRow.address}</h4>
                   <NetworkCapacityDetail
-                    capacity={selectedRow.result.network?.capacity}
+                    capacity={selectedRowResult.network?.capacity}
                   />
-                  <TerminationDetail data={selectedRow.result.terminations} />
-                  <NearestNetworkMap result={selectedRow.result} />
+                  <TerminationDetail data={selectedRowResult.terminations} />
+                  <NearestNetworkMap
+                    onSelectRoute={setSelectedRouteId}
+                    result={selectedRowResult}
+                    selectedRouteId={selectedRouteId}
+                  />
                   <small>
                     Klik lokasi lain di tabel untuk melihat jaringan dan
                     estimasi jalur kabelnya.

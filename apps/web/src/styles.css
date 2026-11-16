@@ -451,6 +451,120 @@ body {
   font-size: 14px;
   font-weight: 650;
 }
+.analysis-route-options {
+  margin: 16px 0 12px;
+}
+.analysis-route-options-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: end;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.analysis-route-options-heading h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.analysis-route-options-heading p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--bs-secondary-color);
+}
+.analysis-route-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.analysis-route-option,
+.analysis-route-option-unavailable {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 11px 12px;
+  color: var(--bs-body-color);
+  text-align: left;
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 7px;
+}
+.analysis-route-option {
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+.analysis-route-option:hover,
+.analysis-route-option.is-selected {
+  background: var(--bs-tertiary-bg);
+  border-color: var(--bs-primary);
+}
+.analysis-route-option:focus-visible {
+  outline: 2px solid var(--bs-primary);
+  outline-offset: 2px;
+}
+.analysis-route-option-topline,
+.analysis-route-option-label {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+}
+.analysis-route-option-topline {
+  justify-content: space-between;
+}
+.analysis-route-option-label {
+  font-size: 13px;
+  font-weight: 650;
+}
+.analysis-route-option-label small {
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--bs-secondary-color);
+  background: var(--bs-tertiary-bg);
+  border-radius: 4px;
+}
+.analysis-route-option-topline > strong {
+  flex-shrink: 0;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.analysis-route-option-destination,
+.analysis-route-option-network,
+.analysis-route-option-unavailable > span:last-child {
+  overflow-wrap: anywhere;
+}
+.analysis-route-option-destination {
+  font-size: 12px;
+}
+.analysis-route-option-network,
+.analysis-route-option-unavailable > span:last-child {
+  font-size: 11px;
+  color: var(--bs-secondary-color);
+}
+.analysis-route-option-unavailable {
+  justify-content: center;
+  background: var(--bs-tertiary-bg);
+}
+.analysis-route-swatch {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 3px;
+  border-radius: 2px;
+}
+.analysis-route-swatch.is-route-a {
+  background: #3454d1;
+}
+.analysis-route-swatch.is-route-b {
+  background: repeating-linear-gradient(90deg, #c56a12 0 5px, transparent 5px 8px);
+}
+@media (max-width: 640px) {
+  .analysis-route-option-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .cable-plan-item + .cable-plan-item {
   padding-top: 12px;
   margin-top: 12px;
@@ -4820,3 +4934,18 @@ body {
     width: min(100%, 220px);
   }
 }
+
+.connection-route-map {
+  height: 420px;
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.connection-map-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; font-size: .875rem; }
+.connection-map-legend > span { display: inline-flex; align-items: center; gap: 8px; }
+.connection-radius-legend-marker { display: inline-block; width: 12px; height: 12px; border: 1px dashed #3454d1; border-radius: 50%; background: rgb(52 84 209 / 8%); }
+.connection-line { display: inline-block; width: 28px; border-top: 2px solid #697586; }
+.connection-line.is-new { border-top: 2px dashed; }
+.connection-line.is-existing { border-top: 4px solid #697586; }
+@media (max-width: 575px) { .connection-route-map { height: 320px; } }
+.connection-line.is-gap { border-top: 2px dotted #ad5900; }

@@ -24,6 +24,7 @@ import {
 } from "./NearestNetworkMap";
 import { NetworkCapacityDetail } from "./NetworkCapacityDetail";
 import { TerminationDetail } from "./TerminationDetail";
+import { ConnectionAnalysisResult, type ConnectionResult } from "./ConnectionAnalysisResult";
 
 type HistoryItem = {
   id: string;
@@ -1167,7 +1168,9 @@ export function AnalysisHistoryPage() {
                 </button>
               </div>
               <div className="card-body">
-                {detail.data.analysisType === "ADDRESS" ? (
+                {detail.data.analysisType === "ADDRESS" && result.mode === "connection" ? (
+                  <ConnectionAnalysisResult key={detail.data.id} result={{ ...result, historyId: detail.data.id } as unknown as ConnectionResult} />
+                ) : detail.data.analysisType === "ADDRESS" ? (
                   <>
                     <DetailTable
                       className="mb-3"

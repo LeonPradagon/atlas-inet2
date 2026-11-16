@@ -1,20 +1,25 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-  Map as MapLibreMap,
-  Marker,
-  NavigationControl,
-  setWorkerUrl,
-} from "maplibre-gl";
-import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AtlasTag } from "../../components/AtlasTag";
 import { DetailTable } from "../../components/DetailTable";
 import { PageHeader } from "../../components/PageHeader";
 import { type ApiError, api, postJson } from "../../lib/api";
 import {
+  AddressPinPicker,
+  type SearchViewport,
+  type SelectedPoint,
+} from "./AddressPinPicker";
+import { CompactLocationInput } from "./CompactLocationInput";
+import {
+  ConnectionAnalysisResult,
+  type ConnectionResult,
+} from "./ConnectionAnalysisResult";
+import {
   NearestNetworkMap,
+  type NetworkRouteOption,
   type NetworkSearchResult,
+  resultForRoute,
 } from "./NearestNetworkMap";
 import { NetworkCapacityDetail } from "./NetworkCapacityDetail";
 import { SubmitSurveyButton } from "./SubmitSurveyButton";
@@ -25,7 +30,6 @@ type Result = NetworkSearchResult & {
   latitude: number;
   longitude: number;
   historyId: string;
-
   distanceMeters: number | null;
   status: string;
   message?: string;
@@ -33,8 +37,11 @@ type Result = NetworkSearchResult & {
   geocodingMatch?: "approximate";
   matchedStreet?: string;
 };
+
 type RegionOption = { code: string; name: string };
+
 type Subdistrict = RegionOption & { postalCode: string };
+
 type AddressFields = {
   street: string;
   number: string;
@@ -44,6 +51,7 @@ type AddressFields = {
   districtCode: string;
   subdistrictCode: string;
 };
+
 type AddressSuggestion = {
   id: string;
   label: string;
@@ -63,6 +71,7 @@ type AddressSuggestion = {
   postalCode?: string;
   matchQuality: "approximate";
 };
+
 type ResolvedRegion = {
   provinceCode: string;
   cityCode: string;
@@ -99,6 +108,7 @@ async function resolveRegionParams(
   }
   return result;
 }
+
 function regionParams(fields: Partial<AddressSuggestion>) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries({
@@ -124,139 +134,22 @@ function regionParams(fields: Partial<AddressSuggestion>) {
   }
   return params;
 }
-type SelectedPoint = {
-  longitude: number;
-  latitude: number;
-  label: string;
-  provider: "photon" | "manual";
-  matchQuality?: "approximate";
-  matchedStreet?: string;
-  confirmed: boolean;
-};
-type SearchViewport = { longitude: number; latitude: number; zoom: number };
-
-function AddressPinPicker({
-  point,
-  regionView,
-  onChange,
-  onViewportChange,
-}: {
-  point: SelectedPoint | null;
-  regionView: SearchViewport | null;
-  onChange: (longitude: number, latitude: number) => void;
-  onViewportChange: (viewport: SearchViewport) => void;
-}) {
-  const container = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<MapLibreMap | null>(null);
-  const markerRef = useRef<Marker | null>(null);
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  const onViewportChangeRef = useRef(onViewportChange);
-  onViewportChangeRef.current = onViewportChange;
-  const pointRef = useRef(point);
-  pointRef.current = point;
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: create the map once; later point/viewport changes are applied by the effects below
-  useEffect(() => {
-    if (!container.current) {
-      return;
-    }
-    setWorkerUrl(workerUrl);
-    const map = new MapLibreMap({
-      container: container.current,
-      style: "https://tiles.openfreemap.org/styles/liberty",
-      center: point
-        ? [point.longitude, point.latitude]
-        : regionView
-          ? [regionView.longitude, regionView.latitude]
-          : [118, -2],
-      zoom: point ? 16 : (regionView?.zoom ?? 4.5),
-    });
-    map.addControl(new NavigationControl(), "top-right");
-    const marker = new Marker({ color: "#3454d1", draggable: true });
-    marker.on("dragend", () => {
-      const coordinates = marker.getLngLat();
-      onChangeRef.current(coordinates.lng, coordinates.lat);
-    });
-    markerRef.current = marker;
-    mapRef.current = map;
-    const reportViewport = () => {
-      const center = map.getCenter();
-      onViewportChangeRef.current({
-        longitude: center.lng,
-        latitude: center.lat,
-        zoom: map.getZoom(),
-      });
-    };
-    map.on("moveend", reportViewport);
-    map.on("load", () => {
-      if (pointRef.current) {
-        marker
-          .setLngLat([pointRef.current.longitude, pointRef.current.latitude])
-          .addTo(map);
-      }
-      reportViewport();
-    });
-    map.on("click", (event) => {
-      marker.setLngLat(event.lngLat).addTo(map);
-      onChangeRef.current(event.lngLat.lng, event.lngLat.lat);
-    });
-    return () => {
-      marker.remove();
-      map.remove();
-      mapRef.current = null;
-      markerRef.current = null;
-    };
-  }, []);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on coordinates so a new point object with the same position does not re-ease the map
-  useEffect(() => {
-    const map = mapRef.current;
-    const marker = markerRef.current;
-    if (!(map && marker)) {
-      return;
-    }
-    if (!point) {
-      marker.remove();
-      return;
-    }
-    marker.setLngLat([point.longitude, point.latitude]).addTo(map);
-    map.easeTo({
-      center: [point.longitude, point.latitude],
-      zoom: Math.max(map.getZoom(), 16),
-    });
-  }, [point?.longitude, point?.latitude]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on viewport values so a new regionView object with the same values does not re-ease the map
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || point || !regionView) {
-      return;
-    }
-    map.easeTo({
-      center: [regionView.longitude, regionView.latitude],
-      zoom: regionView.zoom,
-      duration: 700,
-    });
-  }, [point, regionView?.longitude, regionView?.latitude, regionView?.zoom]);
-
-  return (
-    <div
-      aria-label="Pilih atau koreksi titik alamat pada peta"
-      className="address-pin-picker"
-      ref={container}
-      role="application"
-      style={{
-        height: 320,
-        width: "100%",
-        borderRadius: 8,
-        overflow: "hidden",
-      }}
-    />
-  );
-}
 
 export function AddressAnalysisPage() {
+  const [twoPoint, setTwoPoint] = useState(false);
+  const [destination, setDestination] = useState<SelectedPoint | null>(null);
+  const [allowExpand2km, setAllowExpand2km] = useState(false);
+  const [coreRequirement, setCoreRequirement] = useState("");
+  const connection = useMutation({
+    mutationFn: (value: {
+      start: { longitude: number; latitude: number; label: string };
+      end: { longitude: number; latitude: number; label: string };
+      allowExpand2km: boolean;
+      coreRequirement?: { services: number; reserve: number };
+    }) => api<ConnectionResult>("/analysis/connection", postJson(value)),
+  });
+  const [selectedRouteId, setSelectedRouteId] =
+    useState<NetworkRouteOption["id"]>("A");
   const [inputMode, setInputMode] = useState<"address" | "coordinates" | null>(
     null
   );
@@ -537,10 +430,45 @@ export function AddressAnalysisPage() {
       allowExpand2km?: boolean;
     }) => api<Result>("/analysis/address", postJson(value)),
   });
+  const selectedResult = useMemo(
+    () => (analyze.data ? resultForRoute(analyze.data, selectedRouteId) : null),
+    [analyze.data, selectedRouteId]
+  );
+  const activeRouteId = selectedResult?.selectedRouteId ?? "A";
   const submitAnalysis = (point = selectedPoint) => {
     if (!point?.confirmed) {
       return;
     }
+    if (twoPoint) {
+      if (!destination?.confirmed) {
+        return;
+      }
+      analyze.reset();
+      connection.mutate({
+        start: {
+          longitude: point.longitude,
+          latitude: point.latitude,
+          label:
+            inputMode === "address" ? fullAddress || point.label : point.label,
+        },
+        end: {
+          longitude: destination.longitude,
+          latitude: destination.latitude,
+          label: destination.label,
+        },
+        allowExpand2km,
+        ...(coreRequirement
+          ? {
+              coreRequirement: {
+                services: Number(coreRequirement),
+                reserve: 0,
+              },
+            }
+          : {}),
+      });
+      return;
+    }
+    setSelectedRouteId("A");
     const usesAddress = inputMode === "address";
     analyze.mutate({
       address: usesAddress ? fullAddress || address.street : point.label,
@@ -568,8 +496,8 @@ export function AddressAnalysisPage() {
     if (!latitude.trim() || !longitude.trim()) {
       return null;
     }
-    const lat = Number(latitude);
-    const lon = Number(longitude);
+    const lat = Number(latitude.replace(",", "."));
+    const lon = Number(longitude.replace(",", "."));
     return Number.isFinite(lat) &&
       Number.isFinite(lon) &&
       lat >= -90 &&
@@ -584,6 +512,7 @@ export function AddressAnalysisPage() {
     setManualStreetStatus(null);
     setSelectedPoint(null);
     analyze.reset();
+    connection.reset();
   };
   const error = analyze.error as ApiError | null;
   const updateAddress = (field: keyof AddressFields, value: string) => {
@@ -606,6 +535,7 @@ export function AddressAnalysisPage() {
     }));
     setSelectedPoint(null);
     analyze.reset();
+    connection.reset();
   };
   const resolveSuggestionRegions = async (suggestion: AddressSuggestion) => {
     const resolve = (fields: Partial<AddressSuggestion>) => {
@@ -756,6 +686,7 @@ export function AddressAnalysisPage() {
       confirmed: false,
     });
     analyze.reset();
+    connection.reset();
     let resolved: ResolvedRegion | null = null;
     try {
       resolved = await resolveSuggestionRegions(suggestion);
@@ -927,7 +858,81 @@ export function AddressAnalysisPage() {
       setCoordinateCopyStatus("error");
     }
   };
-
+  const destinationEditor = (
+    <section aria-label="Titik tujuan" className="mt-4 border-top pt-3">
+      {twoPoint ? (
+        <>
+          <div className="d-flex align-items-center justify-content-between gap-3 mb-3">
+            <h4 className="h6 mb-0">B · Titik tujuan</h4>
+            <button
+              className="btn btn-sm btn-outline-secondary"
+              onClick={() => {
+                setTwoPoint(false);
+                setDestination(null);
+                connection.reset();
+                analyze.reset();
+              }}
+              type="button"
+            >
+              Hapus titik tujuan
+            </button>
+          </div>
+          <CompactLocationInput
+            initialCenter={
+              selectedPoint ??
+              (inputMode === "coordinates" ? parsedCoordinates : null)
+            }
+            onChange={(point) => {
+              setDestination(point);
+              connection.reset();
+            }}
+            point={destination}
+          />
+          <label className="form-check mt-3">
+            <input
+              checked={allowExpand2km}
+              className="form-check-input"
+              onChange={(event) => {
+                setAllowExpand2km(event.target.checked);
+                connection.reset();
+              }}
+              type="checkbox"
+            />
+            <span className="form-check-label">
+              Perluas pencarian hingga 2 km
+            </span>
+          </label>
+          <label className="form-label d-block mt-3">
+            Kebutuhan core (opsional)
+            <input
+              className="form-control mt-1"
+              max="4096"
+              min="1"
+              onChange={(event) => {
+                setCoreRequirement(event.target.value);
+                connection.reset();
+              }}
+              step="1"
+              type="number"
+              value={coreRequirement}
+            />
+          </label>
+        </>
+      ) : (
+        <button
+          className="btn btn-outline-primary"
+          onClick={() => {
+            setTwoPoint(true);
+            analyze.reset();
+            connection.reset();
+          }}
+          type="button"
+        >
+          + Tambah titik tujuan
+        </button>
+      )}
+    </section>
+  );
   return (
     <>
       <PageHeader
@@ -939,10 +944,12 @@ export function AddressAnalysisPage() {
           <section className="card panel-card">
             <div className="card-header analysis-form-header">
               <div>
-                <h3>Lokasi pelanggan</h3>
+                <h3>{twoPoint ? "A · Titik awal" : "Lokasi pelanggan"}</h3>
                 <p>Pilih metode input lokasi: alamat rumah atau koordinat.</p>
               </div>
-              <AtlasTag className="is-accent">ANALISIS TUNGGAL</AtlasTag>
+              <AtlasTag className="is-accent">
+                {twoPoint ? "ANALISIS DUA TITIK" : "ANALISIS TUNGGAL"}
+              </AtlasTag>
             </div>
             <div className="card-body">
               {!inputMode && (
@@ -1010,417 +1017,449 @@ export function AddressAnalysisPage() {
                     submitAnalysis();
                   }}
                 >
-                  <div className="row g-3">
-                    <div className="position-relative col-12">
-                      <label
-                        className="form-label fw-semibold"
-                        htmlFor="street"
-                      >
-                        Nama jalan
-                      </label>
-                      <input
-                        aria-autocomplete="list"
-                        aria-controls="address-suggestions"
-                        aria-expanded={
-                          !hideAddressSuggestions &&
-                          !selectedPoint &&
-                          addressQuery.length >= 3 &&
-                          Boolean(suggestionsQuery.data?.length)
-                        }
-                        autoComplete="street-address"
-                        className="form-control"
-                        id="street"
-                        onChange={(event) => {
-                          setHideAddressSuggestions(false);
-                          updateAddress("street", event.target.value);
-                        }}
-                        placeholder="Contoh: Jl. Panjang Arteri Klp. Dua Raya"
-                        role="combobox"
-                        value={address.street}
-                      />
-                      {manualStreetStatus && (
-                        <div
-                          className={`form-text ${manualStreetStatus === "unavailable" ? "text-warning" : ""}`}
-                          role="status"
-                        >
-                          {manualStreetStatus === "loading"
-                            ? "Mencari nama jalan di titik yang dipilih…"
-                            : "Nama jalan tidak tersedia untuk titik ini. Silakan isi manual jika diketahui."}
-                        </div>
+                  <details
+                    className="analysis-point-editor"
+                    open={!selectedPoint?.confirmed}
+                  >
+                    <summary className="mb-3">
+                      <strong>
+                        {twoPoint ? "A · Titik awal" : "Lokasi analisis"}
+                      </strong>
+                      {selectedPoint?.confirmed ? (
+                        <>
+                          <span className="d-block text-break">
+                            {selectedPoint.label}
+                          </span>
+                          <small>
+                            {selectedPoint.latitude.toFixed(6)},{" "}
+                            {selectedPoint.longitude.toFixed(6)} · Dikonfirmasi
+                            · Klik untuk edit
+                          </small>
+                        </>
+                      ) : (
+                        <small className="d-block">
+                          Lengkapi dan konfirmasi lokasi
+                        </small>
                       )}
-                      {!hideAddressSuggestions &&
-                        !selectedPoint &&
-                        addressQuery.length >= 3 && (
+                    </summary>
+                    <div className="row g-3">
+                      <div className="position-relative col-12">
+                        <label
+                          className="form-label fw-semibold"
+                          htmlFor="street"
+                        >
+                          Nama jalan
+                        </label>
+                        <input
+                          aria-autocomplete="list"
+                          aria-controls="address-suggestions"
+                          aria-expanded={
+                            !hideAddressSuggestions &&
+                            !selectedPoint &&
+                            addressQuery.length >= 3 &&
+                            Boolean(suggestionsQuery.data?.length)
+                          }
+                          autoComplete="street-address"
+                          className="form-control"
+                          id="street"
+                          onChange={(event) => {
+                            setHideAddressSuggestions(false);
+                            updateAddress("street", event.target.value);
+                          }}
+                          placeholder="Contoh: Jl. Panjang Arteri Klp. Dua Raya"
+                          role="combobox"
+                          value={address.street}
+                        />
+                        {manualStreetStatus && (
                           <div
-                            aria-label="Saran alamat"
-                            className="list-group position-absolute start-0 end-0 top-100 shadow"
-                            id="address-suggestions"
-                            role="listbox"
-                            style={{ zIndex: 20 }}
+                            className={`form-text ${manualStreetStatus === "unavailable" ? "text-warning" : ""}`}
+                            role="status"
                           >
-                            {debouncedQuery !== addressQuery ||
-                            suggestionsQuery.isFetching ? (
-                              <div className="list-group-item text-secondary">
-                                <span className="spinner-border spinner-border-sm me-2" />
-                                Mencari alamat...
-                              </div>
-                            ) : suggestionsQuery.isError ? (
-                              <div className="list-group-item text-danger">
-                                Saran alamat gagal dimuat. Anda tetap bisa
-                                memilih titik pada peta.
-                              </div>
-                            ) : suggestionsQuery.data?.length ? (
-                              <>
-                                {suggestionsQuery.data.map((suggestion) => (
-                                  <button
-                                    aria-selected={false}
-                                    className="list-group-item list-group-item-action text-start"
-                                    key={suggestion.id}
-                                    onClick={() =>
-                                      void selectSuggestion(suggestion)
-                                    }
-                                    role="option"
-                                    type="button"
-                                  >
-                                    <b className="d-block">
-                                      {suggestion.label}
-                                    </b>
-                                    <small className="text-secondary">
-                                      {[
-                                        suggestion.category,
-                                        suggestion.location,
-                                      ]
-                                        .filter(Boolean)
-                                        .join(", ") || "Kandidat Photon"}{" "}
-                                      · periksa pin pada peta
-                                    </small>
-                                  </button>
-                                ))}
-                                <button
-                                  className="list-group-item list-group-item-action text-primary text-start"
-                                  onClick={() => {
-                                    setHideAddressSuggestions(true);
-                                    setShowPinPicker(true);
-                                  }}
-                                  type="button"
-                                >
-                                  <i className="bi bi-geo-alt me-2" />
-                                  Pilih titik manual di peta
-                                </button>
-                              </>
-                            ) : suggestionsQuery.isSuccess ? (
-                              <div className="list-group-item text-secondary">
-                                Belum ada saran yang cocok. Pilih titik secara
-                                manual pada peta.
-                              </div>
-                            ) : null}
+                            {manualStreetStatus === "loading"
+                              ? "Mencari nama jalan di titik yang dipilih…"
+                              : "Nama jalan tidak tersedia untuk titik ini. Silakan isi manual jika diketahui."}
                           </div>
                         )}
-                    </div>
-                    <div className="col-12">
-                      <div className="fw-semibold">
-                        Pilih Wilayah{" "}
-                        <span className="text-danger">(wajib)</span>
+                        {!hideAddressSuggestions &&
+                          !selectedPoint &&
+                          addressQuery.length >= 3 && (
+                            <div
+                              aria-label="Saran alamat"
+                              className="list-group position-absolute start-0 end-0 top-100 shadow"
+                              id="address-suggestions"
+                              role="listbox"
+                              style={{ zIndex: 20 }}
+                            >
+                              {debouncedQuery !== addressQuery ||
+                              suggestionsQuery.isFetching ? (
+                                <div className="list-group-item text-secondary">
+                                  <span className="spinner-border spinner-border-sm me-2" />
+                                  Mencari alamat...
+                                </div>
+                              ) : suggestionsQuery.isError ? (
+                                <div className="list-group-item text-danger">
+                                  Saran alamat gagal dimuat. Anda tetap bisa
+                                  memilih titik pada peta.
+                                </div>
+                              ) : suggestionsQuery.data?.length ? (
+                                <>
+                                  {suggestionsQuery.data.map((suggestion) => (
+                                    <button
+                                      aria-selected={false}
+                                      className="list-group-item list-group-item-action text-start"
+                                      key={suggestion.id}
+                                      onClick={() =>
+                                        void selectSuggestion(suggestion)
+                                      }
+                                      role="option"
+                                      type="button"
+                                    >
+                                      <b className="d-block">
+                                        {suggestion.label}
+                                      </b>
+                                      <small className="text-secondary">
+                                        {[
+                                          suggestion.category,
+                                          suggestion.location,
+                                        ]
+                                          .filter(Boolean)
+                                          .join(", ") || "Kandidat Photon"}{" "}
+                                        · periksa pin pada peta
+                                      </small>
+                                    </button>
+                                  ))}
+                                  <button
+                                    className="list-group-item list-group-item-action text-primary text-start"
+                                    onClick={() => {
+                                      setHideAddressSuggestions(true);
+                                      setShowPinPicker(true);
+                                    }}
+                                    type="button"
+                                  >
+                                    <i className="bi bi-geo-alt me-2" />
+                                    Pilih titik manual di peta
+                                  </button>
+                                </>
+                              ) : suggestionsQuery.isSuccess ? (
+                                <div className="list-group-item text-secondary">
+                                  Belum ada saran yang cocok. Pilih titik secara
+                                  manual pada peta.
+                                </div>
+                              ) : null}
+                            </div>
+                          )}
                       </div>
-                      <div className="form-text mb-2">
-                        Pilih wilayah untuk mempersempit hasil. Jika belum
-                        dipilih, Anda juga bisa mencari dengan alamat lengkap.
-                      </div>
-                      <div className="row g-3">
-                        <div className="col-md-6">
-                          <label
-                            className="form-label fw-semibold"
-                            htmlFor="province"
-                          >
-                            Provinsi *
-                          </label>
-                          <select
-                            className="form-select"
-                            id="province"
-                            onChange={(event) => {
-                              regionLookupId.current += 1;
-                              setAddress((current) => ({
-                                ...current,
-                                provinceCode: event.target.value,
-                                cityCode: "",
-                                districtCode: "",
-                                subdistrictCode: "",
-                                postalCode: "",
-                              }));
-                              setSelectedPoint(null);
-                              analyze.reset();
-                            }}
-                            required
-                            value={address.provinceCode}
-                          >
-                            <option value="">Pilih provinsi</option>
-                            {[...regions]
-                              .sort((a, b) =>
-                                a.name.localeCompare(b.name, "id")
-                              )
-                              .map((item) => (
+                      <div className="col-12">
+                        <div className="fw-semibold">
+                          Pilih Wilayah{" "}
+                          <span className="text-danger">(wajib)</span>
+                        </div>
+                        <div className="form-text mb-2">
+                          Pilih wilayah untuk mempersempit hasil. Jika belum
+                          dipilih, Anda juga bisa mencari dengan alamat lengkap.
+                        </div>
+                        <div className="row g-3">
+                          <div className="col-md-6">
+                            <label
+                              className="form-label fw-semibold"
+                              htmlFor="province"
+                            >
+                              Provinsi *
+                            </label>
+                            <select
+                              className="form-select"
+                              id="province"
+                              onChange={(event) => {
+                                regionLookupId.current += 1;
+                                setAddress((current) => ({
+                                  ...current,
+                                  provinceCode: event.target.value,
+                                  cityCode: "",
+                                  districtCode: "",
+                                  subdistrictCode: "",
+                                  postalCode: "",
+                                }));
+                                setSelectedPoint(null);
+                                analyze.reset();
+                                connection.reset();
+                              }}
+                              required
+                              value={address.provinceCode}
+                            >
+                              <option value="">Pilih provinsi</option>
+                              {[...regions]
+                                .sort((a, b) =>
+                                  a.name.localeCompare(b.name, "id")
+                                )
+                                .map((item) => (
+                                  <option key={item.code} value={item.code}>
+                                    {item.name}
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                          <div className="col-md-6">
+                            <label
+                              className="form-label fw-semibold"
+                              htmlFor="city"
+                            >
+                              Kabupaten / kota *
+                            </label>
+                            <select
+                              className="form-select"
+                              disabled={!province}
+                              id="city"
+                              onChange={(event) => {
+                                regionLookupId.current += 1;
+                                setAddress((current) => ({
+                                  ...current,
+                                  cityCode: event.target.value,
+                                  districtCode: "",
+                                  subdistrictCode: "",
+                                  postalCode: "",
+                                }));
+                                setSelectedPoint(null);
+                                analyze.reset();
+                                connection.reset();
+                              }}
+                              required
+                              value={address.cityCode}
+                            >
+                              <option value="">Pilih kabupaten/kota</option>
+                              {cities.map((item) => (
                                 <option key={item.code} value={item.code}>
                                   {item.name}
                                 </option>
                               ))}
-                          </select>
-                        </div>
-                        <div className="col-md-6">
-                          <label
-                            className="form-label fw-semibold"
-                            htmlFor="city"
-                          >
-                            Kabupaten / kota *
-                          </label>
-                          <select
-                            className="form-select"
-                            disabled={!province}
-                            id="city"
-                            onChange={(event) => {
-                              regionLookupId.current += 1;
-                              setAddress((current) => ({
-                                ...current,
-                                cityCode: event.target.value,
-                                districtCode: "",
-                                subdistrictCode: "",
-                                postalCode: "",
-                              }));
-                              setSelectedPoint(null);
-                              analyze.reset();
-                            }}
-                            required
-                            value={address.cityCode}
-                          >
-                            <option value="">Pilih kabupaten/kota</option>
-                            {cities.map((item) => (
-                              <option key={item.code} value={item.code}>
-                                {item.name}
+                            </select>
+                          </div>
+                          <div className="col-md-6">
+                            <label
+                              className="form-label fw-semibold"
+                              htmlFor="district"
+                            >
+                              Kecamatan *
+                            </label>
+                            <select
+                              className="form-select"
+                              disabled={!city}
+                              id="district"
+                              onChange={(event) => {
+                                regionLookupId.current += 1;
+                                setAddress((current) => ({
+                                  ...current,
+                                  districtCode: event.target.value,
+                                  subdistrictCode: "",
+                                  postalCode: "",
+                                }));
+                                setSelectedPoint(null);
+                                analyze.reset();
+                                connection.reset();
+                              }}
+                              required
+                              value={address.districtCode}
+                            >
+                              <option value="">Pilih kecamatan</option>
+                              {districts.map((item) => (
+                                <option key={item.code} value={item.code}>
+                                  {item.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="col-md-6">
+                            <label
+                              className="form-label fw-semibold"
+                              htmlFor="subdistrict"
+                            >
+                              Kelurahan / desa *
+                            </label>
+                            <select
+                              className="form-select"
+                              disabled={
+                                !district ||
+                                loadingSubdistricts ||
+                                subdistrictLoadError
+                              }
+                              id="subdistrict"
+                              onChange={(event) => {
+                                regionLookupId.current += 1;
+                                const selected = subdistricts.find(
+                                  (item) => item.code === event.target.value
+                                );
+                                setAddress((current) => ({
+                                  ...current,
+                                  subdistrictCode: event.target.value,
+                                  postalCode: selected?.postalCode ?? "",
+                                }));
+                                setSelectedPoint(null);
+                                analyze.reset();
+                                connection.reset();
+                              }}
+                              required
+                              value={address.subdistrictCode}
+                            >
+                              <option value="">
+                                {loadingSubdistricts
+                                  ? "Memuat daftar..."
+                                  : "Pilih kelurahan/desa"}
                               </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="col-md-6">
-                          <label
-                            className="form-label fw-semibold"
-                            htmlFor="district"
-                          >
-                            Kecamatan *
-                          </label>
-                          <select
-                            className="form-select"
-                            disabled={!city}
-                            id="district"
-                            onChange={(event) => {
-                              regionLookupId.current += 1;
-                              setAddress((current) => ({
-                                ...current,
-                                districtCode: event.target.value,
-                                subdistrictCode: "",
-                                postalCode: "",
-                              }));
-                              setSelectedPoint(null);
-                              analyze.reset();
-                            }}
-                            required
-                            value={address.districtCode}
-                          >
-                            <option value="">Pilih kecamatan</option>
-                            {districts.map((item) => (
-                              <option key={item.code} value={item.code}>
-                                {item.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="col-md-6">
-                          <label
-                            className="form-label fw-semibold"
-                            htmlFor="subdistrict"
-                          >
-                            Kelurahan / desa *
-                          </label>
-                          <select
-                            className="form-select"
-                            disabled={
-                              !district ||
-                              loadingSubdistricts ||
-                              subdistrictLoadError
-                            }
-                            id="subdistrict"
-                            onChange={(event) => {
-                              regionLookupId.current += 1;
-                              const selected = subdistricts.find(
-                                (item) => item.code === event.target.value
-                              );
-                              setAddress((current) => ({
-                                ...current,
-                                subdistrictCode: event.target.value,
-                                postalCode: selected?.postalCode ?? "",
-                              }));
-                              setSelectedPoint(null);
-                              analyze.reset();
-                            }}
-                            required
-                            value={address.subdistrictCode}
-                          >
-                            <option value="">
-                              {loadingSubdistricts
-                                ? "Memuat daftar..."
-                                : "Pilih kelurahan/desa"}
-                            </option>
-                            {subdistricts.map(({ code, name }) => (
-                              <option key={code} value={code}>
-                                {name}
-                              </option>
-                            ))}
-                          </select>
-                          {subdistrictLoadError && (
-                            <div className="form-text text-danger">
-                              Daftar kelurahan/desa gagal dimuat. Coba pilih
-                              ulang kabupaten/kota.
-                            </div>
-                          )}
-                        </div>
-                        <div className="col-md-6">
-                          <label
-                            className="form-label fw-semibold"
-                            htmlFor="street-number"
-                          >
-                            Nomor rumah
-                          </label>
-                          <input
-                            className="form-control"
-                            id="street-number"
-                            onChange={(event) =>
-                              updateAddress("number", event.target.value)
-                            }
-                            placeholder="Contoh: 12 atau A-12"
-                            value={address.number}
-                          />
-                        </div>
-                        <div className="col-md-6">
-                          <label
-                            className="form-label fw-semibold"
-                            htmlFor="postal-code"
-                          >
-                            Kode pos
-                          </label>
-                          <input
-                            autoComplete="postal-code"
-                            className="form-control"
-                            id="postal-code"
-                            inputMode="numeric"
-                            maxLength={5}
-                            onChange={(event) =>
-                              updateAddress("postalCode", event.target.value)
-                            }
-                            pattern="[0-9]{5}"
-                            placeholder="Opsional"
-                            value={address.postalCode}
-                          />
-                          {postalRegionQuery.data && (
-                            <div className="form-text">
-                              Wilayah ditemukan dari kode pos. Pastikan
-                              kelurahan sesuai dengan nama jalan.
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  {(selectedPoint ||
-                    selectedRegionName ||
-                    showPinPicker ||
-                    (addressQuery.length >= 3 &&
-                      debouncedQuery === addressQuery &&
-                      suggestionsQuery.isSuccess &&
-                      !suggestionsQuery.data?.length) ||
-                    suggestionsQuery.isError) && (
-                    <div className="mt-3" ref={pinPickerRef}>
-                      <div className="d-flex align-items-center justify-content-between mb-2 gap-2">
-                        <b>Pilih atau periksa titik alamat</b>
-                        {selectedPoint && (
-                          <small className="text-secondary">
-                            {selectedPoint.latitude.toFixed(6)},{" "}
-                            {selectedPoint.longitude.toFixed(6)}
-                          </small>
-                        )}
-                      </div>
-                      <AddressPinPicker
-                        onChange={(longitude, latitude) => {
-                          setManualStreetStatus("loading");
-                          setAddress((current) => ({
-                            ...current,
-                            street: "",
-                            number: "",
-                          }));
-                          void resolvePointRegions(longitude, latitude);
-                          setSelectedPoint(() => ({
-                            longitude,
-                            latitude,
-                            label: "Titik dipilih manual",
-                            provider: "manual",
-                            confirmed: false,
-                          }));
-                          analyze.reset();
-                        }}
-                        onViewportChange={setSearchViewport}
-                        point={selectedPoint}
-                        regionView={regionMapQuery.data ?? null}
-                      />
-                      <div className="form-text">
-                        {selectedPoint
-                          ? "Klik peta atau geser pin untuk mengoreksi posisi."
-                          : selectedRegionName
-                            ? `Peta diarahkan ke perkiraan area ${subdistrict ? "kelurahan" : district ? "kecamatan" : city ? "kabupaten/kota" : "provinsi"} ${selectedRegionName}. Klik lokasi yang tepat untuk menaruh pin.`
-                            : "Arahkan kursor ke lokasi yang tepat, lalu klik peta untuk menaruh pin."}
-                      </div>
-                      {selectedPoint && (
-                        <div
-                          className={`alert ${selectedPoint.confirmed ? "alert-success" : "alert-warning"} mt-2 mb-0 py-2`}
-                        >
-                          <div>
-                            <b>
-                              {selectedPoint.confirmed
-                                ? "Titik dikonfirmasi"
-                                : "Periksa lokasi sebelum lanjut"}
-                            </b>
-                            <div>{selectedPoint.label}</div>
-                            {selectedPoint.matchQuality === "approximate" && (
-                              <small>
-                                Nama jalan kandidat:{" "}
-                                {selectedPoint.matchedStreet ??
-                                  "tidak tersedia"}
-                                . Pastikan pin berada di alamat yang dimaksud.
-                              </small>
+                              {subdistricts.map(({ code, name }) => (
+                                <option key={code} value={code}>
+                                  {name}
+                                </option>
+                              ))}
+                            </select>
+                            {subdistrictLoadError && (
+                              <div className="form-text text-danger">
+                                Daftar kelurahan/desa gagal dimuat. Coba pilih
+                                ulang kabupaten/kota.
+                              </div>
                             )}
                           </div>
-                          {!selectedPoint.confirmed && (
-                            <button
-                              className="btn btn-sm btn-outline-primary mt-2"
-                              onClick={() =>
-                                setSelectedPoint((current) =>
-                                  current
-                                    ? { ...current, confirmed: true }
-                                    : current
-                                )
-                              }
-                              type="button"
+                          <div className="col-md-6">
+                            <label
+                              className="form-label fw-semibold"
+                              htmlFor="street-number"
                             >
-                              Konfirmasi titik ini
-                            </button>
+                              Nomor rumah
+                            </label>
+                            <input
+                              className="form-control"
+                              id="street-number"
+                              onChange={(event) =>
+                                updateAddress("number", event.target.value)
+                              }
+                              placeholder="Contoh: 12 atau A-12"
+                              value={address.number}
+                            />
+                          </div>
+                          <div className="col-md-6">
+                            <label
+                              className="form-label fw-semibold"
+                              htmlFor="postal-code"
+                            >
+                              Kode pos
+                            </label>
+                            <input
+                              autoComplete="postal-code"
+                              className="form-control"
+                              id="postal-code"
+                              inputMode="numeric"
+                              maxLength={5}
+                              onChange={(event) =>
+                                updateAddress("postalCode", event.target.value)
+                              }
+                              pattern="[0-9]{5}"
+                              placeholder="Opsional"
+                              value={address.postalCode}
+                            />
+                            {postalRegionQuery.data && (
+                              <div className="form-text">
+                                Wilayah ditemukan dari kode pos. Pastikan
+                                kelurahan sesuai dengan nama jalan.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    {(selectedPoint ||
+                      selectedRegionName ||
+                      showPinPicker ||
+                      (addressQuery.length >= 3 &&
+                        debouncedQuery === addressQuery &&
+                        suggestionsQuery.isSuccess &&
+                        !suggestionsQuery.data?.length) ||
+                      suggestionsQuery.isError) && (
+                      <div className="mt-3" ref={pinPickerRef}>
+                        <div className="d-flex align-items-center justify-content-between mb-2 gap-2">
+                          <b>Pilih atau periksa titik alamat</b>
+                          {selectedPoint && (
+                            <small className="text-secondary">
+                              {selectedPoint.latitude.toFixed(6)},{" "}
+                              {selectedPoint.longitude.toFixed(6)}
+                            </small>
                           )}
                         </div>
-                      )}
+                        <AddressPinPicker
+                          onChange={(longitude, latitude) => {
+                            setManualStreetStatus("loading");
+                            setAddress((current) => ({
+                              ...current,
+                              street: "",
+                              number: "",
+                            }));
+                            void resolvePointRegions(longitude, latitude);
+                            setSelectedPoint(() => ({
+                              longitude,
+                              latitude,
+                              label: "Titik dipilih manual",
+                              provider: "manual",
+                              confirmed: false,
+                            }));
+                            analyze.reset();
+                            connection.reset();
+                          }}
+                          onViewportChange={setSearchViewport}
+                          point={selectedPoint}
+                          regionView={regionMapQuery.data ?? null}
+                        />
+                        <div className="form-text">
+                          {selectedPoint
+                            ? "Klik peta atau geser pin untuk mengoreksi posisi."
+                            : selectedRegionName
+                              ? `Peta diarahkan ke perkiraan area ${subdistrict ? "kelurahan" : district ? "kecamatan" : city ? "kabupaten/kota" : "provinsi"} ${selectedRegionName}. Klik lokasi yang tepat untuk menaruh pin.`
+                              : "Arahkan kursor ke lokasi yang tepat, lalu klik peta untuk menaruh pin."}
+                        </div>
+                        {selectedPoint && (
+                          <div
+                            className={`alert ${selectedPoint.confirmed ? "alert-success" : "alert-warning"} mt-2 mb-0 py-2`}
+                          >
+                            <div>
+                              <b>
+                                {selectedPoint.confirmed
+                                  ? "Titik dikonfirmasi"
+                                  : "Periksa lokasi sebelum lanjut"}
+                              </b>
+                              <div>{selectedPoint.label}</div>
+                              {selectedPoint.matchQuality === "approximate" && (
+                                <small>
+                                  Nama jalan kandidat:{" "}
+                                  {selectedPoint.matchedStreet ??
+                                    "tidak tersedia"}
+                                  . Pastikan pin berada di alamat yang dimaksud.
+                                </small>
+                              )}
+                            </div>
+                            {!selectedPoint.confirmed && (
+                              <button
+                                className="btn btn-sm btn-outline-primary mt-2"
+                                onClick={() =>
+                                  setSelectedPoint((current) =>
+                                    current
+                                      ? { ...current, confirmed: true }
+                                      : current
+                                  )
+                                }
+                                type="button"
+                              >
+                                Konfirmasi titik ini
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="form-text mt-3">
+                      <i className="bi bi-info-circle me-1" />
+                      Ketik dan pilih saran nama jalan untuk mengisi wilayah
+                      otomatis. Jika hasil wilayah tidak tersedia, Anda dapat
+                      memilihnya manual.
                     </div>
-                  )}
-                  <div className="form-text mt-3">
-                    <i className="bi bi-info-circle me-1" />
-                    Ketik dan pilih saran nama jalan untuk mengisi wilayah
-                    otomatis. Jika hasil wilayah tidak tersedia, Anda dapat
-                    memilihnya manual.
-                  </div>
-                  <div className="d-flex justify-content-between align-items-center mt-4">
+                  </details>
+                  {destinationEditor}
+                  <div className="d-flex flex-wrap gap-3 justify-content-between align-items-center mt-4">
                     <button
                       className="btn btn-link text-secondary p-0"
                       onClick={() => {
@@ -1440,6 +1479,7 @@ export function AddressAnalysisPage() {
                         setHideAddressSuggestions(false);
                         setDebouncedQuery("");
                         analyze.reset();
+                        connection.reset();
                       }}
                       type="button"
                     >
@@ -1449,13 +1489,15 @@ export function AddressAnalysisPage() {
                       className="btn btn-primary px-4"
                       disabled={
                         analyze.isPending ||
+                        connection.isPending ||
+                        (twoPoint && !destination?.confirmed) ||
                         !address.street.trim() ||
                         !hasSearchArea ||
                         !selectedPoint?.confirmed
                       }
                       type="submit"
                     >
-                      {analyze.isPending ? (
+                      {analyze.isPending || connection.isPending ? (
                         <>
                           <span className="spinner-border spinner-border-sm me-2" />
                           Menganalisis...
@@ -1463,7 +1505,9 @@ export function AddressAnalysisPage() {
                       ) : (
                         <>
                           <i className="bi bi-search me-2" />
-                          Analisis jaringan
+                          {twoPoint
+                            ? "Analisis koneksi A–B"
+                            : "Analisis jaringan"}
                         </>
                       )}
                     </button>
@@ -1487,72 +1531,104 @@ export function AddressAnalysisPage() {
                     submitAnalysis(point);
                   }}
                 >
-                  <div className="row g-3">
-                    <div className="col-md-6">
-                      <label
-                        className="form-label fw-semibold"
-                        htmlFor="coordinate-latitude"
-                      >
-                        Latitude
-                      </label>
-                      <input
-                        className="form-control"
-                        id="coordinate-latitude"
-                        max="90"
-                        min="-90"
-                        onChange={(event) => {
-                          setCoordinateDraft((current) => ({
-                            ...current,
-                            latitude: event.target.value,
-                          }));
-                          setSelectedPoint(null);
-                          analyze.reset();
-                        }}
-                        placeholder="Contoh: -6.1754"
-                        required
-                        step="any"
-                        type="number"
-                        value={coordinateDraft.latitude}
-                      />
+                  <details
+                    className="analysis-point-editor"
+                    open={!selectedPoint?.confirmed}
+                  >
+                    <summary className="mb-3">
+                      <strong>
+                        {twoPoint ? "A · Titik awal" : "Lokasi analisis"}
+                      </strong>
+                      {selectedPoint?.confirmed ? (
+                        <>
+                          <span className="d-block text-break">
+                            {selectedPoint.label}
+                          </span>
+                          <small>
+                            {selectedPoint.latitude.toFixed(6)},{" "}
+                            {selectedPoint.longitude.toFixed(6)} · Dikonfirmasi
+                            · Klik untuk edit
+                          </small>
+                        </>
+                      ) : (
+                        <small className="d-block">
+                          Lengkapi dan konfirmasi lokasi
+                        </small>
+                      )}
+                    </summary>
+                    <div className="row g-3">
+                      <div className="col-md-6">
+                        <label
+                          className="form-label fw-semibold"
+                          htmlFor="coordinate-latitude"
+                        >
+                          Latitude
+                        </label>
+                        <input
+                          className="form-control"
+                          id="coordinate-latitude"
+                          inputMode="decimal"
+                          max="90"
+                          min="-90"
+                          onChange={(event) => {
+                            setCoordinateDraft((current) => ({
+                              ...current,
+                              latitude: event.target.value,
+                            }));
+                            setSelectedPoint(null);
+                            analyze.reset();
+                            connection.reset();
+                          }}
+                          placeholder="Contoh: -6.1754"
+                          required
+                          step="any"
+                          type="text"
+                          value={coordinateDraft.latitude}
+                        />
+                      </div>
+                      <div className="col-md-6">
+                        <label
+                          className="form-label fw-semibold"
+                          htmlFor="coordinate-longitude"
+                        >
+                          Longitude
+                        </label>
+                        <input
+                          className="form-control"
+                          id="coordinate-longitude"
+                          inputMode="decimal"
+                          max="180"
+                          min="-180"
+                          onChange={(event) => {
+                            setCoordinateDraft((current) => ({
+                              ...current,
+                              longitude: event.target.value,
+                            }));
+                            setSelectedPoint(null);
+                            analyze.reset();
+                            connection.reset();
+                          }}
+                          placeholder="Contoh: 106.8272"
+                          required
+                          step="any"
+                          type="text"
+                          value={coordinateDraft.longitude}
+                        />
+                      </div>
                     </div>
-                    <div className="col-md-6">
-                      <label
-                        className="form-label fw-semibold"
-                        htmlFor="coordinate-longitude"
-                      >
-                        Longitude
-                      </label>
-                      <input
-                        className="form-control"
-                        id="coordinate-longitude"
-                        max="180"
-                        min="-180"
-                        onChange={(event) => {
-                          setCoordinateDraft((current) => ({
-                            ...current,
-                            longitude: event.target.value,
-                          }));
-                          setSelectedPoint(null);
-                          analyze.reset();
-                        }}
-                        placeholder="Contoh: 106.8272"
-                        required
-                        step="any"
-                        type="number"
-                        value={coordinateDraft.longitude}
-                      />
+                    <div className="form-text mt-2">
+                      Latitude: -90 sampai 90. Longitude: -180 sampai 180.
                     </div>
-                  </div>
-                  <div className="form-text mt-2">
-                    Latitude: -90 sampai 90. Longitude: -180 sampai 180.
-                  </div>
-                  <div className="d-flex justify-content-between align-items-center mt-4">
+                  </details>
+                  {destinationEditor}
+                  <div className="d-flex flex-wrap gap-3 justify-content-between align-items-center mt-4">
                     <button
                       className="btn btn-link text-secondary p-0"
                       onClick={() => {
                         setCoordinateDraft({ latitude: "", longitude: "" });
                         setSelectedPoint(null);
                         analyze.reset();
+                        connection.reset();
                       }}
                       type="button"
                     >
@@ -1560,10 +1636,15 @@ export function AddressAnalysisPage() {
                     </button>
                     <button
                       className="btn btn-primary px-4"
-                      disabled={analyze.isPending || !parsedCoordinates}
+                      disabled={
+                        analyze.isPending ||
+                        connection.isPending ||
+                        (twoPoint && !destination?.confirmed) ||
+                        !parsedCoordinates
+                      }
                       type="submit"
                     >
-                      {analyze.isPending ? (
+                      {analyze.isPending || connection.isPending ? (
                         <>
                           <span className="spinner-border spinner-border-sm me-2" />
                           Menganalisis...
@@ -1571,12 +1652,16 @@ export function AddressAnalysisPage() {
                       ) : selectedPoint?.confirmed ? (
                         <>
                           <i className="bi bi-search me-2" />
-                          Analisis jaringan
+                          {twoPoint
+                            ? "Analisis koneksi A–B"
+                            : "Analisis jaringan"}
                         </>
                       ) : (
                         <>
                           <i className="bi bi-search me-2" />
-                          Analisis jaringan
+                          {twoPoint
+                            ? "Analisis koneksi A–B"
+                            : "Analisis jaringan"}
                         </>
                       )}
                     </button>
@@ -1590,26 +1675,54 @@ export function AddressAnalysisPage() {
             <p>
               <b>Bagaimana hasil dihitung?</b>
               <br />
-              ATLAS menggunakan titik yang Anda pilih, mencari segmen terdekat,
-              lalu menghitung jarak mengikuti jalan jika layanan routing
-              tersedia.
+              {twoPoint ? (
+                "Analisis mencari jalur melalui jaringan di antara A dan B. Kedekatan geometri tidak membuktikan sambungan fisik atau ketersediaan core."
+              ) : (
+                <>
+                  ATLAS memilih terminasi dengan jalur jalan terpendek. Rute A
+                  dan B menuju terminasi yang sama, tetapi memakai jalur
+                  berbeda. Rute B ditampilkan jika jalur alternatif tersedia.
+                </>
+              )}
             </p>
           </div>
         </div>
         <div className={inputMode === "coordinates" ? "col-12" : "col-lg-5"}>
-          {analyze.data ? (
+          {twoPoint ? (
+            <section className="card panel-card">
+              <div className="card-body">
+                {connection.isPending ? (
+                  <p role="status">Menganalisis jalur A–B…</p>
+                ) : connection.error ? (
+                  <div className="alert alert-danger" role="alert">
+                    {connection.error.message} Coba analisis kembali.
+                  </div>
+                ) : connection.data ? (
+                  <ConnectionAnalysisResult
+                    key={connection.data.historyId}
+                    result={connection.data}
+                  />
+                ) : (
+                  <p className="text-secondary mb-0">
+                    Konfirmasi titik awal A dan tujuan B, lalu analisis
+                    koneksinya.
+                  </p>
+                )}
+              </div>
+            </section>
+          ) : analyze.data && selectedResult ? (
             <section className="card panel-card result-card">
               <div
-                className={`result-success ${analyze.data.distanceMeters === null ? "result-pending" : ""}`}
+                className={`result-success ${selectedResult.distanceMeters === null ? "result-pending" : ""}`}
               >
                 <span>
                   <i
-                    className={`bi ${analyze.data.distanceMeters === null ? "bi-info-lg" : "bi-check-lg"}`}
+                    className={`bi ${selectedResult.distanceMeters === null ? "bi-info-lg" : "bi-check-lg"}`}
                   />
                 </span>
                 <div>
                   <b>
-                    {analyze.data.distanceMeters === null
+                    {selectedResult.distanceMeters === null
                       ? "Hasil parsial"
                       : "Analisis berhasil"}
                   </b>
@@ -1693,43 +1806,43 @@ export function AddressAnalysisPage() {
                   </small>
                 )}
                 <hr />
-                <div className="detail-label">TERMINASI TERDEKAT</div>
-                {analyze.data.network ? (
+                <div className="detail-label">TUJUAN RUTE TERPILIH</div>
+                {selectedResult.network ? (
                   <>
                     <DetailTable
                       label="Informasi jaringan terdekat"
                       rows={[
                         {
-                          label: "Jaringan terdekat",
-                          value: analyze.data.network.name,
+                          label: "Perangkat tujuan",
+                          value: selectedResult.network.name,
                         },
                         {
                           label: "Area",
-                          value: analyze.data.network.area,
+                          value: selectedResult.network.area,
                         },
                         {
                           label: "Jenis kabel",
-                          value: analyze.data.network.cableType,
+                          value: selectedResult.network.cableType,
                         },
                         {
                           label: "Radius ditemukan",
-                          value: `${analyze.data.network.searchRadiusMeters ?? 1000} m`,
+                          value: `${selectedResult.network.searchRadiusMeters ?? 1000} m`,
                         },
                         {
-                          label: "Jarak lurus",
-                          value: `${Math.round(analyze.data.network.straightDistanceMeters ?? 0)} m`,
+                          label: "Jarak lurus ke tujuan",
+                          value: `${Math.round(selectedResult.network.straightDistanceMeters ?? 0)} m`,
                         },
                         {
-                          label: "Estimasi panjang kabel mengikuti jalan mobil",
+                          label: `Jarak Rute ${activeRouteId} mengikuti jalan`,
                           value:
-                            analyze.data.distanceMeters === null
+                            selectedResult.distanceMeters === null
                               ? "Belum tersedia"
-                              : `${(analyze.data.distanceMeters / 1000).toFixed(2)} km`,
+                              : `${(selectedResult.distanceMeters / 1000).toFixed(2)} km`,
                         },
                       ]}
                     />
                     <NetworkCapacityDetail
-                      capacity={analyze.data.network.capacity}
+                      capacity={selectedResult.network.capacity}
                     />
                   </>
                 ) : (
@@ -1759,7 +1872,7 @@ export function AddressAnalysisPage() {
                   </div>
                 )}
                 <TerminationDetail data={analyze.data.terminations} />
-                {analyze.data.network &&
+                {selectedResult.network &&
                   analyze.data.terminations?.points.length === 0 &&
                   analyze.data.terminations.searchRadiusMeters === 1000 && (
                     <button
@@ -1808,27 +1921,31 @@ export function AddressAnalysisPage() {
           )}
         </div>
       </div>
-      {analyze.data && (
+      {!twoPoint && analyze.data && (
         <section className="card panel-card mt-4">
           <div className="card-header">
             <div>
-              <h3>Peta lokasi</h3>
-              <p>
-                Jaringan terdekat dalam radius 500 m, 1 km, atau 2 km setelah
-                persetujuan.
-              </p>
+              <h3>Perbandingan rute</h3>
+              <p>Pilih rute untuk menampilkan jalurnya pada peta.</p>
             </div>
           </div>
           <div className="card-body">
-            <NearestNetworkMap key={analyze.data.historyId} result={analyze.data} />
+            {selectedResult && (
+              <NearestNetworkMap
+                key={analyze.data.historyId}
+                onSelectRoute={setSelectedRouteId}
+                result={selectedResult}
+                selectedRouteId={activeRouteId}
+              />
+            )}
             <SubmitSurveyButton
               historyId={analyze.data.historyId}
               key={analyze.data.historyId}
               latitude={analyze.data.latitude}
               longitude={analyze.data.longitude}
-              plan={analyze.data.terminationPlan}
-              planRequired={Boolean(analyze.data.terminationPlan)}
-              requireProposal={!analyze.data.network}
+              plan={selectedResult?.terminationPlan}
+              planRequired={Boolean(selectedResult?.terminationPlan)}
+              requireProposal={!selectedResult?.network}
             />
             <small className="d-block text-secondary mt-2">
               Lingkaran: radius pencarian. Klik aset atau jalur untuk melihat
