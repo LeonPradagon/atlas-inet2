@@ -2000,20 +2000,6 @@ export function MapPage() {
         }
       }
 
-      if (first) {
-        features.push({
-          type: "Feature",
-          properties: { featureType: "endpoint", side: "A" },
-          geometry: { type: "Point", coordinates: first },
-        });
-      }
-      if (last) {
-        features.push({
-          type: "Feature",
-          properties: { featureType: "endpoint", side: "B" },
-          geometry: { type: "Point", coordinates: last },
-        });
-      }
     }
 
     source.setData({ type: "FeatureCollection", features });
@@ -2508,56 +2494,6 @@ export function MapPage() {
           "circle-color": "#fff",
           "circle-stroke-width": 3,
           "circle-stroke-color": "#f29b38",
-        },
-      });
-      instance.addLayer({
-        id: "selected-cable-endpoint-a-label",
-        type: "symbol",
-        source: "selected-cable-highlight",
-        filter: [
-          "all",
-          ["==", ["get", "featureType"], "endpoint"],
-          ["==", ["get", "side"], "A"],
-        ],
-        layout: {
-          "text-field": ["get", "side"],
-          "text-font": ["Open Sans Semibold"],
-          "text-size": 13,
-          "text-offset": [0, -1.7],
-          "text-anchor": "bottom",
-          "text-padding": 3,
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
-        },
-        paint: {
-          "text-color": "#175cd3",
-          "text-halo-color": "#ffffff",
-          "text-halo-width": 2.5,
-        },
-      });
-      instance.addLayer({
-        id: "selected-cable-endpoint-b-label",
-        type: "symbol",
-        source: "selected-cable-highlight",
-        filter: [
-          "all",
-          ["==", ["get", "featureType"], "endpoint"],
-          ["==", ["get", "side"], "B"],
-        ],
-        layout: {
-          "text-field": ["get", "side"],
-          "text-font": ["Open Sans Semibold"],
-          "text-size": 13,
-          "text-offset": [0, 1.7],
-          "text-anchor": "top",
-          "text-padding": 3,
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
-        },
-        paint: {
-          "text-color": "#7f56d9",
-          "text-halo-color": "#ffffff",
-          "text-halo-width": 2.5,
         },
       });
       instance.addLayer({
