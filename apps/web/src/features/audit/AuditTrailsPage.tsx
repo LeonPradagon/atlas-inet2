@@ -1,3 +1,4 @@
+import { DataTableShell } from "../../components/DataTable";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../../components/PageHeader";
@@ -77,23 +78,33 @@ function httpStatus(details: AuditEntry["details"]) {
 
 export function AuditTrailsPage() {
   const [search, setSearch] = useState("");
+  const [activityType, setActivityType] = useState("all");
   const [page, setPage] = useState(1);
   const me = useQuery({ queryKey: ["me"], queryFn: () => api<User>("/me") });
   const audit = useQuery({
-    queryKey: ["audit-trails", search],
+    queryKey: ["audit-trails", search, activityType],
     queryFn: () =>
       api<AuditEntry[]>(
-        `/audit-trails?limit=250${search.trim() ? `&search=${encodeURIComponent(search.trim())}` : ""}`
+        `/audit-trails?limit=250&kind=${activityType}${search.trim() ? `&search=${encodeURIComponent(search.trim())}` : ""}`
       ),
     enabled: me.data?.role === "ADMIN",
     refetchInterval: 30_000,
   });
-  const pageCount = Math.max(
-    1,
-    Math.ceil((audit.data?.length ?? 0) / auditPageSize)
+  const entries = (audit.data ?? []).filter((entry) => {
+    const technical =
+      entry.entityType === "API" ||
+      entry.action.startsWith("HTTP") ||
+      Boolean(entry.details?.method && entry.details?.path);
+    return (
+      activityType === "all" ||
+      (activityType === "technical" ? technical : !technical)
+    );
+  });
+  const pageCount = Math.max(1, Math.ceil(entries.length / auditPageSize));
+  const visibleEntries = entries.slice(
+    (page - 1) * auditPageSize,
+    page * auditPageSize
   );
-  const visibleEntries =
-    audit.data?.slice((page - 1) * auditPageSize, page * auditPageSize) ?? [];
   useEffect(() => {
     if (page > pageCount) {
       setPage(pageCount);
@@ -159,6 +170,24 @@ export function AuditTrailsPage() {
               />
             </div>
           </div>
+          <div className="px-3 pb-3">
+            <label className="form-label" htmlFor="audit-kind">
+              Jenis aktivitas
+            </label>
+            <select
+              id="audit-kind"
+              className="form-select"
+              value={activityType}
+              onChange={(event) => {
+                setActivityType(event.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="all">Semua aktivitas</option>
+              <option value="business">Aktivitas bisnis</option>
+              <option value="technical">Permintaan API / teknis</option>
+            </select>
+          </div>
           {audit.isPending ? (
             <div className="py-5 text-center">
               <span className="spinner-border spinner-border-sm me-2" />
@@ -169,8 +198,8 @@ export function AuditTrailsPage() {
               <i className="bi bi-exclamation-circle me-2" />
               {error}
             </div>
-          ) : audit.data?.length ? (
-            <div className="table-responsive">
+          ) : entries.length ? (
+            <DataTableShell label="Riwayat aktivitas">
               <table className="table table-hover atlas-data-table audit-table mb-0 align-middle">
                 <thead>
                   <tr>
@@ -228,7 +257,7 @@ export function AuditTrailsPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </DataTableShell>
           ) : (
             <div className="empty-result py-5">
               <div className="empty-illustration">
@@ -247,10 +276,10 @@ export function AuditTrailsPage() {
             onPageChange={setPage}
             page={page}
             pageSize={auditPageSize}
-            total={audit.data?.length ?? 0}
+            total={entries.length}
           />
           <div className="card-footer text-secondary small">
-            Menampilkan maksimum 250 aktivitas terbaru.
+            Menampilkan maksimum 250 aktivitas terbaru sesuai jenis dan pencarian.
           </div>
         </section>
       ) : (

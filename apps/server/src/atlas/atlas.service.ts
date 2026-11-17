@@ -614,7 +614,12 @@ export class AtlasService {
         SELECT h.id,h.analysis_type AS "analysisType",h.title,h.result->>'status' AS status,
           CASE WHEN h.analysis_type='BULK' THEN COALESCE(j.total_rows,jsonb_array_length(COALESCE(h.result->'rows','[]'::jsonb)))
                WHEN h.analysis_type='FTTH_DESIGN' THEN COALESCE((h.result->>'savedCount')::int,0)
+               WHEN h.result->>'mode'='connection' OR h.result->>'inputMode'='connection' THEN 2
                ELSE 1 END AS "itemCount",
+          CASE WHEN h.result->>'mode'='connection' OR h.result->>'inputMode'='connection'
+            THEN concat_ws(' → ',concat_ws(', ',h.result->'start'->>'latitude',h.result->'start'->>'longitude'),concat_ws(', ',h.result->'end'->>'latitude',h.result->'end'->>'longitude'))
+            ELSE NULLIF(concat_ws(', ',h.result->>'latitude',h.result->>'longitude'),'') END AS "locationSummary",
+          h.result->'network'->>'name' AS "networkName",
           h.created_at AS "createdAt",j.id AS "bulkJobId",j.status AS "jobStatus",j.processed_rows AS "processedRows",
           j.succeeded_rows AS "succeededRows",j.failed_rows AS "failedRows"
         FROM analysis_history h LEFT JOIN analysis_bulk_jobs j ON j.history_id=h.id
@@ -746,14 +751,15 @@ export class AtlasService {
       );
     });
   }
-  async listAuditTrails(search = "", limit = 100) {
+  async listAuditTrails(search = "", limit = 100, kind = "all") {
     const { rows } = await this.db.query(
       `SELECT l.id,l.action,l.entity_type AS "entityType",l.entity_id AS "entityId",l.details,
       l.created_at AS "createdAt",u.name AS "actorName",u.email AS "actorEmail"
       FROM audit_logs l LEFT JOIN "user" u ON u.id=l.actor_id
-      WHERE $1='' OR l.action ILIKE '%'||$1||'%' OR l.entity_type ILIKE '%'||$1||'%' OR l.entity_id ILIKE '%'||$1||'%' OR u.name ILIKE '%'||$1||'%' OR u.email ILIKE '%'||$1||'%'
+      WHERE ($1='' OR l.action ILIKE '%'||$1||'%' OR l.entity_type ILIKE '%'||$1||'%' OR l.entity_id ILIKE '%'||$1||'%' OR u.name ILIKE '%'||$1||'%' OR u.email ILIKE '%'||$1||'%')
+      AND ($3='all' OR ($3='technical') = (l.entity_type='API' OR l.action LIKE 'HTTP%' OR COALESCE((l.details ? 'method' AND l.details ? 'path'),false)))
       ORDER BY l.created_at DESC,l.id DESC LIMIT $2`,
-      [search.trim(), Math.max(1, Math.min(250, limit))]
+      [search.trim(), Math.max(1, Math.min(250, limit)), ["business", "technical"].includes(kind) ? kind : "all"]
     );
     return rows;
   }

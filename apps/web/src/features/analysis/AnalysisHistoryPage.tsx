@@ -1,3 +1,4 @@
+import { formatDistance } from "../../lib/format";
 import { useQuery } from "@tanstack/react-query";
 import ExcelJS from "exceljs";
 import type { FeatureCollection, LineString, Point, Polygon } from "geojson";
@@ -32,6 +33,8 @@ type HistoryItem = {
   title: string;
   status: string | null;
   itemCount: number;
+  locationSummary?: string | null;
+  networkName?: string | null;
   createdAt: string;
   bulkJobId?: string | null;
   jobStatus?: string | null;
@@ -601,7 +604,7 @@ function BulkHistoryDetail({
                 </td>
                 <td>{row.network?.name ?? "—"}</td>
                 <td>
-                  {row.distanceMeters == null ? "—" : `${row.distanceMeters} m`}
+                  {formatDistance(row.distanceMeters)}
                 </td>
                 <td>
                   {row.status}
@@ -1024,7 +1027,7 @@ export function AnalysisHistoryPage() {
                     <td>
                       <span className="atlas-tag">
                         {item.analysisType === "ADDRESS"
-                          ? "Analisis alamat"
+                          ? `Analisis ${item.itemCount === 2 ? "2 titik" : "1 titik"}`
                           : item.analysisType === "BULK"
                             ? "Analisis massal"
                             : "Draft FTTH"}
@@ -1032,6 +1035,8 @@ export function AnalysisHistoryPage() {
                     </td>
                     <th className="text-break" scope="row">
                       {item.title}
+                      {item.locationSummary && <small className="d-block text-secondary mt-1">{item.locationSummary}</small>}
+                      {item.networkName && <small className="d-block mt-1">{item.networkName}</small>}
                     </th>
                     <td>
                       {item.bulkJobId ? (
@@ -1191,9 +1196,7 @@ export function AnalysisHistoryPage() {
                         {
                           label: "Estimasi panjang kabel via jalan mobil",
                           value:
-                            result.distanceMeters == null
-                              ? "—"
-                              : `${result.distanceMeters} m`,
+                            formatDistance(result.distanceMeters as number | null),
                         },
                         {
                           label: "Jaringan terdekat",

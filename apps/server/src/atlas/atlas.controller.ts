@@ -196,10 +196,11 @@ export class AtlasController {
   async auditTrails(
     @Req() req: IncomingMessage,
     @Query("search") search?: string,
-    @Query("limit") limit?: string
+    @Query("limit") limit?: string,
+    @Query("kind") kind?: string
   ) {
     await this.auth.requireAdmin(req);
-    return this.atlas.listAuditTrails(search ?? "", Number(limit) || 100);
+    return this.atlas.listAuditTrails(search ?? "", Number(limit) || 100, kind);
   }
 
   @Get("reports/network-usage")
