@@ -4941,11 +4941,9 @@ body {
   border-radius: 8px;
   overflow: hidden;
 }
-.connection-map-legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; font-size: .875rem; }
-.connection-map-legend > span { display: inline-flex; align-items: center; gap: 8px; }
-.connection-radius-legend-marker { display: inline-block; width: 12px; height: 12px; border: 1px dashed #3454d1; border-radius: 50%; background: rgb(52 84 209 / 8%); }
-.connection-line { display: inline-block; width: 28px; border-top: 2px solid #697586; }
-.connection-line.is-new { border-top: 2px dashed; }
-.connection-line.is-existing { border-top: 4px solid #697586; }
+.analysis-asset-chooser-content {
+  width: min(420px, calc(100vw - 72px));
+  max-width: 100%;
+  max-height: min(420px, calc(100dvh - 120px));
+}
 @media (max-width: 575px) { .connection-route-map { height: 320px; } }
-.connection-line.is-gap { border-top: 2px dotted #ad5900; }

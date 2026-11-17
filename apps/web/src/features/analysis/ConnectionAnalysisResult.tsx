@@ -14,9 +14,11 @@ import {
   addNetworkAssetHitLayers,
   addNetworkAssetLayers,
   assetFeatures,
+  createNetworkAssetChooserContent,
   createNetworkAssetPopup,
   createNetworkAssetPopupContent,
   findNetworkAssetAtPoint,
+  findNetworkAssetsAtPoint,
   loadNetworkMapIcons,
 } from "../map/networkMap";
 import { analysisMapStyle, searchRadiusFeature } from "./analysisMapStyle";
@@ -78,7 +80,6 @@ function ConnectionRouteMap({
 }) {
   const container = useRef<HTMLDivElement>(null);
   const [error, setError] = useState(false);
-  const gaps = [...(route.terminalLinks ?? []), ...(route.roadSnapGaps ?? [])];
   useEffect(() => {
     if (!container.current) {
       return;
@@ -180,12 +181,29 @@ function ConnectionRouteMap({
           : "";
       });
       map.on("click", (event) => {
-        const asset = findNetworkAssetAtPoint(
+        const pointAssets = findNetworkAssetsAtPoint(
           map,
           event.point,
           assetsById,
-          assetHitLayers
+          assetLayers.icons
         );
+        if (pointAssets.length > 1) {
+          assetPopup
+            .setLngLat(event.lngLat)
+            .setDOMContent(
+              createNetworkAssetChooserContent(pointAssets, (selected) => {
+                assetPopup
+                  .setLngLat(event.lngLat)
+                  .setDOMContent(createNetworkAssetPopupContent(selected))
+                  .addTo(map);
+              })
+            )
+            .addTo(map);
+          return;
+        }
+        const asset =
+          pointAssets[0] ??
+          findNetworkAssetAtPoint(map, event.point, assetsById, assetHitLayers);
         if (!asset) {
           return;
         }
@@ -333,31 +351,6 @@ function ConnectionRouteMap({
         className="connection-route-map"
         ref={container}
       />
-      <div className="connection-map-legend">
-        <span>
-          <i className="connection-radius-legend-marker" />
-          Radius pencarian
-        </span>
-        <span>
-          <i
-            className="connection-line is-new"
-            style={{
-              borderTopColor: analysisMapStyle.proposedCableColor,
-            }}
-          />
-          Jalur usulan
-        </span>
-        <span>
-          <i className="connection-line is-existing" />
-          Kabel existing · warna sesuai peta
-        </span>
-        {gaps.length > 0 && (
-          <span>
-            <i className="connection-line is-gap" />
-            Celah sambungan perlu survei
-          </span>
-        )}
-      </div>
     </>
   );
 }

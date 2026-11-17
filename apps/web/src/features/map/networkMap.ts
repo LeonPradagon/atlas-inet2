@@ -772,6 +772,104 @@ export function findNetworkAssetAtPoint(
   }
 }
 
+export function findNetworkAssetsAtPoint(
+  map: MapLibreMap,
+  point: { x: number; y: number },
+  assetsById: ReadonlyMap<string, NetworkAsset>,
+  iconLayerId: string
+) {
+  const features = map.queryRenderedFeatures([point.x, point.y], {
+    layers: [iconLayerId],
+  });
+  const candidates = new Map<string, NetworkAsset & { geometry: GeoJSON.Point }>();
+  for (const feature of features) {
+    if (feature.geometry.type !== "Point") continue;
+    const id = String(feature.properties?.id ?? feature.id ?? "");
+    const asset = assetsById.get(id);
+    if (id && asset?.geometry?.type === "Point") {
+      candidates.set(id, { ...asset, geometry: asset.geometry });
+    }
+  }
+  const sorted = [...candidates.values()].sort((a, b) => {
+    const distance = (asset: NetworkAsset & { geometry: GeoJSON.Point }) => {
+      const projected = map.project(asset.geometry.coordinates as [number, number]);
+      return (projected.x - point.x) ** 2 + (projected.y - point.y) ** 2;
+    };
+    return distance(a) - distance(b);
+  });
+  const closest = sorted[0];
+  if (!closest) return [];
+  const projectedClosest = map.project(
+    closest.geometry.coordinates as [number, number]
+  );
+  const overlapDistance =
+    Math.hypot(projectedClosest.x - point.x, projectedClosest.y - point.y) + 6;
+  return sorted.filter((asset) => {
+    const projected = map.project(asset.geometry.coordinates as [number, number]);
+    return Math.hypot(projected.x - point.x, projected.y - point.y) <= overlapDistance;
+  });
+}
+
+export function createNetworkAssetChooserContent(
+  assets: NetworkAsset[],
+  onSelect: (asset: NetworkAsset) => void
+) {
+  const content = document.createElement("div");
+  content.className = "analysis-asset-popup-body analysis-asset-chooser-content";
+  const header = document.createElement("header");
+  header.className = "map-asset-popup-header";
+  const heading = document.createElement("div");
+  const title = document.createElement("h3");
+  title.textContent = "Pilih aset pada titik ini";
+  const description = document.createElement("small");
+  description.textContent = `${assets.length} aset bertumpuk di area klik.`;
+  heading.append(title, description);
+  header.append(heading);
+
+  const search = document.createElement("input");
+  search.type = "search";
+  search.className = "form-control form-control-sm map-asset-choice-search";
+  search.placeholder = "Cari nama atau jenis aset";
+  search.setAttribute("aria-label", "Cari aset di titik ini");
+  const list = document.createElement("div");
+  list.className = "map-asset-choice-list";
+  const renderOptions = () => {
+    const query = search.value.trim().toLocaleLowerCase("id-ID");
+    const matching = assets.filter((asset) =>
+      [asset.name, asset.area, assetIconCategory(asset)]
+        .join(" ")
+        .toLocaleLowerCase("id-ID")
+        .includes(query)
+    );
+    list.replaceChildren();
+    if (!matching.length) {
+      const empty = document.createElement("p");
+      empty.className = "map-asset-choice-empty";
+      empty.textContent = "Tidak ada aset yang cocok dengan pencarian.";
+      list.append(empty);
+      return;
+    }
+    for (const asset of matching) {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.className = "map-asset-choice-option";
+      option.setAttribute("aria-label", `Pilih ${assetIconCategory(asset)} · ${asset.name}`);
+      const name = document.createElement("span");
+      name.className = "map-asset-choice-name";
+      name.textContent = asset.name;
+      const category = document.createElement("small");
+      category.textContent = `${assetIconCategory(asset)}${asset.area ? ` · ${asset.area}` : ""}`;
+      option.append(name, category);
+      option.addEventListener("click", () => onSelect(asset));
+      list.append(option);
+    }
+  };
+  search.addEventListener("input", renderOptions);
+  renderOptions();
+  content.append(header, search, list);
+  return content;
+}
+
 export function createNetworkAssetPopupContent(
   asset: NetworkAsset,
   options: {
@@ -819,7 +917,7 @@ export function createNetworkAssetPopupContent(
   }
 
   const table = document.createElement("table");
-  table.className = "map-asset-popup-table";
+  table.className = "table atlas-detail-table map-asset-popup-table";
   const body = document.createElement("tbody");
   const appendRow = (label: string, value: unknown, className = "") => {
     const row = document.createElement("tr");

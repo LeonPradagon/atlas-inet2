@@ -16,9 +16,11 @@ import {
   addNetworkAssetLayers,
   assetFeatures,
   cableLengthMeters,
+  createNetworkAssetChooserContent,
   createNetworkAssetPopup,
   createNetworkAssetPopupContent,
   findNetworkAssetAtPoint,
+  findNetworkAssetsAtPoint,
   loadNetworkMapIcons,
 } from "../map/networkMap";
 import { analysisMapStyle, searchRadiusFeature } from "./analysisMapStyle";
@@ -1048,6 +1050,35 @@ export function NearestNetworkMap({
         if (!feature) {
           return;
         }
+        const reservedMapTarget = [
+          "locations",
+          "route-option-a",
+          "route-option-b",
+          "route-evidence-markers",
+          "termination-markers",
+        ].includes(feature.layer.id);
+        const overlappingAssets = reservedMapTarget
+          ? []
+          : findNetworkAssetsAtPoint(
+              map,
+              event.point,
+              assetsById,
+              "asset-icons"
+            );
+        if (overlappingAssets.length > 1) {
+          popup
+            .setLngLat(event.lngLat)
+            .setDOMContent(
+              createNetworkAssetChooserContent(overlappingAssets, (selected) => {
+                popup
+                  .setLngLat(event.lngLat)
+                  .setDOMContent(createNetworkAssetPopupContent(selected))
+                  .addTo(map);
+              })
+            )
+            .addTo(map);
+          return;
+        }
         if (
           (feature.layer.id === "route-option-a" ||
             feature.layer.id === "route-option-b") &&
@@ -1223,7 +1254,7 @@ export function NearestNetworkMap({
           content.append(summary);
         }
         const table = document.createElement("table");
-        table.className = "map-asset-popup-table";
+        table.className = "table atlas-detail-table map-asset-popup-table";
         const body = document.createElement("tbody");
         const rows: [string, unknown][] =
           feature.layer.id === "route-option-a" ||
