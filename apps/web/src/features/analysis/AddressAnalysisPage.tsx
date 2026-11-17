@@ -1,6 +1,7 @@
+import { formatDistance } from "../../lib/format";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AtlasTag } from "../../components/AtlasTag";
 import { DetailTable } from "../../components/DetailTable";
 import { PageHeader } from "../../components/PageHeader";
@@ -10,7 +11,6 @@ import {
   type SearchViewport,
   type SelectedPoint,
 } from "./AddressPinPicker";
-import { CompactLocationInput } from "./CompactLocationInput";
 import {
   ConnectionAnalysisResult,
   type ConnectionResult,
@@ -136,6 +136,18 @@ function regionParams(fields: Partial<AddressSuggestion>) {
 }
 
 export function AddressAnalysisPage() {
+  return <AddressAnalysisEditor />;
+}
+
+function AddressAnalysisEditor({
+  onPick,
+}: {
+  onPick?: (point: SelectedPoint | null) => void;
+}) {
+  const pickerOnly = Boolean(onPick);
+  const fieldId = useId();
+  const onPickRef = useRef(onPick);
+  onPickRef.current = onPick;
   const [twoPoint, setTwoPoint] = useState(false);
   const [destination, setDestination] = useState<SelectedPoint | null>(null);
   const [allowExpand2km, setAllowExpand2km] = useState(false);
@@ -437,6 +449,14 @@ export function AddressAnalysisPage() {
   const activeRouteId = selectedResult?.selectedRouteId ?? "A";
   const submitAnalysis = (point = selectedPoint) => {
     if (!point?.confirmed) {
+      return;
+    }
+    if (onPick) {
+      onPick({
+        ...point,
+        label:
+          inputMode === "address" ? fullAddress || point.label : point.label,
+      });
       return;
     }
     if (twoPoint) {
@@ -846,6 +866,12 @@ export function AddressAnalysisPage() {
     address.cityCode,
     selectedPoint,
   ]);
+  useEffect(() => {
+    onPickRef.current?.(selectedPoint?.confirmed ? {
+      ...selectedPoint,
+      label: inputMode === "address" ? fullAddress || selectedPoint.label : selectedPoint.label,
+    } : null);
+  }, [selectedPoint, fullAddress, inputMode]);
   const coordinates = analyze.data
     ? `${analyze.data.latitude}, ${analyze.data.longitude}`
     : "";
@@ -863,7 +889,7 @@ export function AddressAnalysisPage() {
       {twoPoint ? (
         <>
           <div className="d-flex align-items-center justify-content-between gap-3 mb-3">
-            <h4 className="h6 mb-0">B · Titik tujuan</h4>
+            <h4 className="h6 mb-0">Titik lokasi 2</h4>
             <button
               className="btn btn-sm btn-outline-secondary"
               onClick={() => {
@@ -877,16 +903,11 @@ export function AddressAnalysisPage() {
               Hapus titik tujuan
             </button>
           </div>
-          <CompactLocationInput
-            initialCenter={
-              selectedPoint ??
-              (inputMode === "coordinates" ? parsedCoordinates : null)
-            }
-            onChange={(point) => {
+          <AddressAnalysisEditor
+            onPick={(point) => {
               setDestination(point);
               connection.reset();
             }}
-            point={destination}
           />
           <label className="form-check mt-3">
             <input
@@ -935,22 +956,26 @@ export function AddressAnalysisPage() {
   );
   return (
     <>
-      <PageHeader
-        subtitle="Temukan jaringan terdekat dari alamat rumah atau koordinat."
-        title="Analisis alamat"
-      />
-      <div className="row g-4">
-        <div className={inputMode === "coordinates" ? "col-12" : "col-lg-7"}>
+      {!pickerOnly && (
+        <PageHeader
+          subtitle="Temukan jaringan terdekat dari alamat rumah atau koordinat."
+          title="Analisis alamat"
+        />
+      )}
+      <div className={`row g-4 ${pickerOnly ? "location-input-embedded" : ""}`}>
+        <div className="col-12">
           <section className="card panel-card">
-            <div className="card-header analysis-form-header">
-              <div>
-                <h3>{twoPoint ? "A · Titik awal" : "Lokasi pelanggan"}</h3>
-                <p>Pilih metode input lokasi: alamat rumah atau koordinat.</p>
+            {!pickerOnly && (
+              <div className="card-header analysis-form-header">
+                <div>
+                  <h3>{twoPoint ? "Titik lokasi 1" : "Lokasi pelanggan"}</h3>
+                  <p>Pilih metode input lokasi: alamat rumah atau koordinat.</p>
+                </div>
+                <AtlasTag className="is-accent">
+                  {twoPoint ? "ANALISIS DUA TITIK" : "ANALISIS TUNGGAL"}
+                </AtlasTag>
               </div>
-              <AtlasTag className="is-accent">
-                {twoPoint ? "ANALISIS DUA TITIK" : "ANALISIS TUNGGAL"}
-              </AtlasTag>
-            </div>
+            )}
             <div className="card-body">
               {!inputMode && (
                 <div>
@@ -1014,7 +1039,7 @@ export function AddressAnalysisPage() {
                 <form
                   onSubmit={(event) => {
                     event.preventDefault();
-                    submitAnalysis();
+                    if (!twoPoint) submitAnalysis();
                   }}
                 >
                   <details
@@ -1023,7 +1048,11 @@ export function AddressAnalysisPage() {
                   >
                     <summary className="mb-3">
                       <strong>
-                        {twoPoint ? "A · Titik awal" : "Lokasi analisis"}
+                        {pickerOnly
+                          ? "Titik lokasi 2"
+                          : twoPoint
+                            ? "Titik lokasi 1"
+                            : "Lokasi analisis"}
                       </strong>
                       {selectedPoint?.confirmed ? (
                         <>
@@ -1046,13 +1075,13 @@ export function AddressAnalysisPage() {
                       <div className="position-relative col-12">
                         <label
                           className="form-label fw-semibold"
-                          htmlFor="street"
+                          htmlFor={`${fieldId}-street`}
                         >
                           Nama jalan
                         </label>
                         <input
                           aria-autocomplete="list"
-                          aria-controls="address-suggestions"
+                          aria-controls={`${fieldId}-address-suggestions`}
                           aria-expanded={
                             !hideAddressSuggestions &&
                             !selectedPoint &&
@@ -1061,7 +1090,7 @@ export function AddressAnalysisPage() {
                           }
                           autoComplete="street-address"
                           className="form-control"
-                          id="street"
+                          id={`${fieldId}-street`}
                           onChange={(event) => {
                             setHideAddressSuggestions(false);
                             updateAddress("street", event.target.value);
@@ -1086,7 +1115,7 @@ export function AddressAnalysisPage() {
                             <div
                               aria-label="Saran alamat"
                               className="list-group position-absolute start-0 end-0 top-100 shadow"
-                              id="address-suggestions"
+                              id={`${fieldId}-address-suggestions`}
                               role="listbox"
                               style={{ zIndex: 20 }}
                             >
@@ -1152,23 +1181,23 @@ export function AddressAnalysisPage() {
                       <div className="col-12">
                         <div className="fw-semibold">
                           Pilih Wilayah{" "}
-                          <span className="text-danger">(wajib)</span>
+                          <span className="text-secondary">(wajib)</span>
                         </div>
                         <div className="form-text mb-2">
-                          Pilih wilayah untuk mempersempit hasil. Jika belum
-                          dipilih, Anda juga bisa mencari dengan alamat lengkap.
+                          Lengkapi keempat wilayah. Saran alamat dapat
+                          mengisinya otomatis.
                         </div>
                         <div className="row g-3">
                           <div className="col-md-6">
                             <label
                               className="form-label fw-semibold"
-                              htmlFor="province"
+                              htmlFor={`${fieldId}-province`}
                             >
                               Provinsi *
                             </label>
                             <select
                               className="form-select"
-                              id="province"
+                              id={`${fieldId}-province`}
                               onChange={(event) => {
                                 regionLookupId.current += 1;
                                 setAddress((current) => ({
@@ -1201,14 +1230,14 @@ export function AddressAnalysisPage() {
                           <div className="col-md-6">
                             <label
                               className="form-label fw-semibold"
-                              htmlFor="city"
+                              htmlFor={`${fieldId}-city`}
                             >
                               Kabupaten / kota *
                             </label>
                             <select
                               className="form-select"
                               disabled={!province}
-                              id="city"
+                              id={`${fieldId}-city`}
                               onChange={(event) => {
                                 regionLookupId.current += 1;
                                 setAddress((current) => ({
@@ -1236,14 +1265,14 @@ export function AddressAnalysisPage() {
                           <div className="col-md-6">
                             <label
                               className="form-label fw-semibold"
-                              htmlFor="district"
+                              htmlFor={`${fieldId}-district`}
                             >
                               Kecamatan *
                             </label>
                             <select
                               className="form-select"
                               disabled={!city}
-                              id="district"
+                              id={`${fieldId}-district`}
                               onChange={(event) => {
                                 regionLookupId.current += 1;
                                 setAddress((current) => ({
@@ -1270,7 +1299,7 @@ export function AddressAnalysisPage() {
                           <div className="col-md-6">
                             <label
                               className="form-label fw-semibold"
-                              htmlFor="subdistrict"
+                              htmlFor={`${fieldId}-subdistrict`}
                             >
                               Kelurahan / desa *
                             </label>
@@ -1281,7 +1310,7 @@ export function AddressAnalysisPage() {
                                 loadingSubdistricts ||
                                 subdistrictLoadError
                               }
-                              id="subdistrict"
+                              id={`${fieldId}-subdistrict`}
                               onChange={(event) => {
                                 regionLookupId.current += 1;
                                 const selected = subdistricts.find(
@@ -1320,13 +1349,13 @@ export function AddressAnalysisPage() {
                           <div className="col-md-6">
                             <label
                               className="form-label fw-semibold"
-                              htmlFor="street-number"
+                              htmlFor={`${fieldId}-street-number`}
                             >
                               Nomor rumah
                             </label>
                             <input
                               className="form-control"
-                              id="street-number"
+                              id={`${fieldId}-street-number`}
                               onChange={(event) =>
                                 updateAddress("number", event.target.value)
                               }
@@ -1337,14 +1366,14 @@ export function AddressAnalysisPage() {
                           <div className="col-md-6">
                             <label
                               className="form-label fw-semibold"
-                              htmlFor="postal-code"
+                              htmlFor={`${fieldId}-postal-code`}
                             >
                               Kode pos
                             </label>
                             <input
                               autoComplete="postal-code"
                               className="form-control"
-                              id="postal-code"
+                              id={`${fieldId}-postal-code`}
                               inputMode="numeric"
                               maxLength={5}
                               onChange={(event) =>
@@ -1458,7 +1487,6 @@ export function AddressAnalysisPage() {
                       memilihnya manual.
                     </div>
                   </details>
-                  {destinationEditor}
                   <div className="d-flex flex-wrap gap-3 justify-content-between align-items-center mt-4">
                     <button
                       className="btn btn-link text-secondary p-0"
@@ -1490,7 +1518,7 @@ export function AddressAnalysisPage() {
                       disabled={
                         analyze.isPending ||
                         connection.isPending ||
-                        (twoPoint && !destination?.confirmed) ||
+                        ((pickerOnly || twoPoint) && Boolean(selectedPoint?.confirmed)) ||
                         !address.street.trim() ||
                         !hasSearchArea ||
                         !selectedPoint?.confirmed
@@ -1505,8 +1533,8 @@ export function AddressAnalysisPage() {
                       ) : (
                         <>
                           <i className="bi bi-search me-2" />
-                          {twoPoint
-                            ? "Analisis koneksi A–B"
+                          {pickerOnly || twoPoint
+                            ? selectedPoint?.confirmed ? "Lokasi dikonfirmasi" : "Konfirmasi lokasi"
                             : "Analisis jaringan"}
                         </>
                       )}
@@ -1528,7 +1556,7 @@ export function AddressAnalysisPage() {
                       confirmed: true,
                     };
                     setSelectedPoint(point);
-                    submitAnalysis(point);
+                    if (!twoPoint) submitAnalysis(point);
                   }}
                 >
                   <details
@@ -1537,7 +1565,11 @@ export function AddressAnalysisPage() {
                   >
                     <summary className="mb-3">
                       <strong>
-                        {twoPoint ? "A · Titik awal" : "Lokasi analisis"}
+                        {pickerOnly
+                          ? "Titik lokasi 2"
+                          : twoPoint
+                            ? "Titik lokasi 1"
+                            : "Lokasi analisis"}
                       </strong>
                       {selectedPoint?.confirmed ? (
                         <>
@@ -1560,13 +1592,13 @@ export function AddressAnalysisPage() {
                       <div className="col-md-6">
                         <label
                           className="form-label fw-semibold"
-                          htmlFor="coordinate-latitude"
+                          htmlFor={`${fieldId}-coordinate-latitude`}
                         >
                           Latitude
                         </label>
                         <input
                           className="form-control"
-                          id="coordinate-latitude"
+                          id={`${fieldId}-coordinate-latitude`}
                           inputMode="decimal"
                           max="90"
                           min="-90"
@@ -1589,13 +1621,13 @@ export function AddressAnalysisPage() {
                       <div className="col-md-6">
                         <label
                           className="form-label fw-semibold"
-                          htmlFor="coordinate-longitude"
+                          htmlFor={`${fieldId}-coordinate-longitude`}
                         >
                           Longitude
                         </label>
                         <input
                           className="form-control"
-                          id="coordinate-longitude"
+                          id={`${fieldId}-coordinate-longitude`}
                           inputMode="decimal"
                           max="180"
                           min="-180"
@@ -1620,7 +1652,6 @@ export function AddressAnalysisPage() {
                       Latitude: -90 sampai 90. Longitude: -180 sampai 180.
                     </div>
                   </details>
-                  {destinationEditor}
                   <div className="d-flex flex-wrap gap-3 justify-content-between align-items-center mt-4">
                     <button
                       className="btn btn-link text-secondary p-0"
@@ -1639,7 +1670,7 @@ export function AddressAnalysisPage() {
                       disabled={
                         analyze.isPending ||
                         connection.isPending ||
-                        (twoPoint && !destination?.confirmed) ||
+                        ((pickerOnly || twoPoint) && Boolean(selectedPoint?.confirmed)) ||
                         !parsedCoordinates
                       }
                       type="submit"
@@ -1652,15 +1683,15 @@ export function AddressAnalysisPage() {
                       ) : selectedPoint?.confirmed ? (
                         <>
                           <i className="bi bi-search me-2" />
-                          {twoPoint
-                            ? "Analisis koneksi A–B"
+                          {pickerOnly || twoPoint
+                            ? selectedPoint?.confirmed ? "Lokasi dikonfirmasi" : "Konfirmasi lokasi"
                             : "Analisis jaringan"}
                         </>
                       ) : (
                         <>
                           <i className="bi bi-search me-2" />
-                          {twoPoint
-                            ? "Analisis koneksi A–B"
+                          {pickerOnly || twoPoint
+                            ? selectedPoint?.confirmed ? "Lokasi dikonfirmasi" : "Konfirmasi lokasi"
                             : "Analisis jaringan"}
                         </>
                       )}
@@ -1668,264 +1699,289 @@ export function AddressAnalysisPage() {
                   </div>
                 </form>
               )}
+              {!pickerOnly && destinationEditor}
+              {twoPoint && (
+                <div className="analysis-submit-bar mt-4">
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    disabled={
+                      connection.isPending ||
+                      !destination?.confirmed ||
+                      !selectedPoint?.confirmed
+                    }
+                    onClick={() => submitAnalysis(selectedPoint)}
+                  >
+                    {connection.isPending
+                      ? "Menganalisis…"
+                      : "Analisis dua titik"}
+                  </button>
+                </div>
+              )}
             </div>
           </section>
-          <div className="info-note mt-3">
-            <i className="bi bi-lightbulb" />
-            <p>
-              <b>Bagaimana hasil dihitung?</b>
-              <br />
-              {twoPoint ? (
-                "Analisis mencari jalur melalui jaringan di antara A dan B. Kedekatan geometri tidak membuktikan sambungan fisik atau ketersediaan core."
-              ) : (
-                <>
-                  ATLAS memilih terminasi dengan jalur jalan terpendek. Rute A
-                  dan B menuju terminasi yang sama, tetapi memakai jalur
-                  berbeda. Rute B ditampilkan jika jalur alternatif tersedia.
-                </>
-              )}
-            </p>
-          </div>
-        </div>
-        <div className={inputMode === "coordinates" ? "col-12" : "col-lg-5"}>
-          {twoPoint ? (
-            <section className="card panel-card">
-              <div className="card-body">
-                {connection.isPending ? (
-                  <p role="status">Menganalisis jalur A–B…</p>
-                ) : connection.error ? (
-                  <div className="alert alert-danger" role="alert">
-                    {connection.error.message} Coba analisis kembali.
-                  </div>
-                ) : connection.data ? (
-                  <ConnectionAnalysisResult
-                    key={connection.data.historyId}
-                    result={connection.data}
-                  />
+          {!pickerOnly && (
+            <div className="info-note mt-3">
+              <i className="bi bi-lightbulb" />
+              <p>
+                <b>Bagaimana hasil dihitung?</b>
+                <br />
+                {twoPoint ? (
+                  "Analisis mencari jalur melalui jaringan di antara titik lokasi 1 dan 2. Kedekatan geometri tidak membuktikan sambungan fisik atau ketersediaan core."
                 ) : (
-                  <p className="text-secondary mb-0">
-                    Konfirmasi titik awal A dan tujuan B, lalu analisis
-                    koneksinya.
-                  </p>
+                  <>
+                    ATLAS memilih terminasi dengan jalur jalan terpendek. Rute A
+                    dan B menuju terminasi yang sama, tetapi memakai jalur
+                    berbeda. Rute B ditampilkan jika jalur alternatif tersedia.
+                  </>
                 )}
-              </div>
-            </section>
-          ) : analyze.data && selectedResult ? (
-            <section className="card panel-card result-card">
-              <div
-                className={`result-success ${selectedResult.distanceMeters === null ? "result-pending" : ""}`}
-              >
-                <span>
-                  <i
-                    className={`bi ${selectedResult.distanceMeters === null ? "bi-info-lg" : "bi-check-lg"}`}
-                  />
-                </span>
-                <div>
-                  <b>
-                    {selectedResult.distanceMeters === null
-                      ? "Hasil parsial"
-                      : "Analisis berhasil"}
-                  </b>
-                  <small>
-                    {analyze.data.message ??
+              </p>
+            </div>
+          )}
+        </div>
+        {!pickerOnly && (
+          <div className="col-12">
+            {twoPoint ? (
+              <section className="card panel-card">
+                <div className="card-body">
+                  {connection.isPending ? (
+                    <p role="status">Menganalisis jalur dua titik…</p>
+                  ) : connection.error ? (
+                    <div className="alert alert-danger" role="alert">
+                      {connection.error.message} Coba analisis kembali.
+                    </div>
+                  ) : connection.data ? (
+                    <ConnectionAnalysisResult
+                      key={connection.data.historyId}
+                      result={connection.data}
+                    />
+                  ) : (
+                    <p className="text-secondary mb-0">
+                      Konfirmasi kedua titik lokasi, lalu analisis koneksinya.
+                    </p>
+                  )}
+                </div>
+              </section>
+            ) : analyze.data && selectedResult ? (
+              <section className="card panel-card result-card">
+                <div
+                  className={`result-success ${selectedResult.distanceMeters === null ? "result-pending" : ""}`}
+                >
+                  <span>
+                    <i
+                      className={`bi ${selectedResult.distanceMeters === null ? "bi-info-lg" : "bi-check-lg"}`}
+                    />
+                  </span>
+                  <div>
+                    <b>
+                      {selectedResult.distanceMeters === null
+                        ? "Hasil parsial"
+                        : "Analisis berhasil"}
+                    </b>
+                    <small>
+                      {analyze.data.message ??
                       (!selectedResult.network
                         ? "Koordinat ditemukan, tetapi jaringan belum ditemukan dalam radius pencarian."
                         : selectedResult.distanceMeters === null
                           ? "Jaringan ditemukan, tetapi rute belum tersedia."
                           : "Koordinat dan jaringan terdekat ditemukan.")}
-                  </small>
-                </div>
-              </div>
-              <div className="card-body">
-                {analyze.data.geocodingMatch === "approximate" && (
-                  <div className="alert alert-warning">
-                    Nama jalan tidak cocok sepenuhnya dengan data peta. Titik
-                    mengikuti ruas{" "}
-                    <b>{analyze.data.matchedStreet ?? "yang paling sesuai"}</b>{" "}
-                    berdasarkan kecamatan dan kode pos. Periksa posisi di peta
-                    sebelum menyimpan aset atau menentukan jalur kabel.
+                    </small>
                   </div>
-                )}
-                <div className="detail-label">HASIL KONVERSI</div>
-                <DetailTable
-                  label="Hasil konversi alamat"
-                  rows={[
-                    { label: "Alamat", value: analyze.data.address },
-                    {
-                      label: "Koordinat",
-                      value: (
-                        <span className="d-flex align-items-center justify-content-between gap-2">
-                          <span className="font-monospace user-select-all text-break">
-                            {coordinates}
+                </div>
+                <div className="card-body">
+                  {analyze.data.geocodingMatch === "approximate" && (
+                    <div className="alert alert-warning">
+                      Nama jalan tidak cocok sepenuhnya dengan data peta. Titik
+                      mengikuti ruas{" "}
+                      <b>
+                        {analyze.data.matchedStreet ?? "yang paling sesuai"}
+                      </b>{" "}
+                      berdasarkan kecamatan dan kode pos. Periksa posisi di peta
+                      sebelum menyimpan aset atau menentukan jalur kabel.
+                    </div>
+                  )}
+                  <div className="detail-label">HASIL KONVERSI</div>
+                  <DetailTable
+                    label="Hasil konversi alamat"
+                    rows={[
+                      { label: "Alamat", value: analyze.data.address },
+                      {
+                        label: "Koordinat",
+                        value: (
+                          <span className="d-flex align-items-center justify-content-between gap-2">
+                            <span className="font-monospace user-select-all text-break">
+                              {coordinates}
+                            </span>
+                            <button
+                              aria-label="Salin koordinat"
+                              className="btn btn-sm btn-outline-primary flex-shrink-0"
+                              onClick={copyCoordinates}
+                              title={
+                                coordinateCopyStatus === "copied"
+                                  ? "Tersalin"
+                                  : "Salin koordinat"
+                              }
+                              type="button"
+                            >
+                              <i
+                                className={`bi ${coordinateCopyStatus === "copied" ? "bi-check2" : coordinateCopyStatus === "error" ? "bi-exclamation-triangle" : "bi-clipboard"}`}
+                              />
+                            </button>
                           </span>
+                        ),
+                      },
+                    ]}
+                  />
+                  <a
+                    className="btn btn-outline-primary mt-2 w-100"
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinates)}`}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    <i className="bi bi-map me-2" />
+                    Buka Google Maps
+                  </a>
+                  {coordinateCopyStatus !== "idle" && (
+                    <small
+                      className={`d-block mt-1 ${coordinateCopyStatus === "error" ? "text-danger" : "text-success"}`}
+                    >
+                      {coordinateCopyStatus === "copied"
+                        ? "Koordinat tersalin."
+                        : "Gagal menyalin koordinat."}
+                    </small>
+                  )}
+                  {analyze.data.geocodingProvider === "nominatim" && (
+                    <small className="text-secondary d-block mt-2">
+                      Lokasi dari{" "}
+                      <a
+                        href="https://www.openstreetmap.org/copyright"
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        © OpenStreetMap contributors
+                      </a>
+                      .
+                    </small>
+                  )}
+                  <hr />
+                  <div className="detail-label">TUJUAN RUTE TERPILIH</div>
+                  {selectedResult.network ? (
+                    <>
+                      <DetailTable
+                        label="Informasi jaringan terdekat"
+                        rows={[
+                          {
+                            label: "Perangkat tujuan",
+                            value: selectedResult.network.name,
+                          },
+                          {
+                            label: "Area",
+                            value: selectedResult.network.area,
+                          },
+                          {
+                            label: "Jenis kabel",
+                            value: selectedResult.network.cableType,
+                          },
+                          {
+                            label: "Radius ditemukan",
+                            value: `${selectedResult.network.searchRadiusMeters ?? 1000} m`,
+                          },
+                          {
+                            label: "Jarak lurus ke tujuan",
+                            value: formatDistance(
+                              selectedResult.network.straightDistanceMeters
+                            ),
+                          },
+                          {
+                            label: `Jarak Rute ${activeRouteId} mengikuti jalan`,
+                            value: formatDistance(
+                              selectedResult.distanceMeters
+                            ),
+                          },
+                        ]}
+                      />
+                      <NetworkCapacityDetail
+                        capacity={selectedResult.network.capacity}
+                      />
+                    </>
+                  ) : (
+                    <div className="alert alert-secondary">
+                      Tidak ditemukan jaringan dalam radius{" "}
+                      {analyze.data.searchRadiusMeters ?? 1000} m.
+                      {analyze.data.expansionAvailable && (
+                        <div className="mt-2">
+                          Perluas pencarian hingga 2 km?
                           <button
-                            aria-label="Salin koordinat"
-                            className="btn btn-sm btn-outline-primary flex-shrink-0"
-                            onClick={copyCoordinates}
-                            title={
-                              coordinateCopyStatus === "copied"
-                                ? "Tersalin"
-                                : "Salin koordinat"
-                            }
+                            className="btn btn-primary btn-sm ms-2"
+                            disabled={analyze.isPending}
+                            onClick={() => {
+                              if (analyze.variables) {
+                                analyze.mutate({
+                                  ...analyze.variables,
+                                  allowExpand2km: true,
+                                });
+                              }
+                            }}
                             type="button"
                           >
-                            <i
-                              className={`bi ${coordinateCopyStatus === "copied" ? "bi-check2" : coordinateCopyStatus === "error" ? "bi-exclamation-triangle" : "bi-clipboard"}`}
-                            />
+                            Ya, cari hingga 2 km
                           </button>
-                        </span>
-                      ),
-                    },
-                  ]}
-                />
-                <a
-                  className="btn btn-outline-primary mt-2 w-100"
-                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(coordinates)}`}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  <i className="bi bi-map me-2" />
-                  Buka Google Maps
-                </a>
-                {coordinateCopyStatus !== "idle" && (
-                  <small
-                    className={`d-block mt-1 ${coordinateCopyStatus === "error" ? "text-danger" : "text-success"}`}
-                  >
-                    {coordinateCopyStatus === "copied"
-                      ? "Koordinat tersalin."
-                      : "Gagal menyalin koordinat."}
-                  </small>
-                )}
-                {analyze.data.geocodingProvider === "nominatim" && (
-                  <small className="text-secondary d-block mt-2">
-                    Lokasi dari{" "}
-                    <a
-                      href="https://www.openstreetmap.org/copyright"
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      © OpenStreetMap contributors
-                    </a>
-                    .
-                  </small>
-                )}
-                <hr />
-                <div className="detail-label">TUJUAN RUTE TERPILIH</div>
-                {selectedResult.network ? (
-                  <>
-                    <DetailTable
-                      label="Informasi jaringan terdekat"
-                      rows={[
-                        {
-                          label: "Perangkat tujuan",
-                          value: selectedResult.network.name,
-                        },
-                        {
-                          label: "Area",
-                          value: selectedResult.network.area,
-                        },
-                        {
-                          label: "Jenis kabel",
-                          value: selectedResult.network.cableType,
-                        },
-                        {
-                          label: "Radius ditemukan",
-                          value: `${selectedResult.network.searchRadiusMeters ?? 1000} m`,
-                        },
-                        {
-                          label: "Jarak lurus ke tujuan",
-                          value: `${Math.round(selectedResult.network.straightDistanceMeters ?? 0)} m`,
-                        },
-                        {
-                          label: `Jarak Rute ${activeRouteId} mengikuti jalan`,
-                          value:
-                            selectedResult.distanceMeters === null
-                              ? "Belum tersedia"
-                              : `${(selectedResult.distanceMeters / 1000).toFixed(2)} km`,
-                        },
-                      ]}
-                    />
-                    <NetworkCapacityDetail
-                      capacity={selectedResult.network.capacity}
-                    />
-                  </>
-                ) : (
-                  <div className="alert alert-secondary">
-                    Tidak ditemukan jaringan dalam radius{" "}
-                    {analyze.data.searchRadiusMeters ?? 1000} m.
-                    {analyze.data.expansionAvailable && (
-                      <div className="mt-2">
-                        Perluas pencarian hingga 2 km?
-                        <button
-                          className="btn btn-primary btn-sm ms-2"
-                          disabled={analyze.isPending}
-                          onClick={() => {
-                            if (analyze.variables) {
-                              analyze.mutate({
-                                ...analyze.variables,
-                                allowExpand2km: true,
-                              });
-                            }
-                          }}
-                          type="button"
-                        >
-                          Ya, cari hingga 2 km
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-                <TerminationDetail data={analyze.data.terminations} />
-                {selectedResult.network &&
-                  analyze.data.terminations?.points.length === 0 &&
-                  analyze.data.terminations.searchRadiusMeters === 1000 && (
-                    <button
-                      className="btn btn-outline-primary btn-sm mt-2"
-                      disabled={analyze.isPending}
-                      onClick={() => {
-                        if (analyze.variables) {
-                          analyze.mutate({
-                            ...analyze.variables,
-                            allowExpand2km: true,
-                          });
-                        }
-                      }}
-                      type="button"
-                    >
-                      Cari terminasi hingga 2 km
-                    </button>
+                        </div>
+                      )}
+                    </div>
                   )}
-                <Link
-                  className="btn btn-outline-primary mt-3 w-100"
-                  to="/peta-jaringan"
-                >
-                  <i className="bi bi-map me-2" />
-                  Lihat di peta jaringan
-                </Link>
-              </div>
-            </section>
-          ) : (
-            <section className="empty-result">
-              <div className="empty-illustration">
-                <i className="bi bi-geo-alt" />
-                <span />
-                <span />
-              </div>
-              <h3>
-                {error
-                  ? "Analisis belum tersedia"
-                  : "Hasil analisis akan tampil di sini"}
-              </h3>
-              <p>
-                {error
-                  ? error.message
-                  : "Lengkapi alamat untuk melihat koordinat, jaringan terdekat, dan jarak jalan."}
-              </p>
-            </section>
-          )}
-        </div>
+                  <TerminationDetail data={analyze.data.terminations} />
+                  {selectedResult.network &&
+                    analyze.data.terminations?.points.length === 0 &&
+                    analyze.data.terminations.searchRadiusMeters === 1000 && (
+                      <button
+                        className="btn btn-outline-primary btn-sm mt-2"
+                        disabled={analyze.isPending}
+                        onClick={() => {
+                          if (analyze.variables) {
+                            analyze.mutate({
+                              ...analyze.variables,
+                              allowExpand2km: true,
+                            });
+                          }
+                        }}
+                        type="button"
+                      >
+                        Cari terminasi hingga 2 km
+                      </button>
+                    )}
+                  <Link
+                    className="btn btn-outline-primary mt-3 w-100"
+                    to="/peta-jaringan"
+                  >
+                    <i className="bi bi-map me-2" />
+                    Lihat di peta jaringan
+                  </Link>
+                </div>
+              </section>
+            ) : (
+              <section className="empty-result">
+                <div className="empty-illustration">
+                  <i className="bi bi-geo-alt" />
+                  <span />
+                  <span />
+                </div>
+                <h3>
+                  {error
+                    ? "Analisis belum tersedia"
+                    : "Hasil analisis akan tampil di sini"}
+                </h3>
+                <p>
+                  {error
+                    ? error.message
+                    : "Lengkapi alamat untuk melihat koordinat, jaringan terdekat, dan jarak jalan."}
+                </p>
+              </section>
+            )}
+          </div>
+        )}
       </div>
-      {!twoPoint && analyze.data && (
+      {!pickerOnly && !twoPoint && analyze.data && (
         <section className="card panel-card mt-4">
           <div className="card-header">
             <div>

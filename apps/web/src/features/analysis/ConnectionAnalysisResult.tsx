@@ -1,3 +1,6 @@
+import { addMapDisplayControls } from "../map/mapDisplayControls";
+import { RouteSelector } from "../../components/RouteSelector";
+import { formatDistance } from "../../lib/format";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   LngLatBounds,
@@ -8,6 +11,7 @@ import {
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { useEffect, useRef, useState } from "react";
 import { DetailTable } from "../../components/DetailTable";
+import { DataTableShell } from "../../components/DataTable";
 import { api, type NetworkAsset, postJson } from "../../lib/api";
 import {
   addAtlasMapIcons,
@@ -47,6 +51,8 @@ export type ConnectionGap = {
 
 export type ConnectionRoute = {
   id: "A" | "B";
+  source?: { id: string; name: string };
+  destination?: { id: string; name: string };
   distanceMeters: number;
   newCableMeters: number;
   existingNetworkMeters: number;
@@ -68,8 +74,7 @@ export type ConnectionResult = {
   routes: ConnectionRoute[];
 };
 
-const meters = (value: number) =>
-  `${Math.round(value).toLocaleString("id-ID")} m`;
+const meters = formatDistance;
 
 function ConnectionRouteMap({
   result,
@@ -165,6 +170,17 @@ function ConnectionRouteMap({
       });
       const assetLayers = addNetworkAssetLayers(map, "network-assets");
       addNetworkAssetHitLayers(map, "network-assets");
+      addMapDisplayControls(map, {
+        radiusLayers: [
+          "connection-search-radius-fill",
+          "connection-search-radius-line",
+        ],
+        assetLayers: [
+          ...Object.values(assetLayers),
+          "asset-point-hit",
+          "asset-line-hit",
+        ],
+      });
       const assetHitLayers = [
         "asset-point-hit",
         "asset-line-hit",
@@ -428,7 +444,7 @@ export function ConnectionAnalysisResult({
       (leg) => leg.kind === "existing" && leg.confirmation === "survey_required"
     );
   return (
-    <section aria-label="Hasil analisis koneksi A ke B">
+    <section aria-label="Hasil analisis dua titik">
       <h3 className="h5">Rencana jalur melalui jaringan</h3>
       <div
         className={`alert ${uncertain ? "alert-warning" : "alert-info"}`}
@@ -442,7 +458,7 @@ export function ConnectionAnalysisResult({
         label="Lokasi koneksi"
         rows={[
           {
-            label: "A · Titik awal",
+            label: "Titik lokasi 1",
             value: (
               <>
                 {result.start.label}
@@ -454,7 +470,7 @@ export function ConnectionAnalysisResult({
             ),
           },
           {
-            label: "B · Titik tujuan",
+            label: "Titik lokasi 2",
             value: (
               <>
                 {result.end.label}
@@ -467,22 +483,15 @@ export function ConnectionAnalysisResult({
           },
         ]}
       />
-      <fieldset className="mb-3">
-        <legend className="h6">Pilih rute</legend>
-        <div className="d-flex flex-wrap gap-2">
-          {result.routes.map((item) => (
-            <button
-              aria-pressed={route.id === item.id}
-              className={`btn ${route.id === item.id ? "btn-primary" : "btn-outline-primary"}`}
-              key={item.id}
-              onClick={() => setSelectedRouteId(item.id)}
-              type="button"
-            >
-              Rute {item.id} · {meters(item.distanceMeters)}
-            </button>
-          ))}
-        </div>
-      </fieldset>
+      <RouteSelector
+        routes={result.routes.map((item) => ({
+          id: item.id,
+          distanceMeters: item.distanceMeters,
+          destination: `${item.source?.name ?? "Titik lokasi 1"} → ${item.destination?.name ?? "Titik lokasi 2"}`,
+        }))}
+        selected={route.id}
+        onSelect={setSelectedRouteId}
+      />
       <DetailTable
         label={`Jarak rute ${route.id}`}
         rows={[
@@ -517,7 +526,7 @@ export function ConnectionAnalysisResult({
         </details>
       )}
       <h4 className="h6 mt-4">Rincian ruas · Rute {route.id}</h4>
-      <div className="table-responsive">
+      <DataTableShell label={`Rincian ruas Rute ${route.id}`}>
         <table className="table atlas-detail-table">
           <caption className="visually-hidden">Ruas rute {route.id}</caption>
           <thead>
@@ -531,9 +540,15 @@ export function ConnectionAnalysisResult({
           <tbody>
             {route.legs.map((leg, index) => (
               <tr
-                key={`${leg.kind}-${leg.name}-${JSON.stringify(leg.geometry.coordinates)}`}
+                key={`${leg.kind}-${leg.name.replace(/^A → /u, "Titik lokasi 1 → ").replace(/→ B$/u, "→ Titik lokasi 2")}-${JSON.stringify(leg.geometry.coordinates)}`}
               >
-                <th scope="row">{leg.name || `Ruas ${index + 1}`}</th>
+                <th scope="row">
+                  {leg.name
+                    ? leg.name
+                        .replace(/^A → /u, "Titik lokasi 1 → ")
+                        .replace(/→ B$/u, "→ Titik lokasi 2")
+                    : `Ruas ${index + 1}`}
+                </th>
                 <td>
                   {leg.kind === "new" ? "Kabel baru" : "Jaringan eksisting"}
                 </td>
@@ -547,7 +562,7 @@ export function ConnectionAnalysisResult({
             ))}
           </tbody>
         </table>
-      </div>
+      </DataTableShell>
       {result.historyId && (
         <ConnectionSurvey
           historyId={result.historyId}

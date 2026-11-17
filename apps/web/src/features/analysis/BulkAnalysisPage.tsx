@@ -1,3 +1,4 @@
+import { formatDistance } from "../../lib/format";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ExcelJS from "exceljs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -97,6 +98,7 @@ function downloadWorkbook(workbook: ExcelJS.Workbook, name: string) {
 export function BulkAnalysisPage() {
   const input = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
+  const selectedDetail = useRef<HTMLElement>(null);
   const [jobId, setJobId] = useState(
     () => new URLSearchParams(window.location.search).get("jobId") ?? ""
   );
@@ -106,9 +108,8 @@ export function BulkAnalysisPage() {
   const [selectedRowNumber, setSelectedRowNumber] = useState<number | null>(
     null
   );
-  const [selectedRouteId, setSelectedRouteId] = useState<
-    NetworkRouteOption["id"]
-  >("A");
+  const [selectedRouteId, setSelectedRouteId] =
+    useState<NetworkRouteOption["id"]>("A");
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -168,12 +169,15 @@ export function BulkAnalysisPage() {
     setSelectedRowNumber(row);
     setSelectedRouteId("A");
   }, []);
-  const selectMapRow = useCallback((row: number) => {
-    selectResultRow(row);
-    setPage(Math.floor((row - 1) / 50) + 1);
-    setSearch("");
-    setStatusFilter("");
-  }, [selectResultRow]);
+  const selectMapRow = useCallback(
+    (row: number) => {
+      selectResultRow(row);
+      setPage(Math.floor((row - 1) / 50) + 1);
+      setSearch("");
+      setStatusFilter("");
+    },
+    [selectResultRow]
+  );
   const job = jobQuery.data;
   const rows = pageQuery.data?.rows ?? [];
   const selectedRow = rows.find((row) => row.row === selectedRowNumber);
@@ -428,7 +432,7 @@ export function BulkAnalysisPage() {
             className="btn btn-link p-0 text-start"
             onClick={(event) => {
               event.stopPropagation();
-            selectResultRow(row.row);
+              selectResultRow(row.row);
             }}
             type="button"
           >
@@ -448,25 +452,17 @@ export function BulkAnalysisPage() {
     {
       key: "radius",
       header: "Radius pencarian",
-      render: (row) => (
-        <>
-          {row.result?.network?.searchRadiusMeters ??
-            row.result?.searchRadiusMeters ??
-            "—"}{" "}
-          m
-        </>
-      ),
+      render: (row) =>
+        formatDistance(
+          row.result?.network?.searchRadiusMeters ??
+            row.result?.searchRadiusMeters
+        ),
       width: "130px",
     },
     {
       key: "distance",
       header: "Jarak Rute A",
-      render: (row) =>
-        row.distanceMeters == null
-          ? "Belum tersedia"
-          : row.distanceMeters >= 1000
-            ? (row.distanceMeters / 1000).toFixed(2) + " km"
-            : Math.round(row.distanceMeters) + " m",
+      render: (row) => formatDistance(row.distanceMeters),
       width: "190px",
     },
     {
@@ -798,6 +794,26 @@ export function BulkAnalysisPage() {
                 </select>
               </div>
             </div>
+            {selectedRow && (
+              <div className="selected-location-bar" role="status">
+                <span>
+                  Lokasi dipilih: <strong>{selectedRow.address}</strong>
+                </span>
+                <button
+                  className="btn btn-outline-primary"
+                  type="button"
+                  onClick={() => {
+                    selectedDetail.current?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "start",
+                    });
+                    selectedDetail.current?.focus({ preventScroll: true });
+                  }}
+                >
+                  Lihat detail lokasi
+                </button>
+              </div>
+            )}
             <DataTable
               columns={columns}
               density="compact"
@@ -806,7 +822,8 @@ export function BulkAnalysisPage() {
               rowAriaLabel={(row) => `Buka detail lokasi ${row.address}`}
               rowClassName={(row) => {
                 const classes: string[] = [];
-                if (selectedRowNumber === row.row) classes.push("bulk-row-selected");
+                if (selectedRowNumber === row.row)
+                  classes.push("bulk-row-selected");
                 if (rowReviewReason(row)) classes.push("bulk-row-needs-review");
                 return classes.length ? classes.join(" ") : undefined;
               }}
@@ -836,10 +853,15 @@ export function BulkAnalysisPage() {
                 </button>
               </div>
             </div>
-            {selectedRow && selectedRowResult &&
+            {selectedRow &&
+              selectedRowResult &&
               Number.isFinite(selectedRow.latitude) &&
               Number.isFinite(selectedRow.longitude) && (
-                <section className="mt-4">
+                <section
+                  className="mt-4 analysis-selected-detail"
+                  ref={selectedDetail}
+                  tabIndex={-1}
+                >
                   <h4 className="h6">{selectedRow.address}</h4>
                   <NetworkCapacityDetail
                     capacity={selectedRowResult.network?.capacity}

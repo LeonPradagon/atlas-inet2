@@ -1,3 +1,4 @@
+import { formatDistance } from "../../lib/format";
 import { DataTable, type DataTableColumn } from "../../components/DataTable";
 import { DetailTable } from "../../components/DetailTable";
 import {
@@ -30,7 +31,7 @@ const spanColumns: readonly DataTableColumn<CablePlanSpan>[] = [
     key: "distance",
     header: "Panjang",
     className: "text-nowrap",
-    render: (row) => `${Math.round(row.distanceMeters)} m`,
+    render: (row) => `${formatDistance(row.distanceMeters)}`,
   },
   {
     key: "cores",
@@ -59,7 +60,7 @@ export function CablePlanDetails({
           { label: "Ke", value: endpoints.to },
           {
             label: "Panjang estimasi",
-            value: `${Math.round(cable.distanceMeters)} m`,
+            value: `${formatDistance(cable.distanceMeters)}`,
           },
           {
             label: "Kapasitas kabel kandidat",

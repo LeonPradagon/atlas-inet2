@@ -1,3 +1,4 @@
+import { formatDistance } from "../../lib/format";
 import { DetailTable } from "../../components/DetailTable";
 
 export type TerminationResults = {
@@ -125,7 +126,7 @@ export function TerminationDetail({ data }: { data?: TerminationResults }) {
                         label: "Relasi",
                         value: cable.recorded
                           ? "Relasi tercatat"
-                          : `Kabel dekat pada peta · perlu verifikasi · ${Math.round(cable.distanceMeters)} m dari titik`,
+                          : `Kabel dekat pada peta · perlu verifikasi · ${formatDistance(cable.distanceMeters)} dari titik`,
                       },
                       {
                         label: "Total core",
@@ -151,13 +152,13 @@ export function TerminationDetail({ data }: { data?: TerminationResults }) {
                       {
                         label: "Titik terdekat dari awal kabel",
                         value: cable.start
-                          ? `${cable.start.name} (${Math.round(cable.start.distanceMeters)} m)`
+                          ? `${cable.start.name} (${formatDistance(cable.start.distanceMeters)})`
                           : "Belum diketahui",
                       },
                       {
                         label: "Titik terdekat dari ujung kabel",
                         value: cable.end
-                          ? `${cable.end.name} (${Math.round(cable.end.distanceMeters)} m)`
+                          ? `${cable.end.name} (${formatDistance(cable.end.distanceMeters)})`
                           : "Belum diketahui",
                       },
                     ]}
