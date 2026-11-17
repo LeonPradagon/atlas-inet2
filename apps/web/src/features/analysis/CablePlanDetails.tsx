@@ -88,6 +88,12 @@ export function CablePlanDetails({
               label={`Ringkasan ${label}`}
               rows={facts}
             />
+            {spans.length > 0 && cable.cores != null && spans[0].requiredCores > cable.cores && (
+              <div className="alert alert-warning mt-2 mb-0" role="alert">
+                Kapasitas kabel kandidat tidak mencukupi: rencana membutuhkan {spans[0].requiredCores} core,
+                sedangkan kapasitas kabel {cable.cores} core. Pilih kabel berkapasitas lebih besar dan verifikasi saat survei.
+              </div>
+            )}
           </section>
         );
       })}
