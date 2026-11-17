@@ -1,11 +1,9 @@
+import { formatDistance } from "../../lib/format";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { gps } from "exifr";
 import { useRef, useState } from "react";
 import { AtlasTag } from "../../components/AtlasTag";
-import {
-  DataTable,
-  type DataTableColumn,
-} from "../../components/DataTable";
+import { DataTable, type DataTableColumn } from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
 import { api } from "../../lib/api";
@@ -13,10 +11,7 @@ import {
   NearestNetworkMap,
   type NetworkSearchResult,
 } from "./NearestNetworkMap";
-import {
-  candidateName,
-  type TerminationPlan,
-} from "./terminationPlan";
+import { candidateName, type TerminationPlan } from "./terminationPlan";
 
 type Survey = {
   id: string;
@@ -40,25 +35,26 @@ type TerminationReference = {
   detail: string;
 };
 
-const terminationReferenceColumns: readonly DataTableColumn<TerminationReference>[] = [
-  {
-    key: "name",
-    header: "Titik / aset",
-    rowHeader: true,
-    render: (row) => row.name,
-  },
-  {
-    key: "location",
-    header: "Koordinat",
-    className: "text-nowrap",
-    render: (row) => row.location,
-  },
-  {
-    key: "detail",
-    header: "Keterangan",
-    render: (row) => row.detail || "—",
-  },
-];
+const terminationReferenceColumns: readonly DataTableColumn<TerminationReference>[] =
+  [
+    {
+      key: "name",
+      header: "Titik / aset",
+      rowHeader: true,
+      render: (row) => row.name,
+    },
+    {
+      key: "location",
+      header: "Koordinat",
+      className: "text-nowrap",
+      render: (row) => row.location,
+    },
+    {
+      key: "detail",
+      header: "Keterangan",
+      render: (row) => row.detail || "—",
+    },
+  ];
 
 function getTerminationReferences(plan: TerminationPlan) {
   const references: TerminationReference[] = [];
@@ -87,10 +83,7 @@ function getTerminationReferences(plan: TerminationPlan) {
         id: `device-${index}-${point.kind}`,
         name: candidateName(point, index),
         location: `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`,
-        detail:
-          point.basis === "PLANNING"
-            ? ""
-            : point.reason,
+        detail: point.basis === "PLANNING" ? "" : point.reason,
       });
     });
 
@@ -108,7 +101,7 @@ function getTerminationReferences(plan: TerminationPlan) {
       id: `connection-${point.cableId}-${index}`,
       name: point.cableName,
       location: `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`,
-      detail: `${point.recommendedKind ? `Potensi ${point.recommendedKind}` : "Jenis terminasi belum ditentukan"} · ${Math.round(point.distanceMeters)} m dari jalur`,
+      detail: `${point.recommendedKind ? `Potensi ${point.recommendedKind}` : "Jenis terminasi belum ditentukan"} · ${formatDistance(point.distanceMeters)} dari jalur`,
     });
   });
 
@@ -347,6 +340,10 @@ export function SurveysPage() {
                 render: (survey: Survey) => (
                   <>
                     {survey.address}
+                    <small className="d-block text-secondary">
+                      {survey.analysis.latitude.toFixed(6)},{" "}
+                      {survey.analysis.longitude.toFixed(6)}
+                    </small>
                     <small className="d-block text-secondary fw-normal">
                       {survey.row_number
                         ? `Massal · Baris ${survey.row_number}`
@@ -540,20 +537,52 @@ export function SurveysPage() {
               {fields.map(([key, label]) => (
                 <label className="col-md-6 form-label" key={key}>
                   {label}
-                  <textarea
-                    className="form-control mt-1"
-                    maxLength={2000}
-                    onChange={(event) =>
-                      setForm({ ...form, [key]: event.target.value })
-                    }
-                    readOnly={
-                      selected.status === "VERIFIED" ||
-                      (selected.status === "REVIEW" &&
-                        me.data?.role !== "ADMIN")
-                    }
-                    rows={3}
-                    value={form[key] ?? ""}
-                  />
+                  {key === "length" ? (
+                    <input
+                      className="form-control mt-1"
+                      type="number"
+                      min="0"
+                      step="any"
+                      inputMode="decimal"
+                      value={form[key] ?? ""}
+                      readOnly={
+                        selected.status === "VERIFIED" ||
+                        (selected.status === "REVIEW" &&
+                          me.data?.role !== "ADMIN")
+                      }
+                      onChange={(event) =>
+                        setForm({ ...form, [key]: event.target.value })
+                      }
+                    />
+                  ) : key === "evidence" ? (
+                    <input
+                      className="form-control mt-1"
+                      value={form[key] ?? ""}
+                      readOnly={
+                        selected.status === "VERIFIED" ||
+                        (selected.status === "REVIEW" &&
+                          me.data?.role !== "ADMIN")
+                      }
+                      onChange={(event) =>
+                        setForm({ ...form, [key]: event.target.value })
+                      }
+                    />
+                  ) : (
+                    <textarea
+                      className="form-control mt-1"
+                      maxLength={2000}
+                      onChange={(event) =>
+                        setForm({ ...form, [key]: event.target.value })
+                      }
+                      readOnly={
+                        selected.status === "VERIFIED" ||
+                        (selected.status === "REVIEW" &&
+                          me.data?.role !== "ADMIN")
+                      }
+                      rows={3}
+                      value={form[key] ?? ""}
+                    />
+                  )}
                 </label>
               ))}
             </div>{" "}
