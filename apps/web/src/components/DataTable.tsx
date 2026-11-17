@@ -1,4 +1,6 @@
 import {
+  useEffect,
+  useRef,
   type CSSProperties,
   type KeyboardEvent,
   cloneElement,
@@ -23,6 +25,20 @@ export function DataTableShell({
   label: string;
   children: ReactNode;
 }) {
+  const element = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const table = element.current?.querySelector("table");
+    if (!table) return;
+    const labels = [...table.querySelectorAll("thead th")].map(
+      (cell) => cell.textContent?.trim() ?? ""
+    );
+    table.dataset.mobileCards = "true";
+    for (const row of table.querySelectorAll("tbody tr")) {
+      for (const [index, cell] of [...row.children].entries()) {
+        (cell as HTMLElement).dataset.columnLabel = labels[index] ?? "";
+      }
+    }
+  }, [children]);
   const table =
     isValidElement<{ className?: string }>(children) &&
     children.type === "table"
@@ -33,7 +49,8 @@ export function DataTableShell({
       : children;
   return (
     <section
-      aria-label={`${label}; gulir horizontal untuk melihat semua kolom`}
+      ref={element}
+      aria-label={label}
       className="table-responsive atlas-data-table-scroll"
       // biome-ignore lint/a11y/noNoninteractiveTabindex: a horizontally scrollable region must be focusable so keyboard users can scroll it
       tabIndex={0}

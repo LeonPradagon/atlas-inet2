@@ -1,0 +1,256 @@
+/* Shared operational typography, reading states, dialogs and mobile tables. */
+:root {
+  --atlas-readable-secondary: #536079;
+}
+[data-bs-theme="dark"] {
+  --atlas-readable-secondary: #afbdd0;
+}
+.form-text,
+.form-label,
+.table small,
+.atlas-detail-table small,
+.card-header p,
+.analysis-route-options p {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.app-main small {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.form-text,
+.text-secondary,
+.text-muted {
+  color: var(--atlas-readable-secondary) !important;
+}
+.atlas-detail-table,
+.map-asset-popup-table {
+  font-size: 13px;
+}
+.atlas-data-table thead th {
+  font-size: 12px;
+}
+.cable-name {
+  font-size: 12px;
+}
+.app-main :is(h1, h2, h3, h4, section[id], .analysis-selected-detail) {
+  scroll-margin-top: 88px;
+}
+.analysis-point-editor summary {
+  cursor: pointer;
+}
+.analysis-point-editor summary small {
+  font-size: 12px;
+}
+.location-input-embedded {
+  margin: 0;
+}
+.location-input-embedded > .col-12 {
+  padding: 0;
+}
+.location-input-embedded .card {
+  border: 0;
+  box-shadow: none;
+  margin: 0;
+}
+.location-input-embedded .card-body {
+  padding: 0;
+}
+.analysis-submit-bar {
+  display: flex;
+  justify-content: flex-end;
+}
+.empty-result {
+  min-height: 160px;
+}
+.analysis-method-details {
+  color: var(--atlas-readable-secondary);
+  font-size: 13px;
+}
+.analysis-method-details summary {
+  cursor: pointer;
+  padding-block: 8px;
+  font-weight: 600;
+}
+.analysis-method-details > div {
+  line-height: 1.6;
+}
+/* Preserve disclosure semantics when responsive tables use display:block. */
+details:not([open]) > :not(summary) { display: none !important; }
+.atlas-map-display-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: calc(100vw - 110px);
+}
+.maplibregl-ctrl.atlas-map-display-controls button:not(:disabled) {
+  padding: 8px;
+  color: var(--bs-body-color);
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+}
+.maplibregl-ctrl.atlas-map-display-controls button[aria-pressed="true"] {
+  background-color: var(--bs-tertiary-bg);
+  border-color: var(--bs-primary);
+}
+.maplibregl-ctrl.atlas-map-display-controls button[aria-pressed="false"] {
+  color: var(--atlas-readable-secondary);
+  background-color: var(--bs-body-bg);
+  text-decoration: none;
+}
+.maplibregl-ctrl.atlas-map-display-controls button:not(:disabled):hover {
+  color: var(--bs-body-color);
+  background-color: var(--bs-secondary-bg);
+}
+.maplibregl-ctrl.atlas-map-display-controls button:focus-visible {
+  outline: 2px solid var(--bs-primary);
+  outline-offset: 2px;
+}
+.selected-location-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-block: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
+}
+.selected-location-bar > span {
+  overflow-wrap: anywhere;
+}
+.atlas-modal-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  height: auto;
+  padding: 24px;
+  overflow: auto;
+  color: var(--bs-body-color);
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgb(15 23 42 / 24%);
+}
+.atlas-modal-dialog::backdrop {
+  background: rgb(15 23 42 / 55%);
+}
+.atlas-modal-dialog .modal-actions {
+  position: sticky;
+  bottom: -24px;
+  padding-block: 16px;
+  background: var(--bs-body-bg);
+}
+@media (max-width: 767px) {
+  .app-main .btn {
+    min-height: 44px;
+  }
+  .app-main .btn:has(> i:only-child) {
+    min-width: 44px;
+  }
+  .app-main .form-control,
+  .app-main .form-select {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .form-label,
+  .form-text,
+  .table small {
+    font-size: 13px;
+  }
+  .atlas-detail-table {
+    font-size: 13px;
+  }
+  .atlas-data-table-scroll:has(table[data-mobile-cards]) {
+    overflow: visible;
+    max-height: none;
+  }
+  table.atlas-data-table[data-mobile-cards] {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  table.atlas-data-table[data-mobile-cards] > thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  table.atlas-data-table[data-mobile-cards] > tbody {
+    display: block;
+  }
+  table.atlas-data-table[data-mobile-cards] > tbody > tr {
+    display: block;
+    margin: 12px;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  table.atlas-data-table[data-mobile-cards] > tbody > tr > :is(td, th) {
+    display: grid;
+    grid-template-columns: minmax(85px, 32%) minmax(0, 1fr);
+    gap: 12px;
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 10px 12px;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+  }
+  table.atlas-data-table[data-mobile-cards] > tbody > tr > :is(td, th)::before {
+    content: attr(data-column-label);
+    font-weight: 600;
+    color: var(--atlas-readable-secondary);
+  }
+  table.atlas-data-table[data-mobile-cards] td > *,
+  table.atlas-data-table[data-mobile-cards] th > * {
+    min-width: 0;
+    grid-column: 2;
+  }
+  table.atlas-data-table[data-mobile-cards] [data-column-label="Aksi"] {
+    display: block;
+  }
+  table.atlas-data-table[data-mobile-cards] [data-column-label="Aksi"]::before {
+    display: block;
+    margin-bottom: 8px;
+  }
+  .atlas-map-display-controls button {
+    min-height: 44px;
+  }
+  table.atlas-data-table[data-mobile-cards] td[colspan] {
+    display: block;
+  }
+  table.atlas-data-table[data-mobile-cards] td[colspan]::before {
+    content: none;
+  }
+  .selected-location-bar {
+    position: sticky;
+    top: 60px;
+    z-index: 3;
+  }
+  .selected-location-bar .btn {
+    width: 100%;
+  }
+  .atlas-modal-dialog {
+    padding: 16px;
+  }
+  .atlas-modal-dialog .modal-actions {
+    bottom: -16px;
+  }
+  .map-province-filter,
+  .map-package-picker {
+    padding: 10px;
+  }
+  .map-canvas-wrap {
+    gap: 10px;
+  }
+  .analysis-route-option {
+    padding: 12px;
+  }
+}
