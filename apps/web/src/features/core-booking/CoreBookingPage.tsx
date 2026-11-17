@@ -1,3 +1,5 @@
+import { DataTableShell } from "../../components/DataTable";
+import { ModalDialog } from "../../components/ModalDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
@@ -365,7 +367,7 @@ export function CoreBookingPage() {
               ))}
             </div>
           </div>
-          <div className="table-responsive">
+          <DataTableShell label="Permintaan core">
             <table className="table table-hover atlas-data-table booking-table mb-0">
               <thead>
                 <tr>
@@ -473,7 +475,7 @@ export function CoreBookingPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </DataTableShell>
           <TablePagination
             label="booking"
             onPageChange={setPage}
@@ -490,22 +492,7 @@ export function CoreBookingPage() {
         </section>
       )}
       {showForm && (
-        // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only backdrop close; Escape and focus trapping are missing until these modals move to <dialog>
-        <div
-          className="modal-backdrop-custom"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              setShowForm(false);
-            }
-          }}
-          role="presentation"
-        >
-          <section
-            aria-labelledby="booking-title"
-            aria-modal="true"
-            className="booking-modal"
-            role="dialog"
-          >
+        <ModalDialog labelledBy="booking-title" className="booking-modal" onClose={() => setShowForm(false)}>
             <div className="modal-heading">
               <div>
                 <h3 id="booking-title">Buat booking core</h3>
@@ -613,8 +600,7 @@ export function CoreBookingPage() {
                 </button>
               </div>
             </form>
-          </section>
-        </div>
+        </ModalDialog>
       )}
     </>
   );

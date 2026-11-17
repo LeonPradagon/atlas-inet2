@@ -1,3 +1,4 @@
+import { DataTableShell } from "../../components/DataTable";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import ExcelJS from "exceljs";
@@ -222,7 +223,7 @@ export function DashboardPage() {
                   </Link>
                 </div>
                 <div className="card-body p-0">
-                  <div className="table-responsive">
+                  <DataTableShell label="Utilisasi core">
                     <table className="table table-hover atlas-data-table mb-0">
                       <thead>
                         <tr>
@@ -276,7 +277,7 @@ export function DashboardPage() {
                         })}
                       </tbody>
                     </table>
-                  </div>
+                  </DataTableShell>
                   {!value?.topSegments.length && (
                     <div className="bulk-empty">
                       <b>Belum ada aset jaringan</b>
