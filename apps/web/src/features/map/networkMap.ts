@@ -2,6 +2,7 @@ import type { Feature, Geometry } from "geojson";
 import { type Map as MapLibreMap, Popup } from "maplibre-gl";
 import { api, type NetworkAsset } from "../../lib/api";
 import { kmzLegend } from "./kmzLegend";
+import { assetDetailTitle } from "./assetDetailTitle";
 
 type ImportedStyle = {
   lineColor?: string;
@@ -782,7 +783,7 @@ export function createNetworkAssetPopupContent(
   const content = document.createElement("div");
   content.className = "analysis-asset-popup-body";
   const title = document.createElement("strong");
-  title.textContent = String(asset.attributes?.name ?? asset.name);
+  title.textContent = assetDetailTitle(asset);
   content.append(title);
 
   const formatLength = (meters: number) =>

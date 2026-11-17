@@ -47,6 +47,7 @@ import {
   loadNetworkMapIcons,
 } from "./networkMap";
 import { registerSatelliteTiles } from "./satelliteTiles";
+import { assetDetailTitle } from "./assetDetailTitle";
 
 type Coordinate = [number, number];
 const indonesiaBounds: [[number, number], [number, number]] = [
@@ -4551,7 +4552,7 @@ export function MapPage() {
                   <header className="map-asset-popup-header">
                     <div>
                       <h3>
-                        {String(assetPopup.attributes?.name ?? assetPopup.name)}
+                        {assetDetailTitle(assetPopup)}
                       </h3>
                       {assetPopup.source === "kml" && (
                         <small>Atribut asli dari KMZ</small>
