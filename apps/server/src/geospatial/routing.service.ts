@@ -24,6 +24,46 @@ type RoutedPath = {
 
 @Injectable()
 export class RoutingService {
+  private nextRequestAt = 0;
+
+  private async fetchRoute(url: string) {
+    // The public provider shares a 10 requests/second Nginx limit. Reserve
+    // slots across all analyses on this service, including both endpoints.
+    for (let attempt = 0; ; attempt++) {
+      const slot = Math.max(Date.now(), this.nextRequestAt);
+      this.nextRequestAt = slot + 150;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, slot - Date.now()))
+      );
+      let response: Response;
+      try {
+        response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+      } catch {
+        if (attempt < 2) continue;
+        throw new ServiceUnavailableException({
+          code: "ROUTING_UNAVAILABLE",
+          message:
+            "Layanan routing tidak dapat dihubungi. Coba analisis kembali.",
+        });
+      }
+      if (response.status === 429 || response.status >= 500) {
+        await response.body?.cancel();
+        if (attempt < 3) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, 500 * (attempt + 1))
+          );
+          continue;
+        }
+        throw new ServiceUnavailableException({
+          code: "ROUTING_UNAVAILABLE",
+          message:
+            "Layanan routing sedang sibuk. Analisis belum dapat membandingkan seluruh kandidat; coba kembali.",
+        });
+      }
+      return response;
+    }
+  }
+
   async status(): Promise<"ok" | "unavailable"> {
     const baseUrl = process.env.ROUTING_URL;
     if (!baseUrl) {
@@ -116,17 +156,9 @@ export class RoutingService {
     if (alternatives || profile === "bike" || profile === "foot") {
       query.set("ch.disable", "true");
     }
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl.replace(/\/$/u, "")}/route?${query}`, {
-        signal: AbortSignal.timeout(20_000),
-      });
-    } catch {
-      throw new ServiceUnavailableException({
-        code: "ROUTING_UNAVAILABLE",
-        message: "Layanan GraphHopper tidak dapat dihubungi.",
-      });
-    }
+    const response = await this.fetchRoute(
+      `${baseUrl.replace(/\/$/u, "")}/route?${query}`
+    );
     if (!response.ok) {
       throw new BadGatewayException({
         message:

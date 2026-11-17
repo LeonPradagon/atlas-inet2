@@ -1,4 +1,7 @@
-import { BadRequestException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import type { RoutingService } from "../geospatial/routing.service";
 import type { AtlasService } from "./atlas.service";
 import {
@@ -169,8 +172,7 @@ function hasMeaningfulRouteDivergence(
   if (coordinatesA.length < 2 || coordinatesB.length < 2) {
     return false;
   }
-  const referenceLatitude =
-    (coordinatesA[0][1] + coordinatesB[0][1]) / 2;
+  const referenceLatitude = (coordinatesA[0][1] + coordinatesB[0][1]) / 2;
   const projectedA = projectRoute(coordinatesA, referenceLatitude);
   const projectedB = projectRoute(coordinatesB, referenceLatitude);
   const lengthA = routeLengthMeters(projectedA);
@@ -419,8 +421,7 @@ export async function analyzeCoordinates(
           // without the optional capacity summary. Keep planning usable when
           // that enrichment is absent.
           type: String(
-            nearest.capacity?.deviceType ??
-              inferNetworkType(nearest.name)
+            nearest.capacity?.deviceType ?? inferNetworkType(nearest.name)
           ),
         },
       ];
@@ -447,7 +448,10 @@ export async function analyzeCoordinates(
           routeIndex,
           target,
         }));
-      } catch {
+      } catch (error) {
+        // A provider outage is not evidence that a candidate is unreachable.
+        // Never rank a partial candidate set after rate limiting or a timeout.
+        if (error instanceof ServiceUnavailableException) throw error;
         // An unreachable candidate should not hide a usable route to another asset.
         return [];
       }
