@@ -33,6 +33,60 @@
 [data-bs-theme="dark"] .auth-logo-wordmark {
   display: block;
 }
+.header-corporate-logo {
+  position: relative;
+  display: block;
+  flex-shrink: 0;
+  width: clamp(84px, 22vw, 144px);
+}
+.header-corporate-logo .corporate-logo {
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.header-logo-wordmark {
+  position: absolute;
+  inset: 0;
+  display: none;
+  width: 100%;
+  height: auto;
+  pointer-events: none;
+  filter: brightness(0) invert(1);
+  clip-path: inset(0 0 18% 29%);
+}
+[data-bs-theme="dark"] .header-logo-wordmark {
+  display: block;
+}
+[data-bs-theme="dark"] .header-brand {
+  color: var(--bs-heading-color);
+}
+[data-bs-theme="dark"] .header-product-name small {
+  color: var(--bs-secondary-color);
+}
+.header-product-name {
+  flex-shrink: 0;
+}
+@media (max-width: 767px) {
+  .app-header > .container-fluid {
+    flex-wrap: nowrap;
+    padding-inline: 12px !important;
+  }
+  .app-header .header-brand {
+    margin-right: 8px;
+  }
+  .app-header .header-brand + div {
+    gap: 6px !important;
+  }
+}
+@media (max-width: 420px) {
+  .header-product-name small {
+    display: none;
+  }
+  .app-header .header-brand {
+    font-size: 16px;
+  }
+}
 
 [data-bs-theme="dark"] {
   --bs-body-bg: #101827;
@@ -486,4 +540,10 @@
 }
 [data-bs-theme="dark"] .bulk-row-review-reason {
   color: #dfcb91;
+}
+
+@media (min-width: 768px) {
+  .app-header .header-corporate-logo {
+    display: none;
+  }
 }

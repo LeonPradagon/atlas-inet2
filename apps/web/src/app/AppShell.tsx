@@ -152,14 +152,24 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             className="navbar-brand header-brand d-flex align-items-center mb-0 gap-2"
             to="/"
           >
-            <img
-              alt="Sinergy Networks"
-              className="corporate-logo"
-              height="42"
-              src="/sinergy-networks-brd.png"
-              width="160"
-            />
-            <span>
+            <span className="header-corporate-logo">
+              <img
+                alt="Sinergy Networks"
+                className="corporate-logo"
+                height="42"
+                src="/sinergy-networks-brd.png"
+                width="160"
+              />
+              <img
+                alt=""
+                aria-hidden="true"
+                className="header-logo-wordmark"
+                height="42"
+                src="/sinergy-networks-brd.png"
+                width="160"
+              />
+            </span>
+            <span className="header-product-name">
               ATLAS <small>NETWORK INTELLIGENCE</small>
             </span>
           </Link>
@@ -204,21 +214,18 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
             <img
               alt="Sinergy Networks — Borderless Connectivity"
               className="corporate-logo"
-              height="50"
+              height="42"
               src="/sinergy-networks-brd.png"
-              width="190"
+              width="160"
             />
             <img
               alt=""
               aria-hidden="true"
               className="sidebar-logo-wordmark"
-              height="50"
+              height="42"
               src="/sinergy-networks-brd.png"
-              width="190"
+              width="160"
             />
-          </span>
-          <span className="corporate-product-name">
-            ATLAS · NETWORK INTELLIGENCE
           </span>
         </Link>
         <nav aria-label="Navigasi utama" className="sidebar-menu-groups">
