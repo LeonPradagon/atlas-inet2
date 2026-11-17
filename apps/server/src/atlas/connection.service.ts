@@ -14,6 +14,8 @@ import {
   TERMINAL_TOLERANCE_METERS,
   type Terminal,
 } from "./connection-graph";
+import { analyzeCoordinates } from "./address-analysis";
+import { AtlasService } from "./atlas.service";
 import { buildTerminationPlan, type CoreRequirement } from "./termination-plan";
 
 export type ConnectionPoint = {
@@ -91,7 +93,8 @@ export function validateConnectionInput(input: ConnectionInput) {
 export class ConnectionService {
   constructor(
     @Inject(Database) private readonly db: Database,
-    @Inject(RoutingService) private readonly routing: RoutingService
+    @Inject(RoutingService) private readonly routing: RoutingService,
+    @Inject(AtlasService) private readonly atlas: AtlasService
   ) {}
 
   async loadGraph() {
@@ -128,45 +131,23 @@ export class ConnectionService {
       inventory.attachments,
       inventory.mappings
     );
-    const radius = input.allowExpand2km ? 2000 : 1000;
-    const candidates = (at: Coordinate) =>
-      inventory.terminals
-        .filter((t) => meters(at, t.coordinate) <= radius)
-        .sort((a, b) => meters(at, a.coordinate) - meters(at, b.coordinate));
-    const starts = candidates(start),
-      ends = candidates(end);
-    const paths: NonNullable<ReturnType<typeof shortestConnection>>[] = [];
-    // Find plausible existing-network paths first; A/B must keep the same
-    // source and destination terminations and differ only in the new cable legs.
-    const pairs = starts
-      .flatMap((a) =>
-        ends
-          .filter((b) => a.id !== b.id)
-          .map((b) => ({
-            a,
-            b,
-            cost: meters(start, a.coordinate) + meters(end, b.coordinate),
-          }))
-      )
-      .sort((a, b) => a.cost - b.cost);
-    for (const { a, b } of pairs) {
-      const path =
-        shortestConnection(graph, a, b, true) ??
-        shortestConnection(graph, a, b);
-      if (
-        path &&
-        !paths.some(
-          (item) =>
-            item.source.id === path.source.id &&
-            item.destination.id === path.destination.id
-        )
-      ) {
-        paths.push(path);
-        if (paths.length === 12) {
-          break;
-        }
-      }
-    }
+    // Each endpoint uses the same selection and access geometry as single-point analysis.
+    const [first, second] = await Promise.all([
+      this.analyzePoint(
+        input.start,
+        input.allowExpand2km,
+        input.coreRequirement
+      ),
+      this.analyzePoint(input.end, input.allowExpand2km, input.coreRequirement),
+    ]);
+    const terminal = (result: typeof first): Terminal | null => {
+      const t = result.routes?.[0]?.destination;
+      return t
+        ? { id: t.id, name: t.name, coordinate: [t.longitude, t.latitude] }
+        : null;
+    };
+    const source = terminal(first),
+      destination = terminal(second);
     const base = {
       ...input,
       address: `${input.start.label} → ${input.end.label}`,
@@ -174,21 +155,61 @@ export class ConnectionService {
       latitude: input.end.latitude,
       longitude: input.end.longitude,
       mode: "connection",
-      searchRadiusMeters: radius,
-      selectionStrategy: "nearest_access_candidates_max_12_not_global_optimum",
+      searchRadiusMeters: input.allowExpand2km ? 2000 : 1000,
+      selectionStrategy: "independent_single_point_terminations",
       terminalToleranceMeters: TERMINAL_TOLERANCE_METERS,
     };
-    if (!paths.length) {
+    const path =
+      source && destination
+        ? source.id === destination.id
+          ? {
+              source,
+              destination,
+              legs: [] as Leg[],
+              links: [],
+              recorded: false,
+            }
+          : (shortestConnection(graph, source, destination, true) ??
+            shortestConnection(graph, source, destination))
+        : null;
+    if (!path) {
       return {
         ...base,
+        source,
+        destination,
         message:
-          "Tidak ada jalur jaringan tercatat maupun kandidat melalui aset terminasi. Tidak dibuat jalur lurus A–B.",
+          source && destination
+            ? `Belum ditemukan jalur jaringan antara ${source.name} dan ${destination.name}, hasil analisis tunggal masing-masing titik.`
+            : "Rute akses ke terminasi salah satu titik belum tersedia. Periksa lokasi atau perluas pencarian.",
         network: null,
         routes: [],
-        status: "NO_CONFIRMED_NETWORK_CONNECTION",
         terminationPlan: null,
+        status:
+          source && destination
+            ? "NO_CONFIRMED_NETWORK_CONNECTION"
+            : "ACCESS_ROUTING_UNAVAILABLE",
       };
     }
+    const paths = [path];
+    const access = (result: typeof first) => {
+      if (!("routeGeometry" in result) || !result.routeGeometry) return [];
+      return [
+        { geometry: result.routeGeometry },
+        ...(result.routes ?? []).flatMap((route) =>
+          "routeGeometry" in route && route.routeGeometry
+            ? [{ geometry: route.routeGeometry }]
+            : []
+        ),
+      ];
+    };
+    const sourceAccess = access(first);
+    // Preserve single-point road routing, including its direction, by reversing its geometry.
+    const destinationAccess = access(second).map((route) => ({
+      geometry: {
+        type: "LineString" as const,
+        coordinates: [...route.geometry.coordinates].reverse(),
+      },
+    }));
     const routeCandidates: Array<{
       path: (typeof paths)[number];
       legs: Leg[];
@@ -203,12 +224,8 @@ export class ConnectionService {
     }> = [];
     for (const path of paths) {
       try {
-        const accessRoutes = await Promise.all([
-          this.accessRoutes([start, path.source.coordinate]),
-          this.accessRoutes([path.destination.coordinate, end]),
-        ]);
-        const combinations = accessRoutes[0].flatMap((a) =>
-          accessRoutes[1].map((b) => [a, b] as const)
+        const combinations = sourceAccess.flatMap((a) =>
+          destinationAccess.map((b) => [a, b] as const)
         );
         for (const accesses of combinations) {
           const newLegs: Leg[] = accesses.map((r, i) => ({
@@ -281,41 +298,43 @@ export class ConnectionService {
               (s, l) => s + l.distanceMeters,
               0
             );
-          const terminalGaps = [
-            {
-              basis: "termination_attachment_gap",
-              confirmation: "survey_required",
-              gapMeters: meters(
-                path.source.coordinate,
-                path.legs[0].geometry.coordinates[0]
-              ),
-              geometry: {
-                coordinates: [
-                  path.source.coordinate,
-                  path.legs[0].geometry.coordinates[0],
-                ],
-                type: "LineString",
-              },
-              name: path.source.name,
-            },
-            ...path.links,
-            {
-              basis: "termination_attachment_gap",
-              confirmation: "survey_required",
-              gapMeters: meters(
-                path.legs.at(-1)!.geometry.coordinates.at(-1)!,
-                path.destination.coordinate
-              ),
-              geometry: {
-                coordinates: [
-                  path.legs.at(-1)!.geometry.coordinates.at(-1)!,
-                  path.destination.coordinate,
-                ],
-                type: "LineString",
-              },
-              name: path.destination.name,
-            },
-          ];
+          const terminalGaps = path.legs.length
+            ? [
+                {
+                  basis: "termination_attachment_gap",
+                  confirmation: "survey_required",
+                  gapMeters: meters(
+                    path.source.coordinate,
+                    path.legs[0].geometry.coordinates[0]
+                  ),
+                  geometry: {
+                    coordinates: [
+                      path.source.coordinate,
+                      path.legs[0].geometry.coordinates[0],
+                    ],
+                    type: "LineString",
+                  },
+                  name: path.source.name,
+                },
+                ...path.links,
+                {
+                  basis: "termination_attachment_gap",
+                  confirmation: "survey_required",
+                  gapMeters: meters(
+                    path.legs.at(-1)!.geometry.coordinates.at(-1)!,
+                    path.destination.coordinate
+                  ),
+                  geometry: {
+                    coordinates: [
+                      path.legs.at(-1)!.geometry.coordinates.at(-1)!,
+                      path.destination.coordinate,
+                    ],
+                    type: "LineString",
+                  },
+                  name: path.destination.name,
+                },
+              ]
+            : [];
           const unverifiedGapMeters = [...gaps, ...terminalGaps].reduce(
             (s, g) => s + g.gapMeters,
             0
@@ -396,14 +415,22 @@ export class ConnectionService {
     };
   }
 
-  private async accessRoutes(coordinates: Coordinate[]) {
-    if (typeof this.routing.previewNetworkAlternatives === "function") {
-      try {
-        return await this.routing.previewNetworkAlternatives(coordinates);
-      } catch {
-        // Keep a usable primary route if alternate-path lookup is unavailable.
-      }
-    }
-    return [await this.routing.previewNetwork(coordinates)];
+  async analyzePoint(
+    point: ConnectionPoint,
+    expand: boolean,
+    requirement?: CoreRequirement
+  ) {
+    return analyzeCoordinates(
+      this.atlas,
+      this.routing,
+      point.longitude,
+      point.latitude,
+      point.label,
+      "manual",
+      undefined,
+      undefined,
+      expand,
+      requirement
+    );
   }
 }

@@ -282,6 +282,32 @@ const input = {
 };
 function createService(router) {
   const connectionService = new ConnectionService({}, router);
+  connectionService.analyzePoint = async (point) => {
+    const target = point.longitude < 0 ? a : b;
+    try {
+      const coordinates = [
+        [point.longitude, point.latitude],
+        target.coordinate,
+      ];
+      const routes = router.previewNetworkAlternatives
+        ? await router.previewNetworkAlternatives(coordinates)
+        : [await router.previewNetwork(coordinates)];
+      return {
+        routeGeometry: routes[0].geometry,
+        routes: routes.map((route, index) => ({
+          id: index ? "B" : "A",
+          destination: {
+            ...target,
+            longitude: target.coordinate[0],
+            latitude: target.coordinate[1],
+          },
+          ...(index ? { routeGeometry: route.geometry } : {}),
+        })),
+      };
+    } catch {
+      return { routes: [] };
+    }
+  };
   connectionService.loadGraph = async () => ({
     attachments: [],
     mappings: [],
@@ -481,4 +507,46 @@ test("survey selects only persisted route and rejects geometry, missing or inval
   );
   assert.ok(duplicate.sql.includes("analysis->'start'"));
   assert.ok(duplicate.sql.includes("analysis->'end'"));
+});
+
+test("two points preserve independently selected terminations and their single-point access geometry", async () => {
+  const service = createService({});
+  const selected = [];
+  service.analyzePoint = async (point) => {
+    const t = point.longitude < 0 ? a : b;
+    const geometry = {
+      type: "LineString",
+      coordinates: [
+        [point.longitude, point.latitude],
+        [0.01, 0.01],
+        t.coordinate,
+      ],
+    };
+    selected.push({ t, geometry });
+    return {
+      routeGeometry: geometry,
+      routes: [
+        {
+          id: "A",
+          destination: {
+            ...t,
+            longitude: t.coordinate[0],
+            latitude: t.coordinate[1],
+          },
+        },
+      ],
+    };
+  };
+  const result = await service.analyze(input);
+  assert.equal(
+    result.selectionStrategy,
+    "independent_single_point_terminations"
+  );
+  assert.equal(result.routes[0].source.id, a.id);
+  assert.equal(result.routes[0].destination.id, b.id);
+  assert.deepEqual(result.routes[0].legs[0].geometry, selected[0].geometry);
+  assert.deepEqual(
+    result.routes[0].legs.at(-1).geometry.coordinates,
+    [...selected[1].geometry.coordinates].reverse()
+  );
 });
