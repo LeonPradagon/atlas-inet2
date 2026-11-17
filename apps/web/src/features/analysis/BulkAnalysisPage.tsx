@@ -43,6 +43,9 @@ function rowReviewReason(row: AnalysisRow) {
   if (["OK", "QUEUED", "PROCESSING", "CANCELLED"].includes(row.status)) {
     return "";
   }
+  if (row.status === "NETWORK_NOT_FOUND" && row.result?.searchRadiusMeters != null) {
+    return `Jaringan tidak ditemukan dalam radius ${row.result.searchRadiusMeters} m.`;
+  }
   if (row.message && row.message !== row.status) {
     return row.message;
   }

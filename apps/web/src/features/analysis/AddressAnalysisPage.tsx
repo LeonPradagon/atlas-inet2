@@ -1728,7 +1728,11 @@ export function AddressAnalysisPage() {
                   </b>
                   <small>
                     {analyze.data.message ??
-                      "Koordinat dan jaringan terdekat ditemukan."}
+                      (!selectedResult.network
+                        ? "Koordinat ditemukan, tetapi jaringan belum ditemukan dalam radius pencarian."
+                        : selectedResult.distanceMeters === null
+                          ? "Jaringan ditemukan, tetapi rute belum tersedia."
+                          : "Koordinat dan jaringan terdekat ditemukan.")}
                   </small>
                 </div>
               </div>
