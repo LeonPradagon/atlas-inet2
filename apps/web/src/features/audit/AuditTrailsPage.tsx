@@ -47,15 +47,34 @@ const actionLabels: Record<string, string> = {
   API_REQUEST_FAILED: "Permintaan gagal",
 };
 
-function formatDetails(details: AuditEntry["details"]) {
+function AuditDetails({ entry }: { entry: AuditEntry }) {
+  const details = entry.details ?? {};
+  const endpointAlreadyShown =
+    typeof details.method === "string" &&
+    typeof details.path === "string" &&
+    entry.entityId === `${details.method} ${details.path}`;
+  const fields = Object.entries(details).filter(
+    ([key]) =>
+      key !== "statusCode" &&
+      !(endpointAlreadyShown && (key === "method" || key === "path"))
+  );
+  if (!fields.length) return <span className="text-body-secondary">—</span>;
+
   return (
-    Object.entries(details ?? {})
-      .filter(([key]) => key !== "statusCode")
-      .map(
-        ([key, value]) =>
-          `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`
-      )
-      .join(" · ") || "—"
+    <dl className="d-grid gap-1 mb-0">
+      {fields.map(([key, value]) => (
+        <div className="d-flex flex-wrap column-gap-2" key={key}>
+          <dt className="fw-semibold text-body-secondary text-break">
+            {key === "durationMs" ? "Durasi respons" : key === "method" ? "Metode" : key === "path" ? "Path" : key}
+          </dt>
+          <dd className="mb-0 text-break">
+            {key === "durationMs" && typeof value === "number"
+              ? `${value.toLocaleString("id-ID")} ms`
+              : typeof value === "string" ? value : JSON.stringify(value)}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -155,10 +174,8 @@ export function AuditTrailsPage() {
             <label className="visually-hidden" htmlFor="audit-search">
               Cari aktivitas
             </label>
-            <div className="input-group">
-              <span className="input-group-text bg-white">
-                <i className="bi bi-search" />
-              </span>
+            <div className="atlas-field-with-icon">
+              <i aria-hidden="true" className="bi bi-search atlas-field-icon" />
               <input
                 className="form-control"
                 id="audit-search"
@@ -167,6 +184,7 @@ export function AuditTrailsPage() {
                   setPage(1);
                 }}
                 placeholder="Cari aksi, objek, atau pengguna"
+                type="search"
                 value={search}
               />
             </div>
@@ -249,7 +267,7 @@ export function AuditTrailsPage() {
                               </small>
                             </td>
                             <td className="audit-details">
-                              {formatDetails(entry.details)}
+                              <AuditDetails entry={entry} />
                             </td>
                           </>
                         );
