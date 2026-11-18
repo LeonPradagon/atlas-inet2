@@ -2514,6 +2514,7 @@ export function MapPage() {
         source: "selected-cable-highlight",
         filter: ["==", ["get", "featureType"], "core-direction-count"],
         layout: {
+          visibility: "none",
           "text-field": ["get", "label"],
           "text-font": ["Open Sans Semibold"],
           "text-size": 12,
@@ -2535,6 +2536,7 @@ export function MapPage() {
         source: "selected-cable-highlight",
         filter: ["==", ["get", "featureType"], "core-direction-arrow"],
         layout: {
+          visibility: "none",
           "text-field": "➤",
           "text-font": ["Open Sans Semibold"],
           "text-size": 18,
