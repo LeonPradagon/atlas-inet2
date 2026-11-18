@@ -6,7 +6,7 @@ const dialog = Swal.mixin({
   color: "var(--bs-body-color, #202b3c)",
   buttonsStyling: false,
   customClass: {
-    confirmButton: "btn btn-primary mx-1",
+    confirmButton: "btn btn-outline-primary atlas-secondary-action mx-1",
     cancelButton: "btn btn-outline-secondary mx-1",
   },
 });

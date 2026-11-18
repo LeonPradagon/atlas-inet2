@@ -1306,12 +1306,13 @@ export function AnalysisHistoryPage() {
                           {detail.data.failedRows ?? 0} perlu diperiksa.
                         </span>
                         <button
-                          className="btn btn-sm btn-primary"
+                          className="btn btn-sm btn-outline-primary atlas-secondary-action"
                           onClick={() => {
                             window.location.href = `/analisis-massal?jobId=${detail.data.bulkJobId}`;
                           }}
                           type="button"
                         >
+                          <i aria-hidden="true" className="bi bi-folder2-open atlas-secondary-action-icon" />
                           Buka pekerjaan dan hasil
                         </button>
                       </div>

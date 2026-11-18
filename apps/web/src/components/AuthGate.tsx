@@ -77,7 +77,7 @@ function Login() {
           />
           {error && <div className="alert alert-danger">{error}</div>}
           <button
-            className="btn btn-primary w-100"
+            className="btn btn-outline-primary atlas-secondary-action w-100 justify-content-center"
             disabled={loading}
             type="submit"
           >

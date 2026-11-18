@@ -376,7 +376,7 @@ export function SurveysPage() {
                   survey.status === "WAITING" ||
                   survey.status === "REVISION" ? (
                     <button
-                      className="btn btn-sm btn-primary"
+                      className="btn btn-sm btn-outline-primary atlas-secondary-action"
                       disabled={update.isPending}
                       onClick={() =>
                         update.mutate({
@@ -672,11 +672,12 @@ export function SurveysPage() {
                       )}
                     </div>
                     <button
-                      className="btn btn-outline-primary file-upload-button"
+                      className="btn btn-outline-primary atlas-secondary-action file-upload-button"
                       disabled={readingImage}
                       onClick={() => imageInput.current?.click()}
                       type="button"
                     >
+                      <i aria-hidden="true" className="bi bi-upload atlas-secondary-action-icon" />
                       {form.image ? "Pilih foto lain" : "Pilih foto"}
                     </button>
                     <span className="file-upload-drop-hint">
@@ -767,7 +768,7 @@ export function SurveysPage() {
             <div className="d-flex mt-3 gap-2">
               {selected.status === "IN_PROGRESS" && (
                 <button
-                  className="btn btn-primary"
+                  className="btn btn-outline-primary atlas-secondary-action"
                   disabled={update.isPending || readingImage}
                   onClick={() =>
                     update.mutate({

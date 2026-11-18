@@ -2198,8 +2198,21 @@ export function MapPage() {
     let boundsTimer: ReturnType<typeof setTimeout> | undefined;
     const resizeObserver = new ResizeObserver(() => instance.resize());
     resizeObserver.observe(mapElement.current);
-    instance.addControl(new NavigationControl(), "top-right");
-    instance.addControl(new FullscreenControl({ container: mapElement.current.parentElement ?? undefined }), "top-right");
+    const navigation = new NavigationControl();
+    const fullscreen = new FullscreenControl({
+      container: mapElement.current.parentElement ?? undefined,
+    });
+    instance.addControl({
+      onAdd(mapInstance) {
+        const group = navigation.onAdd(mapInstance);
+        group.append(...fullscreen.onAdd(mapInstance).children);
+        return group;
+      },
+      onRemove() {
+        fullscreen.onRemove();
+        navigation.onRemove();
+      },
+    }, "top-right");
     instance.on("error", (event) => {
       if (!("sourceId" in event && event.sourceId === "satellite-imagery")) {
         setMapError(true);
@@ -4117,7 +4130,7 @@ export function MapPage() {
           <div className="map-top-actions">
             <button
               aria-pressed={satelliteEnabled}
-              className={`btn ${satelliteEnabled ? "btn-primary" : "btn-light"}`}
+              className="btn btn-light atlas-choice"
               disabled={!mapReady}
               onClick={() => {
                 const next = !satelliteEnabled;
@@ -4761,7 +4774,7 @@ export function MapPage() {
                   )}
                   {routePoints.length >= 2 && (
                     <button
-                      className="btn btn-sm btn-primary"
+                      className="btn btn-sm btn-outline-primary atlas-secondary-action"
                       disabled={routeLoading}
                       onClick={() => void previewRoute()}
                       type="button"
@@ -6279,8 +6292,8 @@ export function MapPage() {
                     )}
                   </form>
                 </details>
-                <Link className="btn btn-primary mt-4 w-100" to="/booking-core">
-                  <i className="bi bi-diagram-3 me-2" />
+                <Link className="btn btn-outline-primary atlas-secondary-action justify-content-center mt-4 w-100" to="/booking-core">
+                  <i aria-hidden="true" className="bi bi-diagram-3 atlas-secondary-action-icon" />
                   Kelola booking core
                 </Link>
               </>

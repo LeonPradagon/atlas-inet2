@@ -48,7 +48,7 @@ export function CoreMappingPanel({ segmentId, isAdmin }: { segmentId: string; is
         <div className="col-md-6"><label className="form-label" htmlFor="mapping-source">Sumber data</label><select id="mapping-source" className="form-select form-select-sm" value={source} onChange={(e) => setSource(e.target.value)}><option value="">Pilih sumber</option><option>Survei lapangan</option><option>Data operasional</option><option>Dokumen inventaris</option></select></div>
         <div className="col-md-6"><label className="form-label" htmlFor="mapping-note">Catatan (opsional)</label><input id="mapping-note" className="form-control form-control-sm" maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} /></div>
       </div>
-      <button type="button" className="btn btn-primary btn-sm mt-2" disabled={!valid || create.isPending} onClick={() => create.mutate()}>Simpan sambungan</button>
+      <button type="button" className="btn btn-outline-primary atlas-secondary-action btn-sm mt-2" disabled={!valid || create.isPending} onClick={() => create.mutate()}>Simpan sambungan</button>
       {create.isSuccess && <small className="text-success d-block" role="status">Sambungan tersimpan. Status penggunaan core tidak berubah.</small>}
       {create.error && <small className="text-danger d-block" role="alert">{create.error.message}</small>}
     </details>}

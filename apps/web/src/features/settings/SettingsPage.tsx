@@ -125,7 +125,7 @@ function CreateAccountForm() {
                 />
               </div>
             </div>
-            <button className="btn btn-primary mt-3" type="submit">
+            <button className="btn btn-outline-primary atlas-secondary-action mt-3" type="submit">
               {create.isPending ? "Membuat akun..." : "Buat akun"}
             </button>
           </fieldset>
@@ -216,7 +216,7 @@ export function SettingsPage() {
               />
               <div className="d-flex align-items-center mt-3 gap-3">
                 <button
-                  className="btn btn-primary"
+                  className="btn btn-outline-primary atlas-secondary-action"
                   disabled={save.isPending}
                   type="submit"
                 >

@@ -1,3 +1,4 @@
+import { BookingStatusBadge } from "../core-booking/BookingStatusBadge";
 import { DataTableShell } from "../../components/DataTable";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -147,16 +148,16 @@ export function DashboardPage() {
         action={
           <div className="d-flex gap-2">
             <button
-              className="btn btn-outline-primary"
+              className="btn btn-outline-primary atlas-secondary-action"
               disabled={exportReport.isPending}
               onClick={() => exportReport.mutate()}
               type="button"
             >
-              <i className="bi bi-file-earmark-excel me-2" />
+              <i aria-hidden="true" className="bi bi-file-earmark-excel atlas-secondary-action-icon" />
               {exportReport.isPending ? "Menyiapkan..." : "Ekspor laporan"}
             </button>
-            <Link className="btn btn-primary" to="/peta-jaringan">
-              <i className="bi bi-map me-2" />
+            <Link className="btn btn-outline-primary atlas-secondary-action" to="/peta-jaringan">
+              <i aria-hidden="true" className="bi bi-map atlas-secondary-action-icon" />
               Buka peta jaringan
             </Link>
           </div>
@@ -220,8 +221,13 @@ export function DashboardPage() {
                     <h3>Utilisasi core per segmen</h3>
                     <p>Core terpakai dan booking aktif</p>
                   </div>
-                  <Link className="text-link" to="/peta-jaringan">
-                    Lihat semua <i className="bi bi-arrow-right" />
+                  <Link
+                    aria-label="Lihat semua segmen di Peta Jaringan"
+                    className="btn btn-sm btn-outline-primary atlas-secondary-action flex-shrink-0"
+                    to="/peta-jaringan"
+                  >
+                    Lihat semua
+                    <i aria-hidden="true" className="bi bi-arrow-right atlas-secondary-action-icon" />
                   </Link>
                 </div>
                 <div className="card-body p-0">
@@ -305,32 +311,28 @@ export function DashboardPage() {
                     <h3>Aktivitas booking</h3>
                     <p>Permintaan terbaru</p>
                   </div>
-                  <Link className="text-link" to="/booking-core">
-                    Kelola <i className="bi bi-arrow-right" />
+                  <Link
+                    aria-label="Kelola booking core"
+                    className="btn btn-sm btn-outline-primary atlas-secondary-action flex-shrink-0"
+                    to="/booking-core"
+                  >
+                    Kelola
+                    <i aria-hidden="true" className="bi bi-arrow-right atlas-secondary-action-icon" />
                   </Link>
                 </div>
                 <div className="card-body p-0">
                   {value?.recentBookings.map((booking) => (
                     <div className="activity-row" key={booking.id}>
-                      <span
-                        className={`activity-icon ${booking.status === "Booked" ? "booked" : "waiting"}`}
-                      >
-                        <i
-                          className={`bi ${booking.status === "Booked" ? "bi-check2" : "bi-clock"}`}
-                        />
-                      </span>
-                      <div className="flex-grow-1">
+                      <div className="booking-activity-info">
                         <b>{booking.customer}</b>
-                        <small>
-                          {booking.cores} core ·{" "}
-                          {new Date(booking.requestedAt).toLocaleDateString(
-                            "id-ID"
-                          )}
+                        <small className="d-flex flex-wrap column-gap-3">
+                          <span>{booking.cores} core</span>
+                          <time dateTime={booking.requestedAt}>
+                            {new Date(booking.requestedAt).toLocaleDateString("id-ID")}
+                          </time>
                         </small>
                       </div>
-                      <span className="badge rounded-pill text-bg-light">
-                        {booking.status}
-                      </span>
+                      <BookingStatusBadge status={booking.status} />
                     </div>
                   ))}
                   {!value?.recentBookings.length && (
@@ -346,7 +348,6 @@ export function DashboardPage() {
           <div className="quick-actions mt-4">
             <div>
               <h3>Akses cepat</h3>
-              <p>Mulai pekerjaan Anda dengan cepat.</p>
             </div>
             <Link className="quick-action" to="/analisis-alamat">
               <span className="quick-icon blue">
@@ -356,7 +357,7 @@ export function DashboardPage() {
                 <b>Analisis alamat</b>
                 <small>Temukan jaringan terdekat</small>
               </span>
-              <i className="bi bi-arrow-up-right ms-auto" />
+              <i aria-hidden="true" className="bi bi-arrow-right ms-auto" />
             </Link>
             <Link className="quick-action" to="/analisis-massal">
               <span className="quick-icon green">
@@ -366,7 +367,7 @@ export function DashboardPage() {
                 <b>Analisis massal</b>
                 <small>Proses banyak lokasi</small>
               </span>
-              <i className="bi bi-arrow-up-right ms-auto" />
+              <i aria-hidden="true" className="bi bi-arrow-right ms-auto" />
             </Link>
             <Link className="quick-action" to="/booking-core">
               <span className="quick-icon purple">
@@ -376,7 +377,7 @@ export function DashboardPage() {
                 <b>Booking core</b>
                 <small>Kelola permintaan core</small>
               </span>
-              <i className="bi bi-arrow-up-right ms-auto" />
+              <i aria-hidden="true" className="bi bi-arrow-right ms-auto" />
             </Link>
           </div>
         </>

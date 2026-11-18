@@ -1,0 +1,72 @@
+:root {
+  --atlas-field-radius: 6px;
+  --atlas-field-border: color-mix(in srgb, var(--bs-secondary-color) 45%, var(--bs-border-color));
+  --atlas-field-focus: var(--bs-primary);
+}
+
+[data-bs-theme="dark"] {
+  --atlas-field-focus: var(--bs-primary-text-emphasis);
+}
+
+:root :is(.form-control, .form-select, .map-icon-filter-menu > input) {
+  min-height: 40px;
+  border-color: var(--atlas-field-border);
+  border-radius: var(--atlas-field-radius);
+  box-shadow: none;
+}
+
+:root :is(.form-control-sm, .form-select-sm) {
+  min-height: 32px;
+}
+
+:root :is(.form-control, .form-select, .map-icon-filter-menu > input):hover:not(:disabled, :focus) {
+  border-color: var(--bs-secondary-color);
+}
+
+:root :is(.form-control, .form-select, .map-icon-filter-menu > input):focus {
+  border-color: var(--atlas-field-focus);
+  box-shadow: none;
+}
+
+:root :is(.form-control, .form-select, .form-check-input, .map-icon-filter-menu > input):focus-visible {
+  outline: 1px solid var(--atlas-field-focus);
+  outline-offset: 2px;
+}
+
+:root .form-check-input:focus {
+  box-shadow: none;
+}
+
+:root :is(.form-control, .form-select):is(.is-invalid, [aria-invalid="true"]),
+:root .was-validated :is(.form-control, .form-select):invalid {
+  border-color: var(--bs-form-invalid-border-color);
+  box-shadow: none;
+}
+
+.form-label {
+  margin-bottom: 4px;
+}
+
+.atlas-field-with-icon {
+  position: relative;
+}
+
+.atlas-field-with-icon > .atlas-field-icon {
+  position: absolute;
+  inset-inline-start: 0.875rem;
+  top: 50%;
+  color: var(--bs-secondary-color);
+  line-height: 1;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.atlas-field-with-icon > .form-control {
+  padding-inline-start: 2.5rem;
+}
+
+@media (max-width: 767px) {
+  :root :is(.form-control, .form-select, .map-icon-filter-menu > input) {
+    min-height: 44px;
+  }
+}

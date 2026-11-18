@@ -559,10 +559,11 @@ export function BulkAnalysisPage() {
       <PageHeader
         action={
           <button
-            className="btn btn-outline-primary"
+            className="btn btn-outline-primary atlas-secondary-action"
             onClick={downloadTemplate}
             type="button"
           >
+            <i aria-hidden="true" className="bi bi-download atlas-secondary-action-icon" />
             Unduh template
           </button>
         }
@@ -639,7 +640,7 @@ export function BulkAnalysisPage() {
               )}
             </div>
             <button
-              className="btn btn-outline-primary bulk-upload-button"
+              className="btn btn-outline-primary atlas-secondary-action bulk-upload-button"
               disabled={loading}
               onClick={() => input.current?.click()}
               type="button"

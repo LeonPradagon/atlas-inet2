@@ -12,6 +12,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "./styles.css";
 import "./dark-theme.css";
 import "./ui-consistency.css";
+import "./form-fields.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

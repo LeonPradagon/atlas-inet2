@@ -132,7 +132,7 @@ export function ProfilePage() {
                 )}
                 <div className="d-flex justify-content-end">
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-outline-primary atlas-secondary-action"
                     disabled={change.isPending}
                     type="submit"
                   >

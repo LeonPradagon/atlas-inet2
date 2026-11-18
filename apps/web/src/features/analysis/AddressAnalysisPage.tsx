@@ -944,7 +944,7 @@ function AddressAnalysisEditor({
         </>
       ) : (
         <button
-          className="btn btn-outline-primary"
+          className="btn btn-outline-primary atlas-secondary-action"
           onClick={() => {
             setTwoPoint(true);
             analyze.reset();
@@ -952,10 +952,40 @@ function AddressAnalysisEditor({
           }}
           type="button"
         >
-          + Tambah titik tujuan
+          <span aria-hidden="true" className="atlas-secondary-action-icon">+</span>
+          Tambah titik tujuan
         </button>
       )}
     </section>
+  );
+  const locationSummary = (
+    <summary className="analysis-location-summary mb-3">
+      <span className="d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <strong>{pickerOnly ? "Titik lokasi 2" : twoPoint ? "Titik lokasi 1" : "Lokasi analisis"}</strong>
+        {selectedPoint?.confirmed ? (
+          <span className="analysis-location-edit">
+            Edit lokasi
+          </span>
+        ) : (
+          <i className="bi bi-chevron-down analysis-location-chevron" aria-hidden="true" />
+        )}
+      </span>
+      {selectedPoint?.confirmed ? (
+        <span className="d-grid gap-1 mt-1">
+          <span className="text-break">{selectedPoint.label}</span>
+          <span className="d-flex flex-wrap align-items-center gap-2 small">
+            <span className="text-body-secondary">
+              {selectedPoint.latitude.toFixed(6)}, {selectedPoint.longitude.toFixed(6)}
+            </span>
+            <span className="text-success-emphasis">
+              <i className="bi bi-check-circle me-1" aria-hidden="true" /> Dikonfirmasi
+            </span>
+          </span>
+        </span>
+      ) : (
+        <small className="d-block mt-1">Lengkapi dan konfirmasi lokasi</small>
+      )}
+    </summary>
   );
   return (
     <>
@@ -988,7 +1018,7 @@ function AddressAnalysisEditor({
                   <div className="row g-3">
                     <div className="col-md-6">
                       <button
-                        className="btn btn-outline-primary text-start w-100 h-100 p-3"
+                        className="btn btn-outline-primary atlas-choice atlas-choice-card text-start w-100 h-100 p-3"
                         onClick={() => chooseInputMode("address")}
                         type="button"
                       >
@@ -1000,7 +1030,7 @@ function AddressAnalysisEditor({
                     </div>
                     <div className="col-md-6">
                       <button
-                        className="btn btn-outline-primary text-start w-100 h-100 p-3"
+                        className="btn btn-outline-primary atlas-choice atlas-choice-card text-start w-100 h-100 p-3"
                         onClick={() => chooseInputMode("coordinates")}
                         type="button"
                       >
@@ -1022,7 +1052,7 @@ function AddressAnalysisEditor({
                 >
                   <button
                     aria-pressed={inputMode === "address"}
-                    className={`btn ${inputMode === "address" ? "btn-primary" : "btn-outline-primary"}`}
+                    className="btn btn-outline-primary atlas-choice"
                     onClick={() => chooseInputMode("address")}
                     type="button"
                   >
@@ -1030,7 +1060,7 @@ function AddressAnalysisEditor({
                   </button>
                   <button
                     aria-pressed={inputMode === "coordinates"}
-                    className={`btn ${inputMode === "coordinates" ? "btn-primary" : "btn-outline-primary"}`}
+                    className="btn btn-outline-primary atlas-choice"
                     onClick={() => chooseInputMode("coordinates")}
                     type="button"
                   >
@@ -1049,31 +1079,7 @@ function AddressAnalysisEditor({
                     className="analysis-point-editor"
                     open={!selectedPoint?.confirmed}
                   >
-                    <summary className="mb-3">
-                      <strong>
-                        {pickerOnly
-                          ? "Titik lokasi 2"
-                          : twoPoint
-                            ? "Titik lokasi 1"
-                            : "Lokasi analisis"}
-                      </strong>
-                      {selectedPoint?.confirmed ? (
-                        <>
-                          <span className="d-block text-break">
-                            {selectedPoint.label}
-                          </span>
-                          <small>
-                            {selectedPoint.latitude.toFixed(6)},{" "}
-                            {selectedPoint.longitude.toFixed(6)} · Dikonfirmasi
-                            · Klik untuk edit
-                          </small>
-                        </>
-                      ) : (
-                        <small className="d-block">
-                          Lengkapi dan konfirmasi lokasi
-                        </small>
-                      )}
-                    </summary>
+                    {locationSummary}
                     <div className="row g-3">
                       <div className="position-relative col-12">
                         <label
@@ -1514,7 +1520,7 @@ function AddressAnalysisEditor({
                       Bersihkan
                     </button>
                     <button
-                      className="btn btn-primary px-4"
+                      className="btn btn-outline-primary atlas-secondary-action"
                       disabled={
                         analyze.isPending ||
                         connection.isPending ||
@@ -1532,7 +1538,7 @@ function AddressAnalysisEditor({
                         </>
                       ) : (
                         <>
-                          <i className="bi bi-search me-2" />
+                          <i aria-hidden="true" className="bi bi-search atlas-secondary-action-icon" />
                           {pickerOnly || twoPoint
                             ? selectedPoint?.confirmed ? "Lokasi dikonfirmasi" : "Konfirmasi lokasi"
                             : "Analisis jaringan"}
@@ -1564,31 +1570,7 @@ function AddressAnalysisEditor({
                     className="analysis-point-editor"
                     open={!selectedPoint?.confirmed}
                   >
-                    <summary className="mb-3">
-                      <strong>
-                        {pickerOnly
-                          ? "Titik lokasi 2"
-                          : twoPoint
-                            ? "Titik lokasi 1"
-                            : "Lokasi analisis"}
-                      </strong>
-                      {selectedPoint?.confirmed ? (
-                        <>
-                          <span className="d-block text-break">
-                            {selectedPoint.label}
-                          </span>
-                          <small>
-                            {selectedPoint.latitude.toFixed(6)},{" "}
-                            {selectedPoint.longitude.toFixed(6)} · Dikonfirmasi
-                            · Klik untuk edit
-                          </small>
-                        </>
-                      ) : (
-                        <small className="d-block">
-                          Lengkapi dan konfirmasi lokasi
-                        </small>
-                      )}
-                    </summary>
+                    {locationSummary}
                     <div className="row g-3">
                       <div className="col-md-6">
                         <label
@@ -1667,7 +1649,7 @@ function AddressAnalysisEditor({
                       Bersihkan
                     </button>
                     <button
-                      className="btn btn-primary px-4"
+                      className="btn btn-outline-primary atlas-secondary-action"
                       disabled={
                         analyze.isPending ||
                         connection.isPending ||
@@ -1683,14 +1665,14 @@ function AddressAnalysisEditor({
                         </>
                       ) : selectedPoint?.confirmed ? (
                         <>
-                          <i className="bi bi-search me-2" />
+                          <i aria-hidden="true" className="bi bi-search atlas-secondary-action-icon" />
                           {pickerOnly || twoPoint
                             ? selectedPoint?.confirmed ? "Lokasi dikonfirmasi" : "Konfirmasi lokasi"
                             : "Analisis jaringan"}
                         </>
                       ) : (
                         <>
-                          <i className="bi bi-search me-2" />
+                          <i aria-hidden="true" className="bi bi-search atlas-secondary-action-icon" />
                           {pickerOnly || twoPoint
                             ? selectedPoint?.confirmed ? "Lokasi dikonfirmasi" : "Konfirmasi lokasi"
                             : "Analisis jaringan"}
@@ -1704,7 +1686,7 @@ function AddressAnalysisEditor({
               {twoPoint && (
                 <div className="analysis-submit-bar mt-4">
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-outline-primary atlas-secondary-action"
                     type="button"
                     disabled={
                       connection.isPending ||
@@ -1913,7 +1895,7 @@ function AddressAnalysisEditor({
                         <div className="mt-2">
                           Perluas pencarian hingga 2 km?
                           <button
-                            className="btn btn-primary btn-sm ms-2"
+                            className="btn btn-outline-primary atlas-secondary-action btn-sm ms-2"
                             disabled={analyze.isPending}
                             onClick={() => {
                               if (analyze.variables) {

@@ -393,11 +393,6 @@
   --bs-btn-bg: #243247;
   --bs-btn-color: #dce5f2;
   --bs-btn-border-color: #38475d;
-  --bs-btn-hover-bg: #34445f;
-  --bs-btn-hover-color: #fff;
-  --bs-btn-hover-border-color: #526381;
-  --bs-btn-active-bg: #34445f;
-  --bs-btn-active-color: #fff;
 }
 [data-bs-theme="dark"] .btn-outline-primary {
   --bs-btn-color: #a2b5ff;
@@ -527,9 +522,6 @@
 [data-bs-theme="dark"] .bulk-job-actions .btn-outline-secondary {
   --bs-btn-color: #c8d3e4;
   --bs-btn-border-color: #64748b;
-  --bs-btn-hover-color: #fff;
-  --bs-btn-hover-bg: #34445a;
-  --bs-btn-hover-border-color: #8291a6;
 }
 [data-bs-theme="dark"] .bulk-analysis-results .bulk-row-needs-review > td {
   background-color: #252a2b;
