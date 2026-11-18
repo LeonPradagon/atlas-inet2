@@ -2784,15 +2784,42 @@ export function MapPage() {
         detail.textContent = isCluster
           ? "Klik untuk melihat lebih dekat"
           : `${sourceLabel} · ${String(feature.properties?.geometryType ?? "Segmen")} · Klik untuk detail`;
-        content.append(title, document.createElement("br"), detail);
-        if (!isCluster && feature.properties?.assetType === "segment") {
-          const cores = document.createElement("small");
-          const total = Number(feature.properties.totalCores ?? 0);
-          cores.textContent =
-            total > 0
-              ? `${total} core total · ${Number(feature.properties.usedCores ?? 0)} terpakai · ${Number(feature.properties.bookedCores ?? 0)} dibooking · ${Number(feature.properties.idleCores ?? 0)} tersedia`
-              : "Core belum diisi";
-          content.append(document.createElement("br"), cores);
+        const properties = feature.properties;
+        if (properties?.assetType === "segment") {
+          content.className = "segment-hover";
+          detail.textContent = `Segmen kabel · ${sourceLabel}`;
+          content.append(title, detail);
+          const total = Number(properties.totalCores ?? 0);
+          if (total > 0) {
+            const cores = document.createElement("dl");
+            cores.className = "segment-hover-cores";
+            const capacity = [
+              ["Total core", total, ""],
+              ["Tersedia", properties.idleCores, "text-success-emphasis"],
+              ["Terpakai", properties.usedCores, "text-danger-emphasis"],
+              ["Dibooking", properties.bookedCores, "text-warning-emphasis"],
+            ] as const;
+            for (const [label, count, tone] of capacity) {
+              const item = document.createElement("div");
+              const term = document.createElement("dt");
+              const value = document.createElement("dd");
+              term.textContent = label;
+              value.textContent = Number(count ?? 0).toLocaleString("id-ID");
+              value.className = tone;
+              item.append(term, value);
+              cores.append(item);
+            }
+            content.append(cores);
+          } else {
+            const empty = document.createElement("small");
+            empty.textContent = "Kapasitas core belum tercatat";
+            content.append(empty);
+          }
+          const hint = document.createElement("small");
+          hint.textContent = "Klik segmen untuk lihat detail";
+          content.append(hint);
+        } else {
+          content.append(title, document.createElement("br"), detail);
         }
         const coordinates: Coordinate =
           isCluster || pointFeature
