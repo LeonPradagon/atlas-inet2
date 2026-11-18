@@ -34,6 +34,15 @@ export type CreateBookingInput = {
   segments?: { segmentId: string; cores: number; segmentFrom?: string; segmentTo?: string }[];
 };
 
+type CableEnds = { A: [number, number]; B: [number, number] };
+const cableEnds = sql<CableEnds | null>`CASE
+  WHEN GeometryType(${networkAssets.geometry}) = 'LINESTRING'
+    AND NOT ST_Equals(ST_StartPoint(${networkAssets.geometry}), ST_EndPoint(${networkAssets.geometry}))
+  THEN jsonb_build_object(
+    'A', (ST_AsGeoJSON(ST_StartPoint(${networkAssets.geometry}), 15)::jsonb)->'coordinates',
+    'B', (ST_AsGeoJSON(ST_EndPoint(${networkAssets.geometry}), 15)::jsonb)->'coordinates'
+  ) END`;
+
 const usageVerified = sql<boolean>`(${or(
   eq(networkAssets.source, "managed"),
   sql`${networkAssets.attributes}->'__coreUsageVerification'->'verified' = 'true'::jsonb`,
@@ -66,9 +75,42 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
     return this.db.orm
       .select({
         area: networkAssets.area,
+        attributes: networkAssets.attributes,
+        ends: cableEnds,
+        endpointNames: sql<Partial<Record<"A" | "B", string>> | null>`(
+          SELECT jsonb_object_agg(endpoint.side, node.name)
+          FROM network_segment_endpoints endpoint
+          JOIN network_assets node ON node.id = endpoint.node_asset_id
+          WHERE endpoint.segment_id = ${networkAssets.id}
+            AND endpoint.verification_status = 'confirmed'
+            AND node.asset_type = 'asset'
+        )`,
+        nearbyEndpointNames: sql<Partial<Record<"A" | "B", string>> | null>`(
+          SELECT jsonb_object_agg(ending.side, nearby.name)
+          FROM (VALUES
+            ('A', ST_StartPoint(${networkAssets.geometry})),
+            ('B', ST_EndPoint(${networkAssets.geometry}))
+          ) AS ending(side, point)
+          CROSS JOIN LATERAL (
+            SELECT candidate.name
+            FROM network_assets candidate
+            WHERE candidate.id <> ${networkAssets.id}
+              AND candidate.geometry && ST_Expand(ending.point, 0.001)
+              AND candidate.asset_type = 'asset'
+              AND GeometryType(candidate.geometry) = 'POINT'
+              AND upper(candidate.attributes->>'Tipe Perangkat') IN
+                ('OLT','POP','OTB','ODC','ODP','CLOSURE','SLACK / COIL','TIANG','POLE')
+              AND ST_DistanceSphere(ending.point, candidate.geometry) <= 25
+            ORDER BY ST_DistanceSphere(ending.point, candidate.geometry),
+              candidate.id
+            LIMIT 1
+          ) nearby
+        )`,
         assetType: networkAssets.assetType,
         id: networkAssets.id,
         idleCores: sql<number>`count(${networkCores.id}) FILTER (WHERE ${networkCores.status}='Available')::int`,
+        bookedCores: sql<number>`count(${networkCores.id}) FILTER (WHERE ${networkCores.status}='Booked')::int`,
+        usedCores: sql<number>`count(${networkCores.id}) FILTER (WHERE ${networkCores.status}='Used')::int`,
         name: networkAssets.name,
         totalCores: networkAssets.totalCores,
       })
@@ -149,10 +191,10 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       picCustomer = input.picCustomer?.trim(),
       picPresales = input.picPresales?.trim();
     const segments = input.segments ?? [{ segmentId: input.segmentId ?? "", cores: Number(input.cores) }];
-    if (!Array.isArray(segments) || !segments.length || segments.some((item) => !item || typeof item.segmentId !== "string" || !item.segmentId || !Number.isInteger(item.cores) || item.cores < 1 || (item.segmentFrom !== undefined && (typeof item.segmentFrom !== "string" || !item.segmentFrom.trim() || item.segmentFrom.length > 200)) || (item.segmentTo !== undefined && (typeof item.segmentTo !== "string" || !item.segmentTo.trim() || item.segmentTo.length > 200)) || (item.segmentFrom === undefined) !== (item.segmentTo === undefined)) || new Set(segments.map((item) => item.segmentId)).size !== segments.length) {
+    if (!Array.isArray(segments) || !segments.length || segments.some((item) => !item || typeof item.segmentId !== "string" || !item.segmentId || !Number.isInteger(item.cores) || item.cores < 1 || (item.segmentFrom !== undefined && (typeof item.segmentFrom !== "string" || !item.segmentFrom.trim() || item.segmentFrom.length > 200)) || (item.segmentTo !== undefined && (typeof item.segmentTo !== "string" || !item.segmentTo.trim() || item.segmentTo.length > 200)) || (item.segmentFrom === undefined) !== (item.segmentTo === undefined) || (item.segmentFrom !== undefined && item.segmentFrom === item.segmentTo)) || new Set(segments.map((item) => item.segmentId)).size !== segments.length) {
       throw new BadRequestException({ message: "Pilih segmen unik dengan jumlah core yang valid." });
     }
-    const sorted = [...segments].sort((a, b) => a.segmentId.localeCompare(b.segmentId));
+    const sorted = segments.map((segment) => ({ ...segment })).sort((a, b) => a.segmentId.localeCompare(b.segmentId));
     const segmentId = sorted[0].segmentId;
     const cores = sorted.reduce((sum, item) => sum + item.cores, 0);
     if (
@@ -175,7 +217,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       let insufficient = false;
       for (const segment of sorted) {
       const assets = await tx
-        .select({ totalCores: networkAssets.totalCores, usageVerified })
+        .select({ totalCores: networkAssets.totalCores, usageVerified, ends: cableEnds, source: networkAssets.source })
         .from(networkAssets)
         .where(
           and(
@@ -186,6 +228,22 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         .for("update");
       if (!assets.length) {
         throw new NotFoundException({ message: "Segmen tidak ditemukan." });
+      }
+      const { ends, source } = assets[0];
+      const from = segment.segmentFrom;
+      const to = segment.segmentTo;
+      const isDirection = (from === "A" && to === "B") || (from === "B" && to === "A");
+      if (isDirection && ends) {
+        const describe = (side: "A" | "B") => {
+          const [longitude, latitude] = ends[side];
+          return `Ujung ${side} (${latitude.toFixed(6)}, ${longitude.toFixed(6)})`;
+        };
+        segment.segmentFrom = describe(from);
+        segment.segmentTo = describe(to);
+      } else if (isDirection || source !== "managed") {
+        throw new BadRequestException({
+          message: "Pilih dua ujung berbeda dari koordinat kabel yang dipilih.",
+        });
       }
       if (!assets[0].totalCores) {
         throw new BadRequestException({

@@ -1,3 +1,5 @@
+import { BookingStatusBadge, bookingStatusLabel } from "./BookingStatusBadge";
+import { assetDetailTitle } from "../map/assetDetailTitle";
 import { DataTableShell } from "../../components/DataTable";
 import { ModalDialog } from "../../components/ModalDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -51,14 +53,14 @@ export function CoreBookingPage() {
     queryFn: () => api<Booking[]>("/bookings"),
     refetchInterval: 30_000,
   });
-  const { data: networkSegments = [] } = useQuery({
+  const segmentsQuery = useQuery({
     queryKey: ["bookable-segments"],
     queryFn: () =>
       api<
-        Pick<
+        (Pick<
           NetworkAsset,
-          "id" | "name" | "area" | "assetType" | "totalCores" | "idleCores"
-        >[]
+          "id" | "name" | "area" | "assetType" | "totalCores" | "idleCores" | "usedCores" | "bookedCores" | "attributes"
+        > & { ends: Record<"A" | "B", [number, number]> | null; endpointNames: Partial<Record<"A" | "B", string>> | null; nearbyEndpointNames?: Partial<Record<"A" | "B", string>> | null })[]
       >("/assets/bookable-segments"),
     refetchInterval: 30_000,
   });
@@ -166,7 +168,7 @@ export function CoreBookingPage() {
     (page - 1) * bookingPageSize,
     page * bookingPageSize
   );
-  const bookableSegments = networkSegments;
+  const bookableSegments = segmentsQuery.data ?? [];
   const selectedSegments = bookableSegments.filter((segment) => selectedSegmentIds.includes(segment.id));
   const needsWaitingList = selectedSegments.some((segment) => (segmentCores[segment.id] ?? 1) > segment.idleCores);
   const bookedCount = bookings.filter(
@@ -220,11 +222,16 @@ export function CoreBookingPage() {
       <PageHeader
         action={
           <button
-            className="btn btn-primary"
-            onClick={() => setShowForm(true)}
+            className="btn btn-outline-primary atlas-secondary-action"
+            onClick={() => {
+              setSelectedSegmentIds([]);
+              setSegmentCores({});
+              create.reset();
+              setShowForm(true);
+            }}
             type="button"
           >
-            <i className="bi bi-plus-lg me-2" />
+            <span aria-hidden="true" className="atlas-secondary-action-icon">+</span>
             Buat booking
           </button>
         }
@@ -283,7 +290,7 @@ export function CoreBookingPage() {
                     value={newDuration}
                   />
                   <button
-                    className="btn btn-sm btn-primary py-1"
+                    className="btn btn-sm btn-outline-primary atlas-secondary-action py-1"
                     disabled={updateDuration.isPending}
                     onClick={() => updateDuration.mutate(newDuration)}
                     type="button"
@@ -335,10 +342,10 @@ export function CoreBookingPage() {
             <div>
               <h3>Permintaan core</h3>
               <p>
-                Permintaan dengan core tersedia menunggu persetujuan ADMIN. Waiting list diberi notifikasi ketika kapasitas tersedia untuk diajukan ulang.
+                Admin menyetujui permintaan saat kapasitas cukup. Pemohon di daftar tunggu mendapat notifikasi saat core tersedia.
               </p>
             </div>
-            <div className="filter-tabs">
+            <div aria-label="Filter status booking" className="booking-status-filters" role="group">
               {(
                 [
                   "Semua",
@@ -350,7 +357,8 @@ export function CoreBookingPage() {
                 ] as const
               ).map((value) => (
                 <button
-                  className={filter === value ? "active" : ""}
+                  aria-pressed={filter === value}
+                  className="btn btn-sm btn-outline-primary atlas-choice"
                   key={value}
                   onClick={() => {
                     setFilter(value);
@@ -359,10 +367,10 @@ export function CoreBookingPage() {
                   type="button"
                 >
                   {value === "Semua" ? "Semua" : bookingStatusLabel(value)}
-                  {value === "Pending Approval" && (
-                    <span>{pendingApprovalCount}</span>
+                  {value === "Pending Approval" && pendingApprovalCount > 0 && (
+                    <span className="booking-filter-count">{pendingApprovalCount}</span>
                   )}
-                  {value === "Waiting List" && <span>{waitingCount}</span>}
+                  {value === "Waiting List" && waitingCount > 0 && <span className="booking-filter-count">{waitingCount}</span>}
                 </button>
               ))}
             </div>
@@ -373,7 +381,7 @@ export function CoreBookingPage() {
                 <tr>
                   <th>ID / Pelanggan</th>
                   <th>Segmen</th>
-                  <th>Jumlah core</th>
+                  <th>Total alokasi</th>
                   <th>PIC customer</th>
                   <th>PIC presales</th>
                   <th>Status</th>
@@ -397,7 +405,7 @@ export function CoreBookingPage() {
                       </small>
                     </td>
                     <td>
-                      {booking.segments.map((segment) => <div key={segment.segmentId}><span className="cable-name">{segment.name}</span><small className="d-block text-muted">{segment.area} · {segment.cores} core</small>{segment.segmentFrom && segment.segmentTo && <small className="d-block text-muted">{segment.segmentFrom} → {segment.segmentTo}</small>}</div>)}
+                      {booking.segments.map((segment) => <div key={segment.segmentId}><span className="cable-name">{segment.name}</span><small className="d-block text-muted">{segment.cores} core{segment.area && ` (${segment.area})`}</small>{segment.segmentFrom && segment.segmentTo && <small className="d-block text-muted">{segment.segmentFrom} → {segment.segmentTo}</small>}</div>)}
                       {booking.status === "Waiting List" && (
                         <small className="d-block text-warning">
                           Menunggu kapasitas tersedia
@@ -410,14 +418,7 @@ export function CoreBookingPage() {
                     <td>{booking.picCustomer}<small className="d-block text-muted">{booking.picCustomerEmail}</small><small className="d-block text-muted">{booking.picCustomerPhone}</small></td>
                     <td>{booking.picPresales}</td>
                     <td>
-                      <span
-                        className={`status-pill ${bookingStatusClass(booking.status)}`}
-                      >
-                        <i
-                          className={`bi ${bookingStatusIcon(booking.status)}`}
-                        />
-                        {bookingStatusLabel(booking.status)}
-                      </span>
+                      <BookingStatusBadge status={booking.status} />
                     </td>
                     <td className="text-muted">
                       {new Date(booking.requestedAt).toLocaleDateString(
@@ -465,10 +466,10 @@ export function CoreBookingPage() {
                         </button>
                       )}
                       {booking.status === "Booked" && user?.role === "ADMIN" && (
-                        <button className="btn btn-sm btn-primary ms-1" disabled={issuePo.isPending} type="button" onClick={async () => { if (await confirmAction(`Tandai PO booking ${booking.id} sudah terbit? Core akan menjadi terpakai.`)) issuePo.mutate(booking); }}>PO terbit</button>
+                        <button className="btn btn-sm btn-outline-primary atlas-secondary-action ms-1" disabled={issuePo.isPending} type="button" onClick={async () => { if (await confirmAction(`Tandai PO booking ${booking.id} sudah terbit? Core akan menjadi terpakai.`)) issuePo.mutate(booking); }}>PO terbit</button>
                       )}
                       {booking.status === "Waiting List" && booking.requestedBy === user?.id && (
-                        <button className="btn btn-sm btn-primary" disabled={resubmit.isPending} onClick={() => resubmit.mutate(booking)} type="button">Ajukan ulang</button>
+                        <button className="btn btn-sm btn-outline-primary atlas-secondary-action" disabled={resubmit.isPending} onClick={() => resubmit.mutate(booking)} type="button">Ajukan ulang</button>
                       )}
                     </td>
                   </tr>
@@ -506,7 +507,14 @@ export function CoreBookingPage() {
               />
             </div>
             <form onSubmit={addBooking}>
-              {!bookableSegments.length && (
+              {segmentsQuery.isPending && <p role="status">Memuat segmen kabel...</p>}
+              {segmentsQuery.isError && (
+                <div className="alert alert-danger" role="alert">
+                  Daftar kabel dan titik ujung gagal dimuat.{" "}
+                  <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => void segmentsQuery.refetch()}>Coba lagi</button>
+                </div>
+              )}
+              {segmentsQuery.isSuccess && !bookableSegments.length && (
                 <div className="alert alert-info">
                   Belum ada segmen dengan kapasitas core yang terverifikasi.
                   ADMIN perlu memverifikasi segmen pada halaman peta jaringan.
@@ -523,36 +531,71 @@ export function CoreBookingPage() {
                 required
               />
               <fieldset className="mb-3">
-                <legend className="form-label fs-6">Cek ketersediaan segmen</legend>
-                <small className="text-muted d-block mb-2">Pilih satu atau beberapa segmen untuk melihat kapasitasnya.</small>
-                <div className="border rounded p-2" style={{ maxHeight: 180, overflowY: "auto" }}>
-                  {bookableSegments.map((segment) => (
-                    <label className="form-check d-block mb-1" key={segment.id}>
-                      <input
-                        checked={selectedSegmentIds.includes(segment.id)}
-                        className="form-check-input"
-                        onChange={(event) => {
-                          const checked = event.target.checked;
-                          setSelectedSegmentIds((current) => checked ? [...current, segment.id] : current.filter((id) => id !== segment.id));
-                        }}
-                        type="checkbox"
-                      />
-                      <span className="form-check-label">{segment.name} · {segment.idleCores} dari {segment.totalCores} core tersedia</span>
-                    </label>
-                  ))}
+                <legend className="form-label fs-6 fw-semibold">Segmen kabel</legend>
+                <p className="small text-muted mb-2">
+                  Pilih kabel, lalu tentukan jumlah core dan arah pada setiap kabel.
+                </p>
+                <div className="border rounded">
+                  {bookableSegments.map((segment, index) => {
+                    const selected = selectedSegmentIds.includes(segment.id);
+                    const title = assetDetailTitle(segment);
+                    const cores = segmentCores[segment.id] ?? 1;
+                    const inputId = `booking-cores-${segment.id}`;
+                    return (
+                      <div className={index > 0 ? "border-top" : undefined} key={segment.id}>
+                        <label className="d-flex align-items-start gap-2 p-3 mb-0">
+                          <input
+                            checked={selected}
+                            className="form-check-input flex-shrink-0"
+                            onChange={(event) => {
+                              const checked = event.target.checked;
+                              setSelectedSegmentIds((current) => checked
+                                ? [...current, segment.id]
+                                : current.filter((id) => id !== segment.id));
+                            }}
+                            type="checkbox"
+                          />
+                          <span className="d-flex flex-wrap align-items-baseline justify-content-between gap-1 flex-grow-1 text-break">
+                            <strong>{title}</strong>
+                            <span className={segment.idleCores ? "small text-success fw-semibold" : "small text-muted"}>
+                              {segment.idleCores} core tersedia
+                            </span>
+                            <small className="d-flex flex-wrap gap-2 text-muted w-100">
+                              <span className="fw-semibold">Total {segment.totalCores}</span>
+                              <span className="fw-semibold booking-core-booked">Dibooking {segment.bookedCores}</span>
+                              <span className="fw-semibold booking-core-used">Terpakai {segment.usedCores}</span>
+                            </small>
+                          </span>
+                        </label>
+                        {selected && (
+                          <fieldset aria-label={`Pengaturan ${title}`} className="border-top px-3 pb-3 pt-2">
+                            <label className="form-label" htmlFor={inputId}>Jumlah core</label>
+                            <input
+                              className="form-control"
+                              id={inputId}
+                              max={segment.totalCores}
+                              min={1}
+                              onChange={(event) => {
+                                const value = Number(event.target.value);
+                                setSegmentCores((current) => ({ ...current, [segment.id]: value }));
+                              }}
+                              required
+                              type="number"
+                              value={cores || ""}
+                            />
+                            {cores > segment.idleCores && cores <= segment.totalCores && (
+                              <small className="d-block text-warning mt-1">Kapasitas saat ini kurang. Pengajuan akan masuk daftar tunggu.</small>
+                            )}
+                            <div className="row g-2 mt-1">
+                              <BookingEndpoints segment={segment} />
+                            </div>
+                          </fieldset>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </fieldset>
-              {selectedSegments.map((segment) => (
-                <div className="mb-3" key={segment.id}>
-                  <label className="form-label" htmlFor={`booking-cores-${segment.id}`}>Jumlah core · {segment.name}</label>
-                  <input className="form-control" id={`booking-cores-${segment.id}`} max={segment.totalCores} min="1" onChange={(event) => setSegmentCores((current) => ({ ...current, [segment.id]: Number(event.target.value) }))} required type="number" value={segmentCores[segment.id] ?? 1} />
-                  <small className="text-muted">{segment.idleCores} tersedia dari {segment.totalCores} core</small>
-                  <div className="row g-2 mt-1">
-                    <div className="col-sm-6"><label className="form-label" htmlFor={`booking-from-${segment.id}`}>Segmen dari</label><input className="form-control" id={`booking-from-${segment.id}`} maxLength={200} name={`segmentFrom-${segment.id}`} placeholder="Titik awal" required /></div>
-                    <div className="col-sm-6"><label className="form-label" htmlFor={`booking-to-${segment.id}`}>Segmen ke</label><input className="form-control" id={`booking-to-${segment.id}`} maxLength={200} name={`segmentTo-${segment.id}`} placeholder="Titik akhir" required /></div>
-                  </div>
-                </div>
-              ))}
               <div className="row g-3">
                 <div className="col-12">
                   <label className="form-label" htmlFor="booking-pic-customer">
@@ -581,7 +624,9 @@ export function CoreBookingPage() {
                 value={user?.name ?? ""}
                 readOnly
               />
-              {selectedSegments.length > 0 && <p className="mt-3 mb-0">{needsWaitingList ? "Ada segmen yang core-nya belum cukup; seluruh permintaan akan masuk waiting list." : "Core tersedia di semua segmen; permintaan akan dikirim untuk persetujuan ADMIN."}</p>}
+              {selectedSegments.length > 0 && <p className="mt-3 mb-0">Total alokasi seluruh segmen: {selectedSegments.reduce((sum, segment) => sum + (segmentCores[segment.id] ?? 1), 0)} core. {needsWaitingList ? "Ada segmen yang core-nya belum cukup; seluruh permintaan akan masuk waiting list." : "Core tersedia di semua segmen; permintaan akan dikirim untuk persetujuan ADMIN."}</p>}
+              {selectedSegments.length > 1 && <p className="small text-muted mt-2">Kapasitas dialokasikan per segmen. Sambungan fisik dicatat di Peta Jaringan.</p>}
+              {create.isError && <div className="alert alert-danger mt-3" role="alert">{create.error.message}</div>}
               <div className="modal-actions">
                 <button
                   className="btn btn-light"
@@ -591,11 +636,11 @@ export function CoreBookingPage() {
                   Batal
                 </button>
                 <button
-                  className="btn btn-primary"
-                  disabled={create.isPending || !selectedSegments.length}
+                  className="btn btn-outline-primary atlas-secondary-action"
+                  disabled={create.isPending || segmentsQuery.isError || !selectedSegments.length || selectedSegments.some((segment) => !segment.ends)}
                   type="submit"
                 >
-                  <i className="bi bi-check2 me-2" />
+                  <i className="bi bi-check2 atlas-secondary-action-icon" />
                   {needsWaitingList ? "Masuk waiting list" : "Ajukan persetujuan"}
                 </button>
               </div>
@@ -604,42 +649,6 @@ export function CoreBookingPage() {
       )}
     </>
   );
-}
-
-function bookingStatusLabel(status: Booking["status"]) {
-  return {
-    "Pending Approval": "Menunggu Persetujuan",
-    Booked: "Aktif",
-    Used: "Terpakai",
-    "Waiting List": "Waiting List",
-    Rejected: "Ditolak",
-    Released: "Dilepas",
-    Expired: "Kedaluwarsa",
-  }[status];
-}
-
-function bookingStatusClass(status: Booking["status"]) {
-  return {
-    "Pending Approval": "is-pending",
-    Booked: "is-booked",
-    Used: "is-booked",
-    "Waiting List": "is-waiting",
-    Rejected: "is-rejected",
-    Released: "is-released",
-    Expired: "is-released",
-  }[status];
-}
-
-function bookingStatusIcon(status: Booking["status"]) {
-  return {
-    "Pending Approval": "bi-hourglass-split",
-    Booked: "bi-check-circle-fill",
-    Used: "bi-check-circle-fill",
-    "Waiting List": "bi-clock-fill",
-    Rejected: "bi-x-circle-fill",
-    Released: "bi-arrow-counterclockwise",
-    Expired: "bi-calendar-x",
-  }[status];
 }
 
 function BookingMetric({
@@ -663,5 +672,43 @@ function BookingMetric({
         <strong>{value}</strong>
       </div>
     </div>
+  );
+}
+
+function BookingEndpoints({ segment }: {
+  segment: { id: string; ends: Record<"A" | "B", [number, number]> | null; endpointNames: Partial<Record<"A" | "B", string>> | null; nearbyEndpointNames?: Partial<Record<"A" | "B", string>> | null };
+}) {
+  const [direction, setDirection] = useState({ From: "", To: "" });
+  return (
+    <>
+      {(["From", "To"] as const).map((end) => {
+        const label = end === "From" ? "Titik awal" : "Titik akhir";
+        const opposite = end === "From" ? "To" : "From";
+        const id = `segment${end}-${segment.id}`;
+        return (
+          <div className="col-sm-6" key={end}>
+            <label className="form-label" htmlFor={id}>{label}</label>
+            <select
+              className="form-select"
+              id={id}
+              name={id}
+              disabled={!segment.ends}
+              required
+              value={direction[end]}
+              onChange={(event) => setDirection({ ...direction, [end]: event.target.value })}
+            >
+              <option value="">Pilih {label.toLowerCase()}</option>
+              {segment.ends && (["A", "B"] as const).map((side) => {
+                const linked = segment.endpointNames?.[side];
+                const nearby = segment.nearbyEndpointNames?.[side];
+                const name = linked ?? (nearby ? `${nearby} (terdekat)` : `Perangkat belum ditemukan di ujung ${side}`);
+                return <option key={side} value={side} disabled={direction[opposite] === side}>{name}</option>;
+              })}
+            </select>
+          </div>
+        );
+      })}
+      {!segment.ends && <small className="text-warning">Dua koordinat ujung yang berbeda belum tersedia untuk kabel ini.</small>}
+    </>
   );
 }

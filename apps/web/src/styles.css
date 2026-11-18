@@ -2867,12 +2867,35 @@ body {
   gap: 12px;
   align-items: start;
 }
-.booking-request-header > .filter-tabs {
+.booking-status-filters {
+  display: flex;
   flex-wrap: wrap;
-  justify-content: flex-start;
-  justify-self: stretch;
-  width: 100%;
-  margin: 0;
+  gap: 6px;
+}
+.booking-core-booked {
+  color: color-mix(in srgb, var(--bs-warning) 72%, var(--bs-body-color));
+}
+.booking-core-used {
+  color: color-mix(in srgb, var(--bs-danger) 86%, var(--bs-body-color));
+}
+.booking-status-filters > .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  font-size: 0.875rem;
+}
+.booking-filter-count {
+  padding-inline: 6px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 767px) {
+  .booking-status-filters > .btn {
+    min-height: 44px;
+  }
 }
 @media (max-width: 767px) {
   .map-top-actions {

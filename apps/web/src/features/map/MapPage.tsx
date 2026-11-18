@@ -1237,9 +1237,7 @@ export function MapPage() {
   const [expandedCoreConnections, setExpandedCoreConnections] = useState<
     Record<number, boolean>
   >({});
-  const [pendingSegmentEndpoints, setPendingSegmentEndpoints] = useState<
-    Partial<Record<CoreSide, string | null>>
-  >({});
+
   const [corePageSize, setCorePageSize] = useState(10);
   const [corePage, setCorePage] = useState(1);
   const catalogCoreFilter =
@@ -1727,9 +1725,6 @@ export function MapPage() {
     staleTime: 30_000,
   });
   const effectiveEndpointNodeId = (side: CoreSide) => {
-    if (Object.hasOwn(pendingSegmentEndpoints, side)) {
-      return pendingSegmentEndpoints[side] ?? "";
-    }
     const endpointState = coreEndpointsQuery.data?.find(
       (endpoint) => endpoint.side === side
     );
@@ -2046,7 +2041,6 @@ export function MapPage() {
     onSuccess: async () => {
       setCoreVerificationNote("");
       setPendingCoreStatuses({});
-      setPendingSegmentEndpoints({});
       setIsCoreVerificationExpanded(false);
       await Promise.all([
         invalidateNetwork(),
@@ -2075,7 +2069,6 @@ export function MapPage() {
     updateAsset.reset();
     setIsCoreVerificationExpanded(false);
     setPendingCoreStatuses({});
-    setPendingSegmentEndpoints({});
     setExpandedCoreConnections({});
   }, [selectedSegment?.id, updateAsset.reset]);
   const normalizedSearch = search.trim().toLocaleLowerCase("id-ID");
@@ -5092,71 +5085,22 @@ export function MapPage() {
                   className="segment-endpoints-summary"
                 >
                   {(["A", "B"] as const).map((side) => {
-                    const endpointState = coreEndpointsQuery.data?.find(
-                      (item) => item.side === side
-                    );
-                    const endpoint = endpointState?.endpoint ?? null;
-                    const selectedNodeId = effectiveEndpointNodeId(side);
-                    const selectedCandidate = endpointState?.candidates.find(
-                      (candidate) => candidate.id === selectedNodeId
-                    );
-                    const candidateStillListed = endpointState?.candidates.some(
-                      (candidate) => candidate.id === endpoint?.nodeAssetId
-                    );
-                    const mappedCoreCount = (coresQuery.data ?? []).filter(
-                      (core) =>
-                        (side === "A" ? core.endA : core.endB)?.connectionType
-                    ).length;
-                    const changedFromSaved =
-                      Object.hasOwn(pendingSegmentEndpoints, side) &&
-                      (pendingSegmentEndpoints[side] ?? null) !==
-                        (endpoint?.nodeAssetId ?? null);
+                    const geometry = selectedSegment.geometry;
+                    const point = geometry?.type === "LineString"
+                      ? geometry.coordinates.at(side === "A" ? 0 : -1)
+                      : undefined;
+                    const endpointState = coreEndpointsQuery.data?.find((item) => item.side === side);
+                    const linked = endpointState?.endpoint;
+                    const nearby = endpointState?.candidates[0];
+
                     return (
                       <div className="segment-endpoint-field" key={side}>
-                        <label htmlFor={`cable-endpoint-${side}`}>
-                          Ujung {side}
-                        </label>
-                        <select
-                          className="form-select form-select-sm"
-                          disabled={coreEndpointsQuery.isPending || coreEndpointsQuery.isError}
-                          id={`cable-endpoint-${side}`}
-                          onChange={(event) =>
-                            setPendingSegmentEndpoints((current) => ({
-                              ...current,
-                              [side]: event.target.value || null,
-                            }))
-                          }
-                          value={selectedNodeId}
-                        >
-                          <option value="">Belum ditentukan</option>
-                          {endpoint && !candidateStillListed && (
-                            <option value={endpoint.nodeAssetId}>
-                              {endpoint.nodeAssetName} · titik tersimpan
-                            </option>
-                          )}
-                          {(endpointState?.candidates ?? []).map((candidate) => (
-                            <option key={candidate.id} value={candidate.id}>
-                              {candidate.name} · {Number(candidate.distanceFromEndpoint).toLocaleString("id-ID")} m
-                            </option>
-                          ))}
-                        </select>
-                        <small className="segment-endpoint-meta">
-                          {coreEndpointsQuery.isPending
-                            ? "Mencari aset di sekitar ujung kabel…"
-                            : coreEndpointsQuery.isError
-                              ? "Daftar titik ujung gagal dimuat."
-                              : endpoint && selectedNodeId === endpoint.nodeAssetId
-                                ? `Titik tersimpan · ${endpoint.source}`
-                                : selectedCandidate
-                                  ? `Saran otomatis · ${Number(selectedCandidate.distanceFromEndpoint).toLocaleString("id-ID")} m dari ujung kabel · belum disimpan`
-                                  : selectedNodeId
-                                    ? "Pilihan belum disimpan"
-                                    : "Pilih saran aset untuk menetapkan titik ujung kabel."}
-                        </small>
-                        {changedFromSaved && mappedCoreCount > 0 && (
-                          <small className="text-warning">
-                            Hapus {mappedCoreCount} sambungan core pada ujung ini sebelum mengganti titik.
-                          </small>
+                        <strong>Ujung {side}</strong>
+                        <div>{point ? `${point[1]}, ${point[0]}` : "Koordinat belum tersedia"}</div>
+                        {linked?.verificationStatus === "confirmed" ? (
+                          <small className="segment-endpoint-meta">Aset tercatat: {linked.nodeAssetName}</small>
+                        ) : nearby && (
+                          <small className="segment-endpoint-meta">Aset terdekat: {nearby.name}</small>
                         )}
                       </div>
                     );
@@ -5413,9 +5357,7 @@ export function MapPage() {
                                 setIsCoreVerificationExpanded(true);
                                 return;
                               }
-                              const endpointsToSave = {
-                                ...pendingSegmentEndpoints,
-                              };
+                              const endpointsToSave: Partial<Record<CoreSide, string>> = {};
                               for (const change of Object.values(
                                 pendingCoreStatuses
                               )) {
@@ -5462,8 +5404,7 @@ export function MapPage() {
                                   ? "Simpan dan verifikasi kabel"
                                   : "Verifikasi kabel"}
                           </button>
-                          {(Object.keys(pendingCoreStatuses).length > 0 ||
-                            Object.keys(pendingSegmentEndpoints).length > 0) && (
+                          {Object.keys(pendingCoreStatuses).length > 0 && (
                             <small className="text-warning" role="status">
                               Perubahan titik ujung atau sambungan core belum disimpan.
                             </small>
