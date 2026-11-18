@@ -11,6 +11,8 @@ export function ProfilePage() {
   const form = useRef<HTMLFormElement>(null);
   const [validation, setValidation] = useState("");
   const change = useMutation({
+    meta: { successNotice: "Kata sandi berhasil diubah.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: (data: { currentPassword: string; newPassword: string }) =>
       api("/auth/change-password", {
         method: "POST",

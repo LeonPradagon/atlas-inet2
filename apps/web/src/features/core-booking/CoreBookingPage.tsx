@@ -1,4 +1,5 @@
 import { BookingStatusBadge, bookingStatusLabel } from "./BookingStatusBadge";
+import { notify } from "../../components/Snackbar";
 import { assetDetailTitle } from "../map/assetDetailTitle";
 import { DataTableShell } from "../../components/DataTable";
 import { ModalDialog } from "../../components/ModalDialog";
@@ -27,7 +28,6 @@ export function CoreBookingPage() {
         queryClient.invalidateQueries({ queryKey: [key] })
       )
     );
-  const [toast, setToast] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [selectedSegmentIds, setSelectedSegmentIds] = useState<string[]>([]);
   const [segmentCores, setSegmentCores] = useState<Record<string, number>>({});
@@ -73,13 +73,11 @@ export function CoreBookingPage() {
       }>(`/bookings/${booking.id}/release`, { method: "POST" }),
     onSuccess: async (_result, booking) => {
       await invalidateNetwork();
-      setToast(`Booking ${booking.id} dilepas. Pemilik waiting list yang memenuhi kapasitas akan diberi notifikasi.`);
-      window.setTimeout(() => setToast(""), 4500);
+      notify(`Booking ${booking.id} dilepas. Pemilik waiting list yang memenuhi kapasitas akan diberi notifikasi.`);
     },
     onError: (error) =>
-      setToast(
-        error instanceof Error ? error.message : "Booking tidak dapat dilepas."
-      ),
+      notify(
+        error instanceof Error ? error.message : "Booking tidak dapat dilepas.", "error"),
   });
   const approve = useMutation({
     mutationFn: (booking: Booking) =>
@@ -89,19 +87,17 @@ export function CoreBookingPage() {
       ),
     onSuccess: async (result, booking) => {
       await invalidateNetwork();
-      setToast(
-        result.status === "Booked"
+      notify(result.status === "Booked"
           ? `Booking ${booking.id} disetujui dan core dialokasikan.`
-          : `Kapasitas tidak lagi mencukupi; booking ${booking.id} masuk waiting list.`
+          : `Kapasitas tidak lagi mencukupi; booking ${booking.id} masuk waiting list.`,
+        result.status === "Booked" ? "success" : "warning",
       );
-      window.setTimeout(() => setToast(""), 4500);
     },
     onError: (error) =>
-      setToast(
+      notify(
         error instanceof Error
           ? error.message
-          : "Booking tidak dapat disetujui."
-      ),
+          : "Booking tidak dapat disetujui.", "error"),
   });
   const reject = useMutation({
     mutationFn: (booking: Booking) =>
@@ -111,13 +107,11 @@ export function CoreBookingPage() {
       ),
     onSuccess: async (_result, booking) => {
       await queryClient.invalidateQueries({ queryKey: ["bookings"] });
-      setToast(`Permintaan booking ${booking.id} ditolak.`);
-      window.setTimeout(() => setToast(""), 4500);
+      notify(`Permintaan booking ${booking.id} ditolak.`);
     },
     onError: (error) =>
-      setToast(
-        error instanceof Error ? error.message : "Booking tidak dapat ditolak."
-      ),
+      notify(
+        error instanceof Error ? error.message : "Booking tidak dapat ditolak.", "error"),
   });
   const create = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
@@ -125,25 +119,23 @@ export function CoreBookingPage() {
     onSuccess: async (booking) => {
       await invalidateNetwork();
       setShowForm(false);
-      setToast(
-        booking.status === "Waiting List" ? `Booking ${booking.id} masuk waiting list.` : `Booking ${booking.id} diajukan dan menunggu persetujuan ADMIN.`
+      notify(booking.status === "Waiting List" ? `Booking ${booking.id} masuk waiting list.` : `Booking ${booking.id} diajukan dan menunggu persetujuan ADMIN.`,
+        booking.status === "Waiting List" ? "warning" : "success",
       );
-      window.setTimeout(() => setToast(""), 4500);
     },
     onError: (error) =>
-      setToast(
-        error instanceof Error ? error.message : "Booking tidak dapat dibuat."
-      ),
+      notify(
+        error instanceof Error ? error.message : "Booking tidak dapat dibuat.", "error"),
   });
   const resubmit = useMutation({
     mutationFn: (booking: Booking) => api(`/bookings/${booking.id}/resubmit`, { method: "POST" }),
-    onSuccess: async () => { await invalidateNetwork(); setToast("Booking diajukan ulang untuk persetujuan ADMIN."); },
-    onError: (error) => setToast(error instanceof Error ? error.message : "Booking tidak dapat diajukan ulang."),
+    onSuccess: async () => { await invalidateNetwork(); notify("Booking diajukan ulang untuk persetujuan ADMIN."); },
+    onError: (error) => notify(error instanceof Error ? error.message : "Booking tidak dapat diajukan ulang.", "error"),
   });
   const issuePo = useMutation({
     mutationFn: (booking: Booking) => api(`/bookings/${booking.id}/po-issued`, { method: "POST" }),
-    onSuccess: async () => { await invalidateNetwork(); setToast("PO ditandai terbit dan core menjadi terpakai."); },
-    onError: (error) => setToast(error instanceof Error ? error.message : "PO tidak dapat ditandai terbit."),
+    onSuccess: async () => { await invalidateNetwork(); notify("PO ditandai terbit dan core menjadi terpakai."); },
+    onError: (error) => notify(error instanceof Error ? error.message : "PO tidak dapat ditandai terbit.", "error"),
   });
   const updateDuration = useMutation({
     mutationFn: (days: number) =>
@@ -154,11 +146,10 @@ export function CoreBookingPage() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["booking-duration"] });
       setEditDuration(false);
+      notify("Durasi booking berhasil disimpan.");
     },
     onError: (error) =>
-      setToast(
-        error instanceof Error ? error.message : "Durasi tidak dapat disimpan."
-      ),
+      notify(error instanceof Error ? error.message : "Durasi tidak dapat disimpan.", "error"),
   });
   const filtered = bookings.filter(
     (item) => filter === "Semua" || item.status === filter
@@ -238,15 +229,6 @@ export function CoreBookingPage() {
         subtitle="Ajukan booking untuk persetujuan ADMIN; kapasitas dialokasikan setelah disetujui."
         title="Booking core"
       />
-      {toast && (
-        <div className="toast-banner" role="status">
-          <i className="bi bi-check-circle-fill" />
-          {toast}
-          <button aria-label="Tutup" onClick={() => setToast("")} type="button">
-            <i className="bi bi-x-lg" />
-          </button>
-        </div>
-      )}
       <div className="row g-3 mb-4">
         <div className="col-sm-6 col-xl-3">
           <BookingMetric

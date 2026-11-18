@@ -21,6 +21,8 @@ export function SegmentRelations({
     refetchInterval: 30_000,
   });
   const height = useMutation({
+    meta: { successNotice: "Data segmen berhasil disimpan.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: ({ id, value }: { id: string; value: string }) =>
       api(`/assets/${id}`, {
         method: "PATCH",

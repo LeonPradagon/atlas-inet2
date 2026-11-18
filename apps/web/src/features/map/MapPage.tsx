@@ -1,3 +1,4 @@
+import { notify } from "../../components/Snackbar";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import ExcelJS from "exceljs";
@@ -2014,6 +2015,8 @@ export function MapPage() {
     setCorePage((page) => Math.min(page, corePageCount));
   }, [corePageCount]);
   const verifyCoreUsage = useMutation({
+    meta: { successNotice: "Data core berhasil disimpan.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: (changes: {
       coreStatuses: {
         coreNumber: number;
@@ -2060,6 +2063,8 @@ export function MapPage() {
     },
   });
   const updateAsset = useMutation({
+    meta: { successNotice: "Detail aset berhasil diperbarui.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) =>
       api(`/assets/${id}`, { method: "PATCH", data }),
     onSuccess: () => invalidateNetwork(),
@@ -3357,10 +3362,11 @@ export function MapPage() {
           await focusGeometry(response.firstId);
         }
       }
+      notify("File jaringan berhasil diimpor.");
     } catch (error) {
-      setFileError(
-        error instanceof Error ? error.message : "File tidak dapat dibaca."
-      );
+      const message = error instanceof Error ? error.message : "File tidak dapat dibaca.";
+      setFileError(message);
+      notify(message, "error");
     } finally {
       setImporting(false);
     }

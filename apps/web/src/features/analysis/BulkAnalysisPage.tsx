@@ -1,3 +1,4 @@
+import { notify } from "../../components/Snackbar";
 import { formatDistance } from "../../lib/format";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ExcelJS from "exceljs";
@@ -82,7 +83,11 @@ function rowActionGuidance(row: AnalysisRow) {
   return "Periksa alamat atau koordinat pada file Excel sebelum mengajukan survei.";
 }
 function downloadWorkbook(workbook: ExcelJS.Workbook, name: string) {
-  void workbook.xlsx.writeBuffer().then((buffer) => {
+  void workbook.xlsx.writeBuffer().catch((error) => {
+    notify(error instanceof Error ? error.message : "File Excel gagal disiapkan.", "error");
+    return null;
+  }).then((buffer) => {
+    if (buffer === null) return;
     const url = URL.createObjectURL(
       new Blob([buffer], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -92,6 +97,7 @@ function downloadWorkbook(workbook: ExcelJS.Workbook, name: string) {
     link.href = url;
     link.download = name;
     link.click();
+    notify("File Excel siap diunduh.");
     URL.revokeObjectURL(url);
   });
 }
@@ -238,9 +244,12 @@ export function BulkAnalysisPage() {
       setStatusFilter("");
       setPage(1);
       setSelectedRowNumber(null);
+      notify("File Excel diterima untuk analisis.");
       await queryClient.invalidateQueries({ queryKey: ["analysis-history"] });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unggah gagal");
+      const message = e instanceof Error ? e.message : "Unggah gagal.";
+      setError(message);
+      notify(message, "error");
     } finally {
       setLoading(false);
     }
@@ -293,8 +302,11 @@ export function BulkAnalysisPage() {
         queryClient.invalidateQueries({ queryKey: ["bulk-job-rows", jobId] }),
         queryClient.invalidateQueries({ queryKey: ["bulk-job", jobId] }),
       ]);
+      notify("Pencarian jaringan berhasil diperluas.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Perluasan gagal");
+      const message = e instanceof Error ? e.message : "Perluasan gagal.";
+      setError(message);
+      notify(message, "error");
     } finally {
       setExpanding(null);
     }

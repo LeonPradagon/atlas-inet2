@@ -1,3 +1,5 @@
+import { notify } from "../../components/Snackbar";
+import { reloadWithNotice } from "../../components/Snackbar";
 import { formatDistance } from "../../lib/format";
 import { useQuery } from "@tanstack/react-query";
 import ExcelJS from "exceljs";
@@ -935,7 +937,10 @@ export function AnalysisHistoryPage() {
       if (selectedId === item.id) {
         setSelectedId("");
       }
+      notify("Riwayat analisis berhasil dihapus.");
       await history.refetch();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Riwayat gagal dihapus.", "error");
     } finally {
       setBusyId("");
     }
@@ -971,16 +976,15 @@ export function AnalysisHistoryPage() {
               <option value="FTTH_DESIGN">Draft FTTH</option>
             </select>
             <button
-              className="btn btn-sm btn-outline-primary text-nowrap"
+              className="btn btn-sm btn-outline-primary atlas-secondary-action text-nowrap"
               disabled={history.isFetching}
-              onClick={() => void history.refetch()}
-              style={{ padding: "6px 10px" }}
+              onClick={() => void reloadWithNotice(history.refetch, "Riwayat analisis berhasil dimuat ulang.")}
               type="button"
             >
-              <i
-                className={`bi bi-arrow-clockwise me-1${history.isFetching ? " spin" : ""}`}
-              />
-              Muat ulang
+              <span aria-hidden="true" className="atlas-secondary-action-icon">
+                <i className={`bi bi-arrow-clockwise${history.isFetching ? " spin" : ""}`} />
+              </span>
+              {history.isFetching ? "Memuat..." : "Muat ulang"}
             </button>
           </div>
         </div>

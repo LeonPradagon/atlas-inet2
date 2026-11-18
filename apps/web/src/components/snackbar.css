@@ -1,0 +1,46 @@
+.atlas-snackbar{position:fixed;bottom:calc(24px + env(safe-area-inset-bottom));left:50%;translate:-50% 0;display:flex;gap:12px;align-items:center;width:max-content;max-width:min(560px,calc(100vw - 32px));padding:10px 12px 10px 16px;background:var(--bs-body-bg);color:var(--bs-body-color);border:1px solid var(--bs-border-color);border-radius:6px;box-shadow:0 8px 24px rgb(0 0 0 / .18);z-index:1060;animation:atlas-snackbar-enter 160ms ease-out}
+.atlas-snackbar[hidden]{display:none}
+.atlas-snackbar p{margin:0;flex:1;font-size:14px;line-height:1.5}
+.atlas-snackbar-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+}
+.atlas-snackbar[data-kind=success] .atlas-snackbar-icon { color: #137349; background-color: #e4f5eb; }
+.atlas-snackbar[data-kind=error] .atlas-snackbar-icon { color: #bc3040; background-color: #fcebee; }
+.atlas-snackbar[data-kind=warning] .atlas-snackbar-icon { color: #886000; background-color: #fff2c9; }
+[data-bs-theme=dark] .atlas-snackbar[data-kind=success] .atlas-snackbar-icon { color: #85d7af; background-color: #19392e; }
+[data-bs-theme=dark] .atlas-snackbar[data-kind=error] .atlas-snackbar-icon { color: #ff929d; background-color: #442633; }
+[data-bs-theme=dark] .atlas-snackbar[data-kind=warning] .atlas-snackbar-icon { color: #f1cb69; background-color: #3f3421; }
+.atlas-snackbar button:not(.btn-close){background:transparent;border:0;min-height:40px;min-width:40px;border-radius:4px;color:var(--bs-body-color)}
+.atlas-snackbar button:hover{background-color:color-mix(in srgb,var(--bs-body-color) 8%,var(--bs-body-bg))}
+.atlas-snackbar .atlas-snackbar-close {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin-inline-start: 2px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+.atlas-snackbar .atlas-snackbar-close .btn-close {
+  padding: 0;
+  font-size: 12px;
+  pointer-events: none;
+}
+.atlas-snackbar .atlas-snackbar-close:is(:hover, :focus-visible) .btn-close {
+  opacity: 1;
+}
+.atlas-snackbar button:not(.atlas-snackbar-close){color:var(--bs-primary-text-emphasis);font-size:14px;font-weight:600;white-space:nowrap}
+@keyframes atlas-snackbar-enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){.atlas-snackbar{animation:none}}
+
+.atlas-snackbar button:focus-visible { outline: 2px solid var(--bs-primary-text-emphasis); outline-offset: 2px; }
+@media (max-width: 767px) {
+  .atlas-snackbar { bottom: calc(82px + env(safe-area-inset-bottom)); width: calc(100vw - 24px); max-width: none; gap: 8px; }
+}

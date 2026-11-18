@@ -1,3 +1,4 @@
+import { notify } from "../../components/Snackbar";
 import { formatDistance } from "../../lib/format";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -153,6 +154,7 @@ function AddressAnalysisEditor({
   const [allowExpand2km, setAllowExpand2km] = useState(false);
   const [coreRequirement, setCoreRequirement] = useState("");
   const connection = useMutation({
+    meta: { successNotice: "Analisis dua titik selesai.", errorNotice: "Analisis dua titik gagal." },
     mutationFn: (value: {
       start: { longitude: number; latitude: number; label: string };
       end: { longitude: number; latitude: number; label: string };
@@ -420,6 +422,7 @@ function AddressAnalysisEditor({
     },
   });
   const analyze = useMutation({
+    meta: { successNotice: "Analisis jaringan selesai.", errorNotice: "Analisis jaringan gagal." },
     mutationFn: (value: {
       address: string;
       structured: {
@@ -1464,13 +1467,10 @@ function AddressAnalysisEditor({
                             {!selectedPoint.confirmed && (
                               <button
                                 className="btn btn-sm btn-outline-primary mt-2"
-                                onClick={() =>
-                                  setSelectedPoint((current) =>
-                                    current
-                                      ? { ...current, confirmed: true }
-                                      : current
-                                  )
-                                }
+                                onClick={() => {
+                                  setSelectedPoint({ ...selectedPoint, confirmed: true });
+                                  notify("Lokasi dikonfirmasi.");
+                                }}
                                 type="button"
                               >
                                 Konfirmasi titik ini
@@ -1556,6 +1556,7 @@ function AddressAnalysisEditor({
                       confirmed: true,
                     };
                     setSelectedPoint(point);
+                    if (twoPoint || pickerOnly) notify("Lokasi dikonfirmasi.");
                     if (!twoPoint) submitAnalysis(point);
                   }}
                 >

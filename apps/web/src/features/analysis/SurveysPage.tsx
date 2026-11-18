@@ -285,6 +285,8 @@ export function SurveysPage() {
     reader.readAsDataURL(file);
   };
   const update = useMutation({
+    meta: { successNotice: "Perubahan survei berhasil disimpan.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: ({ survey, status, findings }: SurveyChange) =>
       api("/surveys/" + survey.id, {
         method: "PATCH",

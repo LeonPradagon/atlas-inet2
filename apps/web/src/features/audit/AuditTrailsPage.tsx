@@ -1,3 +1,4 @@
+import { reloadWithNotice } from "../../components/Snackbar";
 import { DataTableShell } from "../../components/DataTable";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -139,14 +140,14 @@ export function AuditTrailsPage() {
               </p>
             </div>
             <button
-              className="btn btn-sm btn-outline-primary ms-auto flex-shrink-0"
+              className="btn btn-sm btn-outline-primary atlas-secondary-action ms-auto flex-shrink-0"
               disabled={audit.isFetching}
-              onClick={() => void audit.refetch()}
+              onClick={() => void reloadWithNotice(audit.refetch, "Data aktivitas berhasil dimuat ulang.")}
               type="button"
             >
-              <i
-                className={`bi bi-arrow-clockwise me-1${audit.isFetching ? " spin" : ""}`}
-              />
+              <span aria-hidden="true" className="atlas-secondary-action-icon">
+                <i className={`bi bi-arrow-clockwise${audit.isFetching ? " spin" : ""}`} />
+              </span>
               {audit.isFetching ? "Memuat..." : "Muat ulang"}
             </button>
           </div>

@@ -129,6 +129,8 @@ export function DashboardPage() {
     refetchInterval: 30_000,
   });
   const exportReport = useMutation({
+    meta: { successNotice: "Laporan berhasil diunduh.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: () => api<UsageRow[]>("/reports/network-usage"),
     onSuccess: downloadUsageReport,
   });

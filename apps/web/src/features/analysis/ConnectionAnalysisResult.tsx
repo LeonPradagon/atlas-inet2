@@ -380,6 +380,8 @@ function ConnectionSurvey({
 }) {
   const client = useQueryClient();
   const submit = useMutation({
+    meta: { successNotice: "Survei berhasil diajukan.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: () => api("/surveys", postJson({ historyId, routeId })),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["surveys"] });

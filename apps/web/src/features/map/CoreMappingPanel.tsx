@@ -20,8 +20,12 @@ export function CoreMappingPanel({ segmentId, isAdmin }: { segmentId: string; is
   const nodes = useQuery({ queryKey: ["mapping-nodes", nodeSearch, kind], enabled: isAdmin && nodeSearch.trim().length >= 2, queryFn: () => api<NetworkAssetPage>(`/assets/catalog?assetType=network&pageSize=25${kind === "splitter" ? "&networkKind=odp" : ""}&search=${encodeURIComponent(nodeSearch.trim())}`) });
   const peers = useQuery({ queryKey: ["mapping-peers", peerSearch], enabled: isAdmin && kind === "splice" && peerSearch.trim().length >= 2, queryFn: () => api<NetworkAssetPage>(`/assets/catalog?assetType=cables&pageSize=25&search=${encodeURIComponent(peerSearch.trim())}`) });
   const refresh = () => Promise.all([client.invalidateQueries({ queryKey: ["core-mappings"] }), ...networkQueryKeys.map((key) => client.invalidateQueries({ queryKey: [key] }))]);
-  const create = useMutation({ mutationFn: () => api(`/assets/${segmentId}/core-mappings`, { method: "POST", data: { nodeAssetId: node, coreNumber: Number(core), source, note, ...(kind === "splice" ? { peerSegmentId: peer, peerCoreNumber: Number(peerCore) } : { splitterInput: splitter.trim() }) } }), onSuccess: async () => { setCore(""); setPeerCore(""); setSplitter(""); setNote(""); await refresh(); } });
-  const remove = useMutation({ mutationFn: (id: string) => api(`/assets/${segmentId}/core-mappings/${id}`, { method: "DELETE" }), onSuccess: refresh });
+  const create = useMutation({
+    meta: { successNotice: "Sambungan core berhasil disimpan.", errorNotice: "Tindakan gagal diproses." },
+    mutationFn: () => api(`/assets/${segmentId}/core-mappings`, { method: "POST", data: { nodeAssetId: node, coreNumber: Number(core), source, note, ...(kind === "splice" ? { peerSegmentId: peer, peerCoreNumber: Number(peerCore) } : { splitterInput: splitter.trim() }) } }), onSuccess: async () => { setCore(""); setPeerCore(""); setSplitter(""); setNote(""); await refresh(); } });
+  const remove = useMutation({
+    meta: { successNotice: "Sambungan core berhasil dihapus.", errorNotice: "Tindakan gagal diproses." },
+    mutationFn: (id: string) => api(`/assets/${segmentId}/core-mappings/${id}`, { method: "DELETE" }), onSuccess: refresh });
   const valid = Boolean(node && source && /^\d+$/.test(core) && Number(core) > 0 && (kind === "splitter" ? splitter.trim() : peer && /^\d+$/.test(peerCore) && Number(peerCore) > 0));
   return <section className="border rounded p-3 mt-3" aria-label="Sambungan core">
     <strong>Sambungan core</strong>

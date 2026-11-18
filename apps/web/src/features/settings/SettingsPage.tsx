@@ -7,6 +7,8 @@ function CreateAccountForm() {
   const form = useRef<HTMLFormElement>(null);
   const [validation, setValidation] = useState("");
   const create = useMutation({
+    meta: { successNotice: "Pengguna berhasil dibuat.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: (data: {
       name: string;
       email: string;
@@ -164,6 +166,8 @@ export function SettingsPage() {
     }
   }, [settings.data]);
   const save = useMutation({
+    meta: { successNotice: "Pengaturan berhasil disimpan.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: () =>
       api("/settings/cable-name-pattern", {
         method: "PATCH",

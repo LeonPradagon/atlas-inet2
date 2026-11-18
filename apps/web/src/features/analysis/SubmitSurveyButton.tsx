@@ -34,6 +34,8 @@ export function SubmitSurveyButton({
     Number.isFinite(latitude) &&
     Number.isFinite(longitude);
   const submit = useMutation({
+    meta: { successNotice: "Survei berhasil diajukan.", errorNotice: "Tindakan gagal diproses." },
+
     mutationFn: () =>
       api("/surveys", {
         method: "POST",
