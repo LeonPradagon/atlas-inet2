@@ -5625,12 +5625,6 @@ export function MapPage() {
                                                 ?.midspanConnections,
                                           },
                                         }));
-                                        if (nextStatus === "Used") {
-                                          setExpandedCoreConnections((current) => ({
-                                            ...current,
-                                            [core.coreNumber]: true,
-                                          }));
-                                        }
                                       }}
                                       value={status}
                                     >
@@ -5641,6 +5635,7 @@ export function MapPage() {
                                 </div>
                                 <details
                                   className="core-end-connections-details"
+                                  hidden
                                   onToggle={(event) => {
                                     const isOpen = event.currentTarget.open;
                                     setExpandedCoreConnections((current) => ({

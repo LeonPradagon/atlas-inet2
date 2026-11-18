@@ -4657,7 +4657,7 @@ body {
 }
 .core-status-list > .core-status-row {
   display: grid;
-  grid-template-columns: minmax(250px, 310px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0 20px;
   align-items: center;
 }
