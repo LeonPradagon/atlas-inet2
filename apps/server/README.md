@@ -108,6 +108,7 @@ Saat server berjalan, buka Swagger UI di <http://localhost:3000/api/docs>.
 Dokumen OpenAPI tersedia di <http://localhost:3000/api/docs-json>. Login melalui
 endpoint autentikasi di Swagger atau aplikasi untuk memakai sesi cookie yang sama.
 Daftar endpoint NestJS dibuat otomatis. Request JSON, unggahan file, serta
-parameter path dan query didokumentasikan di Swagger. Respons sebagian endpoint
-dan objek yang strukturnya dinamis masih belum memiliki skema terperinci. DTO
-ini mendokumentasikan input dan tidak menambahkan validasi runtime baru.
+parameter path, query, dan respons berhasil didokumentasikan di Swagger. Data
+impor, respons provider, dan hasil analisis yang dinamis dapat memiliki field
+tambahan. DTO ini mendokumentasikan input dan tidak menambahkan validasi runtime
+baru.
