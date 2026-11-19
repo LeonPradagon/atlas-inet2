@@ -521,6 +521,16 @@ details:not([open]) > :not(summary) { display: none !important; }
   border-color: var(--bs-border-color);
 }
 
+.atlas-data-table.booking-table tbody td {
+  vertical-align: top;
+}
+
+.booking-table .status-pill {
+  padding: 5px 9px;
+  font-size: 0.8125rem;
+  line-height: 1.25;
+}
+
 .booking-activity-info {
   flex: 1 1 9rem;
   min-width: 0;

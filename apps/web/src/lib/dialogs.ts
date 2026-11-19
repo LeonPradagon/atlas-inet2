@@ -11,8 +11,9 @@ const dialog = Swal.mixin({
   },
 });
 
-export async function confirmAction(text: string) {
+export async function confirmAction(text: string, target?: HTMLElement) {
   const result = await dialog.fire({
+    ...(target && { target, heightAuto: false, keydownListenerCapture: true }),
     title: "Konfirmasi",
     text,
     icon: "question",
