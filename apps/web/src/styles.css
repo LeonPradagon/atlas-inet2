@@ -3068,7 +3068,10 @@ body {
       visibility 0s linear 100ms;
   }
   .app-sidebar:not(:hover):not(:has(:focus-visible)) .atlas-sidebar-brand {
+    display: flex;
     width: 72px;
+    align-items: center;
+    justify-content: center;
     padding-inline: 0;
     margin-inline: -8px;
     transition:
