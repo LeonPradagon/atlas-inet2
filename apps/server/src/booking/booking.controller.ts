@@ -1,3 +1,4 @@
+import { ApiUnauthorizedResponse, ApiForbiddenResponse } from "@nestjs/swagger";
 import type { IncomingMessage } from "node:http";
 import {
   Body,
@@ -9,7 +10,7 @@ import {
   Post,
   Req,
 } from "@nestjs/common";
-import { ApiBody } from "@nestjs/swagger";
+import { ApiBody, ApiParam } from "@nestjs/swagger";
 import { AuthService } from "../auth/auth.service";
 import { BookingDurationDto, CreateBookingDto } from "./booking.dto";
 import { BookingService } from "./booking.service";
@@ -22,64 +23,95 @@ export class BookingController {
   ) {}
 
   @Get("assets/bookable-segments")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async bookableSegments(@Req() req: IncomingMessage) {
     await this.auth.requireUser(req);
     return this.booking.listBookableSegments();
   }
 
   @Get("bookings")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async bookings(@Req() req: IncomingMessage) {
     await this.auth.requireUser(req);
     return this.booking.listBookings();
   }
 
   @Post("bookings")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiBody({ type: CreateBookingDto })
   async createBooking(
     @Req() req: IncomingMessage,
     @Body() body: CreateBookingDto
   ) {
     const user = await this.auth.requireUser(req);
-    return this.booking.createBooking({ ...body, picPresales: user.name }, user.id);
+    return this.booking.createBooking(
+      { ...body, picPresales: user.name },
+      user.id
+    );
   }
 
   @Post("bookings/:id/approve")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiParam({ name: "id", type: String })
   async approveBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireAdmin(req);
     return this.booking.approveBooking(id, user.id);
   }
 
   @Post("bookings/:id/reject")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiParam({ name: "id", type: String })
   async rejectBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireAdmin(req);
     return this.booking.rejectBooking(id, user.id);
   }
 
   @Post("bookings/:id/release")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async releaseBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
     return this.booking.releaseBooking(id, user.id);
   }
 
   @Post("bookings/:id/resubmit")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async resubmitBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
     return this.booking.resubmitBooking(id, user.id);
   }
 
   @Post("bookings/:id/po-issued")
-  async purchaseOrderIssued(@Req() req: IncomingMessage, @Param("id") id: string) {
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiParam({ name: "id", type: String })
+  async purchaseOrderIssued(
+    @Req() req: IncomingMessage,
+    @Param("id") id: string
+  ) {
     const user = await this.auth.requireAdmin(req);
     return this.booking.markPurchaseOrderIssued(id, user.id);
   }
 
   @Get("settings/booking-duration")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async duration(@Req() req: IncomingMessage) {
     await this.auth.requireUser(req);
     return this.booking.getBookingDuration();
   }
 
   @Patch("settings/booking-duration")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
   @ApiBody({ type: BookingDurationDto })
   async setDuration(
     @Req() req: IncomingMessage,

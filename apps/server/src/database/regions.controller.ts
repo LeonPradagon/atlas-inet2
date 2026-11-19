@@ -5,6 +5,7 @@ import {
   Inject,
   Query,
 } from "@nestjs/common";
+import { ApiQuery } from "@nestjs/swagger";
 import { Database } from "./database";
 
 @Controller("regions")
@@ -20,6 +21,7 @@ export class RegionsController {
   }
 
   @Get("cities")
+  @ApiQuery({ name: "provinceCode", type: String, required: true })
   async cities(@Query("provinceCode") provinceCode?: string) {
     if (!provinceCode) {
       throw new BadRequestException("Kode provinsi wajib diisi.");
@@ -32,6 +34,7 @@ export class RegionsController {
   }
 
   @Get("districts")
+  @ApiQuery({ name: "cityCode", type: String, required: true })
   async districts(@Query("cityCode") cityCode?: string) {
     if (!cityCode) {
       throw new BadRequestException("Kode kabupaten/kota wajib diisi.");
@@ -44,6 +47,7 @@ export class RegionsController {
   }
 
   @Get("subdistricts")
+  @ApiQuery({ name: "districtCode", type: String, required: true })
   async subdistricts(@Query("districtCode") districtCode?: string) {
     if (!districtCode) {
       throw new BadRequestException("Kode kecamatan wajib diisi.");
@@ -60,6 +64,14 @@ export class RegionsController {
   }
 
   @Get("resolve")
+  @ApiQuery({ name: "city", type: String, required: false })
+  @ApiQuery({ name: "district", type: String, required: false })
+  @ApiQuery({ name: "subdistrict", type: String, required: false })
+  @ApiQuery({ name: "postalCode", type: String, required: false })
+  @ApiQuery({ name: "province", type: String, required: false })
+  @ApiQuery({ name: "cityCandidate", type: String, required: false })
+  @ApiQuery({ name: "districtCandidate", type: String, required: false })
+  @ApiQuery({ name: "subdistrictCandidate", type: String, required: false })
   async resolve(
     @Query("city") city?: string,
     @Query("district") district?: string,

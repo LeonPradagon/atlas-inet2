@@ -107,5 +107,7 @@ Verification: `npm run build` and `node --import tsx --test test/connection-rout
 Saat server berjalan, buka Swagger UI di <http://localhost:3000/api/docs>.
 Dokumen OpenAPI tersedia di <http://localhost:3000/api/docs-json>. Login melalui
 endpoint autentikasi di Swagger atau aplikasi untuk memakai sesi cookie yang sama.
-Daftar endpoint NestJS dibuat otomatis; beberapa detail skema request dan respons
-belum tersedia karena endpoint masih menggunakan tipe TypeScript tanpa DTO runtime.
+Daftar endpoint NestJS dibuat otomatis. Request JSON, unggahan file, serta
+parameter path dan query didokumentasikan di Swagger. Respons sebagian endpoint
+dan objek yang strukturnya dinamis masih belum memiliki skema terperinci. DTO
+ini mendokumentasikan input dan tidak menambahkan validasi runtime baru.
