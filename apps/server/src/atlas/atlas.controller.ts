@@ -16,11 +16,11 @@ import {
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { ApiBody, ApiConsumes, ApiOperation } from "@nestjs/swagger";
 import { AuthService } from "../auth/auth.service";
 import {
   GeocodingService,
   type PhotonSearchOptions,
-  type StructuredAddress,
 } from "../geospatial/geocoding.service";
 import { RoutingService } from "../geospatial/routing.service";
 import { NetworkImportService } from "../network/network-import.service";
@@ -29,6 +29,7 @@ import { BulkAnalysisService } from "./bulk-analysis.service";
 import { analyzeCoordinates } from "./address-analysis";
 import type { CoreRequirement } from "./termination-plan";
 import { ConnectionService, type ConnectionInput, validateConnectionInput } from "./connection.service";
+import { AnalyzeAddressDto, AssetImportDto } from "./api.dto";
 
 function queryValues(query: Record<string, unknown>, key: string) {
   const value = query[key];
@@ -572,6 +573,9 @@ export class AtlasController {
   }
 
   @Post("assets/import")
+  @ApiOperation({ summary: "Impor aset dari KML atau KMZ (admin, maksimal 50 MB)" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({ type: AssetImportDto })
   @UseInterceptors(
     FileInterceptor("file", { limits: { fileSize: 50 * 1024 * 1024 } })
   )
@@ -587,6 +591,9 @@ export class AtlasController {
   }
 
   @Post("assets/import/xlsx")
+  @ApiOperation({ summary: "Impor aset dari XLSX (admin, maksimal 10 MB)" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({ type: AssetImportDto })
   @UseInterceptors(
     FileInterceptor("file", { limits: { fileSize: 10 * 1024 * 1024 } })
   )
@@ -642,22 +649,10 @@ export class AtlasController {
   }
 
   @Post("analysis/address")
+  @ApiBody({ type: AnalyzeAddressDto })
   async analyzeAddress(
     @Req() req: IncomingMessage,
-    @Body() body: {
-      address?: string;
-      structured?: StructuredAddress;
-      coordinates?: {
-        longitude?: number;
-        latitude?: number;
-        provider?: "photon" | "manual";
-        matchQuality?: "approximate";
-        matchedStreet?: string;
-      };
-      coordinateConfirmed?: boolean;
-      allowExpand2km?: boolean;
-      coreRequirement?: CoreRequirement;
-    }
+    @Body() body: AnalyzeAddressDto
   ) {
     const user = await this.auth.requireUser(req);
     const suppliedRequirement = body.coreRequirement;

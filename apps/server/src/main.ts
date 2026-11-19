@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
+import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
 import { Pool } from "pg";
 import { AtlasService } from "./atlas/atlas.service";
@@ -91,6 +92,49 @@ async function bootstrap() {
     }
   );
   app.setGlobalPrefix("api");
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle("ATLAS API")
+    .setDescription(
+      "Dokumentasi API ATLAS. Login menggunakan email dan kata sandi untuk membuat sesi cookie; endpoint yang membutuhkan autentikasi menggunakan sesi tersebut. Beberapa skema request belum tersedia secara otomatis."
+    )
+    .setVersion("0.1.0")
+    .build();
+  SwaggerModule.setup("api/docs", app, () => {
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    document.paths["/api/auth/sign-in/email"] = {
+      post: {
+        tags: ["Autentikasi"],
+        summary: "Login dan buat sesi",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["email", "password"],
+                properties: {
+                  email: { type: "string", format: "email" },
+                  password: { type: "string", format: "password" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "Login berhasil; cookie sesi disimpan di browser." },
+          401: { description: "Email atau kata sandi tidak valid." },
+        },
+      },
+    };
+    document.paths["/api/auth/sign-out"] = {
+      post: {
+        tags: ["Autentikasi"],
+        summary: "Akhiri sesi",
+        responses: { 200: { description: "Logout berhasil." } },
+      },
+    };
+    return document;
+  });
   app.enableShutdownHooks();
   const authHandler = toNodeHandler(auth);
   app

@@ -9,8 +9,10 @@ import {
   Post,
   Req,
 } from "@nestjs/common";
+import { ApiBody } from "@nestjs/swagger";
 import { AuthService } from "../auth/auth.service";
-import { BookingService, type CreateBookingInput } from "./booking.service";
+import { BookingDurationDto, CreateBookingDto } from "./booking.dto";
+import { BookingService } from "./booking.service";
 
 @Controller()
 export class BookingController {
@@ -32,9 +34,10 @@ export class BookingController {
   }
 
   @Post("bookings")
+  @ApiBody({ type: CreateBookingDto })
   async createBooking(
     @Req() req: IncomingMessage,
-    @Body() body: CreateBookingInput
+    @Body() body: CreateBookingDto
   ) {
     const user = await this.auth.requireUser(req);
     return this.booking.createBooking({ ...body, picPresales: user.name }, user.id);
@@ -77,9 +80,10 @@ export class BookingController {
   }
 
   @Patch("settings/booking-duration")
+  @ApiBody({ type: BookingDurationDto })
   async setDuration(
     @Req() req: IncomingMessage,
-    @Body() body: { days?: number }
+    @Body() body: BookingDurationDto
   ) {
     const user = await this.auth.requireAdmin(req);
     return this.booking.setBookingDuration(Number(body.days), user.id);

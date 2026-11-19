@@ -101,3 +101,11 @@ History is saved as `ADDRESS`, input `inputMode: "connection"`. To submit a surv
 `routeId` must select a persisted A/B route. Omit `plan` and `proposal`; connection surveys reject client geometry. `rowNumber` can be omitted or zero. The server selects the stored route and its plan, retaining both endpoints and selected route evidence. The plan contains only two disconnected new access cables and zero new points; reused segments are never included as new plan cables. The original single-address linear plan validator is unchanged. Duplicate checks distinguish both endpoints; a history row can be submitted only once.
 
 Verification: `npm run build` and `node --import tsx --test test/connection-routing.test.cjs`.
+
+# Dokumentasi API
+
+Saat server berjalan, buka Swagger UI di <http://localhost:3000/api/docs>.
+Dokumen OpenAPI tersedia di <http://localhost:3000/api/docs-json>. Login melalui
+endpoint autentikasi di Swagger atau aplikasi untuk memakai sesi cookie yang sama.
+Daftar endpoint NestJS dibuat otomatis; beberapa detail skema request dan respons
+belum tersedia karena endpoint masih menggunakan tipe TypeScript tanpa DTO runtime.
