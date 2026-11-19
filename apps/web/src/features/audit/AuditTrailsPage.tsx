@@ -6,8 +6,6 @@ import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
 import { ApiError, api } from "../../lib/api";
 
-const auditPageSize = 25;
-
 type User = { role: string };
 type AuditEntry = {
   id: number;
@@ -100,6 +98,7 @@ export function AuditTrailsPage() {
   const [search, setSearch] = useState("");
   const [activityType, setActivityType] = useState("all");
   const [page, setPage] = useState(1);
+  const [auditPageSize, setAuditPageSize] = useState(5);
   const me = useQuery({ queryKey: ["me"], queryFn: () => api<User>("/me") });
   const audit = useQuery({
     queryKey: ["audit-trails", search, activityType],
@@ -293,6 +292,7 @@ export function AuditTrailsPage() {
           <TablePagination
             label="aktivitas"
             onPageChange={setPage}
+            onPageSizeChange={(size) => { setAuditPageSize(size); setPage(1); }}
             page={page}
             pageSize={auditPageSize}
             total={entries.length}

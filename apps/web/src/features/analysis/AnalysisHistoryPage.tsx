@@ -495,7 +495,7 @@ function BulkHistoryDetail({
   onOpenDraft: (id: string) => void;
 }) {
   const [page, setPage] = useState(1);
-  const pageSize = 25;
+  const [pageSize, setPageSize] = useState(5);
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const visibleRows = rows.slice((page - 1) * pageSize, page * pageSize);
   const drafts = detail.relatedDrafts ?? [];
@@ -626,6 +626,7 @@ function BulkHistoryDetail({
       <TablePagination
         label="baris"
         onPageChange={setPage}
+        onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
         page={page}
         pageSize={pageSize}
         total={rows.length}
@@ -647,15 +648,16 @@ function BulkHistoryDetail({
 export function AnalysisHistoryPage() {
   const [type, setType] = useState("");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(5);
   const [selectedId, setSelectedId] = useState("");
   const [busyId, setBusyId] = useState("");
   const detailPanelRef = useRef<HTMLElement>(null);
 
   const history = useQuery({
-    queryKey: ["analysis-history", type, page],
+    queryKey: ["analysis-history", type, page, pageSize],
     queryFn: () =>
       api<HistoryPage>(
-        `/analysis/history?page=${page}&pageSize=25${type ? `&type=${type}` : ""}`
+        `/analysis/history?page=${page}&pageSize=${pageSize}${type ? `&type=${type}` : ""}`
       ),
     placeholderData: (previous) => previous,
   });
@@ -1137,6 +1139,7 @@ export function AnalysisHistoryPage() {
             busy={history.isFetching}
             label="riwayat"
             onPageChange={setPage}
+          onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
             page={page}
             pageSize={history.data.pageSize}
             total={history.data.total}

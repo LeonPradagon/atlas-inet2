@@ -1,12 +1,14 @@
 import {
   useEffect,
   useRef,
+  useState,
   type CSSProperties,
   type KeyboardEvent,
   cloneElement,
   isValidElement,
   type ReactNode,
 } from "react";
+import { TablePagination } from "./TablePagination";
 
 export type DataTableColumn<Row> = {
   key: string;
@@ -74,6 +76,7 @@ export function DataTable<Row>({
   density = "comfortable",
   showHeader = true,
   hover = true,
+  pagination = true,
 }: {
   label: string;
   columns: readonly DataTableColumn<Row>[];
@@ -88,79 +91,101 @@ export function DataTable<Row>({
   density?: "comfortable" | "compact";
   showHeader?: boolean;
   hover?: boolean;
+  pagination?: boolean;
 }) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(5);
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const visibleRows = pagination
+    ? rows.slice((page - 1) * pageSize, page * pageSize)
+    : rows;
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
   return (
-    <DataTableShell label={label}>
-      <table
-        aria-label={label}
-        className={`table ${hover ? "table-hover" : ""} atlas-data-table ${density === "compact" ? "atlas-data-table-compact" : ""} ${tableClassName}`.trim()}
-      >
-        <caption className="visually-hidden">{label}</caption>
-        {showHeader && (
-          <thead>
-            <tr>
-              {columns.map((column) => (
-                <th
-                  className={column.headerClassName}
-                  key={column.key}
-                  scope="col"
-                  style={column.width ? { width: column.width } : undefined}
-                >
-                  {column.header}
-                </th>
-              ))}
-            </tr>
-          </thead>
-        )}
-        <tbody>
-          {rows.length ? (
-            rows.map((row) => (
-              <tr
-                className={rowClassName?.(row)}
-                id={rowId?.(row)}
-                key={rowKey(row)}
-                aria-label={onRowClick ? rowAriaLabel?.(row) : undefined}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
-                onKeyDown={
-                  onRowClick
-                    ? (event: KeyboardEvent<HTMLTableRowElement>) => {
-                        if (
-                          event.target !== event.currentTarget ||
-                          (event.key !== "Enter" && event.key !== " ")
-                        ) {
-                          return;
-                        }
-                        event.preventDefault();
-                        onRowClick(row);
-                      }
-                    : undefined
-                }
-                tabIndex={onRowClick ? 0 : undefined}
-              >
-                {columns.map((column) => {
-                  const content = column.render(row);
-                  const className = column.className;
-                  return column.rowHeader ? (
-                    <th className={className} key={column.key} scope="row">
-                      {content}
-                    </th>
-                  ) : (
-                    <td className={className} key={column.key}>
-                      {content}
-                    </td>
-                  );
-                })}
+    <>
+      <DataTableShell label={label}>
+        <table
+          aria-label={label}
+          className={`table ${hover ? "table-hover" : ""} atlas-data-table ${density === "compact" ? "atlas-data-table-compact" : ""} ${tableClassName}`.trim()}
+        >
+          <caption className="visually-hidden">{label}</caption>
+          {showHeader && (
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th
+                    className={column.headerClassName}
+                    key={column.key}
+                    scope="col"
+                    style={column.width ? { width: column.width } : undefined}
+                  >
+                    {column.header}
+                  </th>
+                ))}
               </tr>
-            ))
-          ) : (
-            <tr>
-              <td className="atlas-data-table-empty" colSpan={columns.length}>
-                {emptyState}
-              </td>
-            </tr>
+            </thead>
           )}
-        </tbody>
-      </table>
-    </DataTableShell>
+          <tbody>
+            {rows.length ? (
+              visibleRows.map((row) => (
+                <tr
+                  className={rowClassName?.(row)}
+                  id={rowId?.(row)}
+                  key={rowKey(row)}
+                  aria-label={onRowClick ? rowAriaLabel?.(row) : undefined}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  onKeyDown={
+                    onRowClick
+                      ? (event: KeyboardEvent<HTMLTableRowElement>) => {
+                          if (
+                            event.target !== event.currentTarget ||
+                            (event.key !== "Enter" && event.key !== " ")
+                          ) {
+                            return;
+                          }
+                          event.preventDefault();
+                          onRowClick(row);
+                        }
+                      : undefined
+                  }
+                  tabIndex={onRowClick ? 0 : undefined}
+                >
+                  {columns.map((column) => {
+                    const content = column.render(row);
+                    const className = column.className;
+                    return column.rowHeader ? (
+                      <th className={className} key={column.key} scope="row">
+                        {content}
+                      </th>
+                    ) : (
+                      <td className={className} key={column.key}>
+                        {content}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td className="atlas-data-table-empty" colSpan={columns.length}>
+                  {emptyState}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </DataTableShell>
+      {pagination && (
+        <TablePagination
+          label={label}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+          page={page}
+          pageSize={pageSize}
+          total={rows.length}
+        />
+      )}
+    </>
   );
 }

@@ -17,8 +17,6 @@ import {
 } from "../../lib/api";
 import { confirmAction } from "../../lib/dialogs";
 
-const bookingPageSize = 20;
-
 type EndpointNames = {
   endpointNames: Partial<Record<"A" | "B", string>> | null;
   nearbyEndpointNames?: Partial<Record<"A" | "B", string>> | null;
@@ -60,6 +58,7 @@ export function CoreBookingPage() {
   const [editDuration, setEditDuration] = useState(false);
   const [filter, setFilter] = useState<"Semua" | Booking["status"]>("Semua");
   const [page, setPage] = useState(1);
+  const [bookingPageSize, setBookingPageSize] = useState(5);
   const {
     data: bookings = [],
     isPending,
@@ -535,6 +534,7 @@ export function CoreBookingPage() {
           <TablePagination
             label="booking"
             onPageChange={setPage}
+            onPageSizeChange={(size) => { setBookingPageSize(size); setPage(1); }}
             page={page}
             pageSize={bookingPageSize}
             total={filtered.length}

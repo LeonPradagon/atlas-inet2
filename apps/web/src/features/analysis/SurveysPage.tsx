@@ -177,7 +177,7 @@ export function SurveysPage() {
   const client = useQueryClient();
   const [filter, setFilter] = useState("ALL");
   const [page, setPage] = useState(1);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(5);
   const [selected, setSelected] = useState<Survey | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [imageError, setImageError] = useState("");
@@ -424,6 +424,7 @@ export function SurveysPage() {
               )
             }
             label="Daftar survei"
+            pagination={false}
             rowKey={(survey: Survey) => survey.id}
             rows={visible}
           />
@@ -432,6 +433,7 @@ export function SurveysPage() {
           <TablePagination
             label="survei"
             onPageChange={setPage}
+            onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
             page={currentPage}
             pageSize={pageSize}
             total={filtered.length}

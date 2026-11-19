@@ -2841,6 +2841,79 @@ body {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
 }
+.dashboard-company-overview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px;
+}
+.dashboard-company-count {
+  display: flex;
+  gap: 13px;
+  align-items: center;
+}
+.dashboard-company-count strong {
+  display: block;
+  font-size: 25px;
+  line-height: 1.1;
+  color: #1b2942;
+}
+.dashboard-company-picker {
+  width: min(100%, 460px);
+}
+.dashboard-company-picker .form-label {
+  margin-bottom: 6px;
+  font-size: 10px;
+  font-weight: 750;
+  color: #7d8798;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.dashboard-network-map-wrap {
+  position: relative;
+  height: 420px;
+  overflow: hidden;
+  background: #e8edf4;
+}
+.dashboard-network-map {
+  position: absolute;
+  inset: 0;
+}
+.dashboard-map-message {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  color: #64748b;
+  background: #e8edf4cc;
+  pointer-events: none;
+  text-align: center;
+}
+.dashboard-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 10px 16px;
+  color: #64748b;
+  font-size: 12px;
+}
+.dashboard-map-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.dashboard-map-legend-line {
+  width: 22px;
+  height: 3px;
+  border-radius: 2px;
+  background: #4285f4;
+}
+.dashboard-map-legend-line.submarine {
+  background: #a78bfa;
+}
 .dashboard-card-header > .text-link {
   justify-self: end;
   white-space: nowrap;

@@ -6,14 +6,49 @@ import ExcelJS from "exceljs";
 import { useState } from "react";
 import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
+import { DashboardNetworkMap } from "./DashboardNetworkMap";
 import {
   type AssetRelation,
   api,
   type Booking,
-  type NetworkAsset,
 } from "../../lib/api";
 
-const dashboardPageSize = 5;
+type CompanyOption = {
+  value: string;
+  name: string;
+  segmentCount: number;
+  lengthMeters: number;
+};
+type CompanySummary = {
+  segmentCount: number;
+  lengthMeters: number;
+  provinceCount: number;
+  areaCount: number;
+  totalCores: number;
+  verifiedCores: number;
+  unverifiedCores: number;
+  usedCores: number;
+  bookedCores: number;
+  idleCores: number;
+};
+type DashboardRegion = {
+  area: string;
+  province: string;
+  segmentCount: number;
+  lengthMeters: number;
+};
+type DashboardSegment = {
+  id: string;
+  name: string;
+  area: string;
+  province: string;
+  cableType: string | null;
+  lengthMeters: number;
+  totalCores: number;
+  usedCores: number;
+  bookedCores: number;
+  idleCores: number;
+};
 
 type Summary = {
   segments: number;
@@ -22,7 +57,14 @@ type Summary = {
   bookedCores: number;
   waitingCount: number;
   recentBookings: Booking[];
-  topSegments: NetworkAsset[];
+  companyCount: number;
+  companies: CompanyOption[];
+  companySummary: CompanySummary;
+  regions: DashboardRegion[];
+  segmentTotal: number;
+  page: number;
+  pageSize: number;
+  segmentItems: DashboardSegment[];
 };
 type UsageRow = {
   relatedAssets: AssetRelation[];
@@ -124,9 +166,17 @@ function downloadUsageReport(rows: UsageRow[]) {
 }
 
 export function DashboardPage() {
+  const [selectedCompany, setSelectedCompany] = useState("");
+  const [segmentPage, setSegmentPage] = useState(1);
+  const [segmentPageSize, setSegmentPageSize] = useState(5);
+  const [regionPage, setRegionPage] = useState(1);
+  const [regionPageSize, setRegionPageSize] = useState(5);
   const summary = useQuery({
-    queryKey: ["dashboard"],
-    queryFn: () => api<Summary>("/dashboard"),
+    queryKey: ["dashboard", selectedCompany, segmentPage, segmentPageSize],
+    queryFn: () =>
+      api<Summary>(
+        `/dashboard?company=${encodeURIComponent(selectedCompany)}&page=${segmentPage}&pageSize=${segmentPageSize}`
+      ),
     refetchInterval: 30_000,
   });
   const exportReport = useMutation({
@@ -135,13 +185,12 @@ export function DashboardPage() {
     mutationFn: () => api<UsageRow[]>("/reports/network-usage"),
     onSuccess: downloadUsageReport,
   });
-  const [segmentPage, setSegmentPage] = useState(1);
   const value = summary.data;
-  const visibleSegments =
-    value?.topSegments.slice(
-      (segmentPage - 1) * dashboardPageSize,
-      segmentPage * dashboardPageSize
-    ) ?? [];
+  const companySummary = value?.companySummary;
+  const visibleRegions = (value?.regions ?? []).slice(
+    (regionPage - 1) * regionPageSize,
+    regionPage * regionPageSize
+  );
   return (
     <>
       <PageHeader
@@ -162,8 +211,8 @@ export function DashboardPage() {
             </Link>
           </div>
         }
-        subtitle="Pantau kondisi aset dan utilisasi core jaringan Anda."
-        title="Ringkasan jaringan"
+        subtitle="Lihat sebaran perusahaan, segmen, panjang kabel, dan kapasitas jaringan."
+        title="Dashboard jaringan"
       />
       {exportReport.error && (
         <div className="alert alert-danger">
@@ -183,141 +232,155 @@ export function DashboardPage() {
         </div>
       ) : (
         <>
+          <section className="card panel-card dashboard-company-panel mb-4">
+            <div className="dashboard-company-overview">
+              <div className="dashboard-company-count">
+                <span className="metric-icon blue"><i className="bi bi-buildings" /></span>
+                <div>
+                  <span className="metric-label">Perusahaan dengan segmen</span>
+                  <strong>{Number(value?.companyCount ?? 0).toLocaleString("id-ID")}</strong>
+                </div>
+              </div>
+              <div className="dashboard-company-picker">
+                <label className="form-label" htmlFor="dashboard-company">Pilih perusahaan</label>
+                <select
+                  className="form-select"
+                  id="dashboard-company"
+                  onChange={(event) => {
+                    setSelectedCompany(event.currentTarget.value);
+                    setSegmentPage(1);
+                    setRegionPage(1);
+                  }}
+                  value={selectedCompany}
+                >
+                  <option value="">Semua perusahaan</option>
+                  {value?.companies.map((company) => (
+                    <option key={company.value} value={company.value}>
+                      {company.name} · {company.segmentCount} segmen
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </section>
+
           <div className="row g-3 mb-4">
-            <Metric
-              color="blue"
-              detail="aset tersimpan"
-              icon="bi-bezier2"
-              label="Segmen jaringan"
-              value={String(value?.segments ?? 0)}
-            />
-            <Metric
-              color="purple"
-              detail="dari seluruh segmen"
-              icon="bi-cpu"
-              label="Total core terpasang"
-              value={Number(value?.totalCores ?? 0).toLocaleString("id-ID")}
-            />
-            <Metric
-              color="green"
-              detail="status Used"
-              icon="bi-activity"
-              label="Core digunakan"
-              value={String(value?.usedCores ?? 0)}
-            />
-            <Metric
-              color="orange"
-              detail="permintaan waiting list"
-              icon="bi-hourglass-split"
-              label="Menunggu alokasi"
-              value={String(value?.waitingCount ?? 0)}
-            />
+            <Metric color="blue" detail="pada pilihan ini" icon="bi-bezier2" label="Segmen kabel" value={Number(companySummary?.segmentCount ?? 0).toLocaleString("id-ID")} />
+            <Metric color="purple" detail="panjang berdasarkan geometri" icon="bi-rulers" label="Total panjang kabel" value={formatCableLength(companySummary?.lengthMeters ?? 0)} />
+            <Metric color="green" detail={`${companySummary?.areaCount ?? 0} wilayah`} icon="bi-geo-alt" label="Cakupan provinsi" value={Number(companySummary?.provinceCount ?? 0).toLocaleString("id-ID")} />
+            <Metric color="orange" detail={`${companySummary?.verifiedCores ?? 0} terverifikasi · ${companySummary?.unverifiedCores ?? 0} belum diverifikasi · ${companySummary?.usedCores ?? 0} dipakai · ${companySummary?.bookedCores ?? 0} dibooking`} icon="bi-cpu" label="Core terpasang" value={Number(companySummary?.totalCores ?? 0).toLocaleString("id-ID")} />
           </div>
+
+          <section className="card panel-card mb-4">
+            <div className="card-header dashboard-card-header">
+              <div>
+                <h3>Peta jaringan fiber optik</h3>
+                <p>{selectedCompany ? `Jalur milik ${value?.companies.find((company) => company.value === selectedCompany)?.name ?? "perusahaan terpilih"}` : "Jalur dari seluruh perusahaan"}</p>
+              </div>
+              <Link className="btn btn-sm btn-outline-primary atlas-secondary-action flex-shrink-0" to="/peta-jaringan">
+                Buka peta jaringan
+                <i aria-hidden="true" className="bi bi-arrow-right atlas-secondary-action-icon" />
+              </Link>
+            </div>
+            <div className="card-body p-0">
+              <DashboardNetworkMap company={selectedCompany} />
+              <div className="dashboard-map-legend">
+                <span><i className="dashboard-map-legend-line" /> Fiber optik</span>
+                <span><i className="dashboard-map-legend-line submarine" /> Submarine</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="card panel-card mb-4">
+            <div className="card-header dashboard-card-header">
+              <div>
+                <h3>Daftar segmen kabel</h3>
+                <p>Wilayah, provinsi, panjang kabel, dan utilisasi core</p>
+              </div>
+              <Link className="btn btn-sm btn-outline-primary atlas-secondary-action flex-shrink-0" to="/peta-jaringan">
+                Buka peta jaringan
+                <i aria-hidden="true" className="bi bi-arrow-right atlas-secondary-action-icon" />
+              </Link>
+            </div>
+            <div className="card-body p-0">
+              <DataTableShell label="Daftar segmen perusahaan">
+                <table className="table table-hover atlas-data-table mb-0">
+                  <thead>
+                    <tr><th>Segmen</th><th>Wilayah</th><th>Provinsi</th><th>Panjang</th><th>Core</th><th>Utilisasi</th></tr>
+                  </thead>
+                  <tbody>
+                    {value?.segmentItems.map((segment) => {
+                      const percent = segment.totalCores
+                        ? Math.round(((segment.usedCores + segment.bookedCores) / segment.totalCores) * 100)
+                        : 0;
+                      return (
+                        <tr key={segment.id}>
+                          <td>
+                            <Link className="cable-name" to="/peta-jaringan">{segment.name}</Link>
+                            <small className="d-block text-body-secondary">{segment.cableType || "Tipe kabel belum dicatat"}</small>
+                          </td>
+                          <td>{segment.area}</td>
+                          <td>{segment.province}</td>
+                          <td className="text-nowrap">{formatCableLength(segment.lengthMeters)}</td>
+                          <td className="text-nowrap">
+                            <b>{segment.totalCores}</b>
+                            <small className="d-block text-body-secondary">{segment.usedCores} dipakai · {segment.bookedCores} dibooking · {segment.idleCores} tersedia</small>
+                          </td>
+                          <td>
+                            <div className="util-cell">
+                              <div className="progress"><div className="progress-bar" style={{ width: `${percent}%` }} /></div>
+                              <span>{percent}%</span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </DataTableShell>
+              {!value?.segmentTotal && (
+                <div className="bulk-empty">
+                  <b>Belum ada segmen untuk pilihan ini</b>
+                  <span>Impor jaringan atau pilih perusahaan lain untuk melihat detail.</span>
+                </div>
+              )}
+              <TablePagination label="segmen" onPageChange={setSegmentPage} onPageSizeChange={(size) => { setSegmentPageSize(size); setSegmentPage(1); }} page={segmentPage} pageSize={segmentPageSize} total={value?.segmentTotal ?? 0} />
+            </div>
+          </section>
+
           <div className="row g-4">
-            <div className="col-xl-8">
+            <div className="col-xl-7">
               <section className="card panel-card h-100">
                 <div className="card-header dashboard-card-header">
-                  <div>
-                    <h3>Utilisasi core per segmen</h3>
-                    <p>Core terpakai dan booking aktif</p>
-                  </div>
-                  <Link
-                    aria-label="Lihat semua segmen di Peta Jaringan"
-                    className="btn btn-sm btn-outline-primary atlas-secondary-action flex-shrink-0"
-                    to="/peta-jaringan"
-                  >
-                    Lihat semua
-                    <i aria-hidden="true" className="bi bi-arrow-right atlas-secondary-action-icon" />
-                  </Link>
+                  <div><h3>Sebaran wilayah</h3><p>Area dengan jumlah segmen terbanyak</p></div>
                 </div>
                 <div className="card-body p-0">
-                  <DataTableShell label="Utilisasi core">
-                    <table className="table table-hover atlas-data-table mb-0">
-                      <thead>
-                        <tr>
-                          <th>Nama kabel</th>
-                          <th>Area</th>
-                          <th>Terpakai</th>
-                          <th>Booked</th>
-                          <th>Tersedia</th>
-                          <th>Utilisasi</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {visibleSegments.map((asset) => {
-                          const percent = asset.totalCores
-                            ? Math.round(
-                                ((asset.usedCores + asset.bookedCores) /
-                                  asset.totalCores) *
-                                  100
-                              )
-                            : 0;
-                          return (
-                            <tr key={asset.id}>
-                              <td>
-                                <Link
-                                  className="cable-name"
-                                  to="/peta-jaringan"
-                                >
-                                  {asset.name}
-                                </Link>
-                                <small className="d-block text-muted">
-                                  {asset.cableType}
-                                </small>
-                              </td>
-                              <td>{asset.area || "—"}</td>
-                              <td>{asset.usedCores}</td>
-                              <td>{asset.bookedCores}</td>
-                              <td>{asset.idleCores}</td>
-                              <td>
-                                <div className="util-cell">
-                                  <div className="progress">
-                                    <div
-                                      className="progress-bar"
-                                      style={{ width: `${percent}%` }}
-                                    />
-                                  </div>
-                                  <span>{percent}%</span>
-                                </div>
-                              </td>
+                  {value?.regions.length ? (
+                    <>
+                      <DataTableShell label="Sebaran segmen per wilayah">
+                        <table className="table table-hover atlas-data-table mb-0">
+                          <thead><tr><th>Wilayah</th><th>Provinsi</th><th>Segmen</th><th>Panjang kabel</th></tr></thead>
+                          <tbody>{visibleRegions.map((region) => (
+                            <tr key={`${region.province}:${region.area}`}>
+                              <td>{region.area}</td><td>{region.province}</td>
+                              <td>{Number(region.segmentCount).toLocaleString("id-ID")}</td>
+                              <td className="text-nowrap">{formatCableLength(region.lengthMeters)}</td>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </DataTableShell>
-                  {!value?.topSegments.length && (
-                    <div className="bulk-empty">
-                      <b>Belum ada aset jaringan</b>
-                      <span>
-                        Impor KML/KMZ dari halaman peta jaringan untuk memulai.
-                      </span>
-                    </div>
-                  )}
-                  <TablePagination
-                    label="segmen"
-                    onPageChange={setSegmentPage}
-                    page={segmentPage}
-                    pageSize={dashboardPageSize}
-                    total={value?.topSegments.length ?? 0}
-                  />
+                          ))}</tbody>
+                        </table>
+                      </DataTableShell>
+                      <TablePagination label="wilayah" onPageChange={setRegionPage} onPageSizeChange={(size) => { setRegionPageSize(size); setRegionPage(1); }} page={regionPage} pageSize={regionPageSize} total={value.regions.length} />
+                    </>
+                  ) : <div className="bulk-empty"><b>Belum ada sebaran wilayah</b></div>}
                 </div>
               </section>
             </div>
-            <div className="col-xl-4">
+            <div className="col-xl-5">
               <section className="card panel-card h-100">
                 <div className="card-header dashboard-card-header">
-                  <div>
-                    <h3>Aktivitas booking</h3>
-                    <p>Permintaan terbaru</p>
-                  </div>
-                  <Link
-                    aria-label="Kelola booking core"
-                    className="btn btn-sm btn-outline-primary atlas-secondary-action flex-shrink-0"
-                    to="/booking-core"
-                  >
-                    Kelola
-                    <i aria-hidden="true" className="bi bi-arrow-right atlas-secondary-action-icon" />
+                  <div><h3>Aktivitas booking</h3><p>Permintaan terbaru</p></div>
+                  <Link aria-label="Kelola booking core" className="btn btn-sm btn-outline-primary atlas-secondary-action flex-shrink-0" to="/booking-core">
+                    Kelola<i aria-hidden="true" className="bi bi-arrow-right atlas-secondary-action-icon" />
                   </Link>
                 </div>
                 <div className="card-body p-0">
@@ -327,58 +390,16 @@ export function DashboardPage() {
                         <b>{booking.customer}</b>
                         <small className="d-flex flex-wrap column-gap-3">
                           <span>{booking.cores} core</span>
-                          <time dateTime={booking.requestedAt}>
-                            {new Date(booking.requestedAt).toLocaleDateString("id-ID")}
-                          </time>
+                          <time dateTime={booking.requestedAt}>{new Date(booking.requestedAt).toLocaleDateString("id-ID")}</time>
                         </small>
                       </div>
                       <BookingStatusBadge status={booking.status} />
                     </div>
                   ))}
-                  {!value?.recentBookings.length && (
-                    <div className="bulk-empty">
-                      <b>Belum ada permintaan</b>
-                      <span>Booking baru akan muncul di sini.</span>
-                    </div>
-                  )}
+                  {!value?.recentBookings.length && <div className="bulk-empty"><b>Belum ada permintaan</b><span>Booking baru akan muncul di sini.</span></div>}
                 </div>
               </section>
             </div>
-          </div>
-          <div className="quick-actions mt-4">
-            <div>
-              <h3>Akses cepat</h3>
-            </div>
-            <Link className="quick-action" to="/analisis-alamat">
-              <span className="quick-icon blue">
-                <i className="bi bi-geo-alt" />
-              </span>
-              <span>
-                <b>Analisis alamat</b>
-                <small>Temukan jaringan terdekat</small>
-              </span>
-              <i aria-hidden="true" className="bi bi-arrow-right ms-auto" />
-            </Link>
-            <Link className="quick-action" to="/analisis-massal">
-              <span className="quick-icon green">
-                <i className="bi bi-file-earmark-spreadsheet" />
-              </span>
-              <span>
-                <b>Analisis massal</b>
-                <small>Proses banyak lokasi</small>
-              </span>
-              <i aria-hidden="true" className="bi bi-arrow-right ms-auto" />
-            </Link>
-            <Link className="quick-action" to="/booking-core">
-              <span className="quick-icon purple">
-                <i className="bi bi-diagram-3" />
-              </span>
-              <span>
-                <b>Booking core</b>
-                <small>Kelola permintaan core</small>
-              </span>
-              <i aria-hidden="true" className="bi bi-arrow-right ms-auto" />
-            </Link>
           </div>
         </>
       )}
@@ -413,4 +434,11 @@ function Metric({
       </div>
     </div>
   );
+}
+
+function formatCableLength(meters: number) {
+  if (!Number.isFinite(meters)) return "—";
+  return meters >= 1000
+    ? `${(meters / 1000).toLocaleString("id-ID", { maximumFractionDigits: 2 })} km`
+    : `${Math.round(meters).toLocaleString("id-ID")} m`;
 }

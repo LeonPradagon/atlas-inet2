@@ -216,9 +216,17 @@ export class AtlasController {
   @Get("dashboard")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
-  async dashboard(@Req() req: IncomingMessage) {
+  @ApiQuery({ name: "company", type: String, required: false })
+  @ApiQuery({ name: "page", type: String, required: false })
+  @ApiQuery({ name: "pageSize", type: String, required: false })
+  async dashboard(
+    @Req() req: IncomingMessage,
+    @Query("company") company?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string
+  ) {
     await this.auth.requireUser(req);
-    return this.atlas.dashboard();
+    return this.atlas.dashboard(company, Number(page), Number(pageSize));
   }
 
   @Get("audit-trails")
@@ -413,13 +421,15 @@ export class AtlasController {
   @ApiQuery({ name: "provinceCode", type: String, required: false })
   @ApiQuery({ name: "importId", type: String, required: false })
   @ApiQuery({ name: "importIds", type: String, required: false })
+  @ApiQuery({ name: "company", type: String, required: false })
   async mapAssets(
     @Req() req: IncomingMessage,
     @Query("bbox") bbox?: string,
     @Query("zoom") zoom?: string,
     @Query("provinceCode") provinceCode?: string,
     @Query("importId") importId?: string,
-    @Query("importIds") importIds?: string
+    @Query("importIds") importIds?: string,
+    @Query("company") company?: string
   ) {
     await this.auth.requireUser(req);
     const values = bbox?.split(",").map(Number) ?? [];
@@ -446,7 +456,8 @@ export class AtlasController {
       values as [number, number, number, number],
       level,
       provinceCode,
-      importFilter(importId, importIds)
+      importFilter(importId, importIds),
+      company?.trim() || undefined
     );
   }
 

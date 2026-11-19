@@ -1219,6 +1219,7 @@ export function MapPage() {
     activeImportId,
   ]);
   const [assetPage, setAssetPage] = useState(1);
+  const [assetPageSize, setAssetPageSize] = useState(5);
   const [search, setSearch] = useState("");
   const [catalogSearch, setCatalogSearch] = useState("");
   const [coreFilter, setCoreFilter] = useState("all");
@@ -1239,7 +1240,7 @@ export function MapPage() {
     Record<number, boolean>
   >({});
 
-  const [corePageSize, setCorePageSize] = useState(10);
+  const [corePageSize, setCorePageSize] = useState(5);
   const [corePage, setCorePage] = useState(1);
   const catalogCoreFilter =
     assetListTab === "network"
@@ -1251,6 +1252,7 @@ export function MapPage() {
     queryKey: [
       "segment-catalog",
       assetPage,
+      assetPageSize,
       catalogSearch,
       catalogCoreFilter,
       assetListTab,
@@ -1262,7 +1264,7 @@ export function MapPage() {
     ],
     queryFn: () =>
       api<NetworkAssetPage>(
-        `/assets/catalog?page=${assetPage}&pageSize=50&search=${encodeURIComponent(catalogSearch)}&coreFilter=${catalogCoreFilter}&assetType=${assetListTab}&cableFamily=${assetListTab === "cables" ? cableFamilyFilter : "all"}&cableStatus=${assetListTab === "cables" ? cableStatusFilter : "all"}&networkKind=${assetListTab === "network" ? networkKindFilter : "all"}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : ""}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`
+        `/assets/catalog?page=${assetPage}&pageSize=${assetPageSize}&search=${encodeURIComponent(catalogSearch)}&coreFilter=${catalogCoreFilter}&assetType=${assetListTab}&cableFamily=${assetListTab === "cables" ? cableFamilyFilter : "all"}&cableStatus=${assetListTab === "cables" ? cableStatusFilter : "all"}&networkKind=${assetListTab === "network" ? networkKindFilter : "all"}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : ""}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`
       ),
     enabled: Boolean(provinceCode && selectedImportIds.length),
     refetchInterval: 30_000,
@@ -5058,14 +5060,28 @@ export function MapPage() {
                 )}
             </div>
           </div>
-          {catalogQuery.data &&
-            catalogQuery.data.total > catalogQuery.data.pageSize && (
+          {catalogQuery.data && (
               <div className="asset-pagination">
                 <small className="text-muted">
-                  Halaman {assetPage.toLocaleString("id-ID")} dari{" "}
+                  Menampilkan {catalogQuery.data.items.length} dari {catalogQuery.data.total.toLocaleString("id-ID")} aset · Halaman {assetPage.toLocaleString("id-ID")} dari{" "}
                   {catalogPageCount.toLocaleString("id-ID")}
                   {catalogQuery.isFetching ? " · Memuat…" : ""}
                 </small>
+                <label className="d-flex align-items-center gap-2 small text-muted">
+                  Per halaman
+                  <select
+                    aria-label="Jumlah aset per halaman"
+                    className="form-select form-select-sm w-auto"
+                    disabled={catalogQuery.isFetching}
+                    onChange={(event) => {
+                      setAssetPageSize(Number(event.target.value));
+                      setAssetPage(1);
+                    }}
+                    value={assetPageSize}
+                  >
+                    {[5, 10, 20, 50].map((size) => <option key={size} value={size}>{size}</option>)}
+                  </select>
+                </label>
                 {/* biome-ignore lint/a11y/useSemanticElements: Bootstrap btn-group markup; a fieldset breaks its layout */}
                 <div
                   aria-label="Pagination daftar aset"
@@ -6005,7 +6021,7 @@ export function MapPage() {
                           }
                           value={corePageSize}
                         >
-                          {[10, 20, 30, 40].map((size) => (
+                          {[5, 10, 20, 50].map((size) => (
                             <option key={size} value={size}>
                               {size}
                             </option>
