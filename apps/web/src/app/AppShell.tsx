@@ -170,7 +170,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
               />
             </span>
             <span className="header-product-name">
-              ATLAS <small>NETWORK INTELLIGENCE</small>
+              ATLAS <small>Asset Tracking, Location Analytics &amp; Sales Intelligence Tools</small>
             </span>
           </Link>
           <div className="d-flex align-items-center gap-3">
@@ -327,13 +327,6 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
         <div className="content-wrapper">
           <div className="content px-4 py-4">{children}</div>
         </div>
-        <footer className="main-footer">
-          ATLAS{" "}
-          <span>
-            Asset Tracking, Location Analytics &amp; Sales Intelligence Tools
-          </span>
-          <span className="float-end">Phase 2 · v0.1.0</span>
-        </footer>
       </main>
     </div>
   );
