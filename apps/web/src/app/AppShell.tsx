@@ -50,6 +50,7 @@ const navSections = [
     label: "KAPASITAS",
     items: [
       { to: "/booking-core", label: "Booking Core", icon: "bi-diagram-3" },
+      { to: "/harga-jaringan", label: "Manajemen Harga", icon: "bi-currency-exchange" },
     ],
   },
 ] as const;
@@ -82,6 +83,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
 function AuthenticatedShell({ children }: { children: ReactNode }) {
   const mobileAnalysisMenu = useRef<HTMLDetailsElement>(null);
+  const mobileCapacityMenu = useRef<HTMLDetailsElement>(null);
   const notificationMenu = useRef<HTMLDetailsElement>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -90,10 +92,14 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
   });
   const previousPathname = useRef(pathname);
   const analysisPath =
-    pathname.startsWith("/analisis") || pathname === "/riwayat-analisis";
+    pathname.startsWith("/analisis") ||
+    pathname === "/riwayat-analisis" ||
+    pathname === "/survei-verifikasi";
+  const capacityPath = pathname === "/booking-core" || pathname === "/harga-jaringan";
   // biome-ignore lint/correctness/useExhaustiveDependencies: pathname is the trigger: close the mobile menu on navigation
   useEffect(() => {
     mobileAnalysisMenu.current?.removeAttribute("open");
+    mobileCapacityMenu.current?.removeAttribute("open");
   }, [pathname]);
   useEffect(() => {
     if (
@@ -251,7 +257,20 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
                 </ul>
               </details>
             </li>
-            <li>{navLink(navSections[3].items[0], pathname)}</li>
+            <li className="desktop-analysis-menu">
+              <details open={capacityPath || undefined}>
+                <summary aria-label="Kapasitas" className={`nav-link ${capacityPath ? "active" : ""}`} title="Kapasitas">
+                  <i className="nav-icon bi bi-diagram-3" />
+                  <span>Kapasitas</span>
+                  <i className="bi bi-chevron-down desktop-menu-chevron" />
+                </summary>
+                <ul className="desktop-submenu">
+                  {navSections[3].items.map((item) => (
+                    <li key={item.to}>{navLink(item, pathname)}</li>
+                  ))}
+                </ul>
+              </details>
+            </li>
             {isAdmin && (
               <li>
                 {navLink(
@@ -299,7 +318,22 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
                 </div>
               </details>
             </li>
-            <li>{navLink(navSections[3].items[0], pathname)}</li>
+            <li className="mobile-analysis-menu">
+              <details className={capacityPath ? "active" : ""} ref={mobileCapacityMenu}>
+                <summary className={`nav-link ${capacityPath ? "active" : ""}`}>
+                  <i className="nav-icon bi bi-diagram-3" />
+                  <span>Kapasitas</span>
+                  <i className="bi bi-chevron-down mobile-menu-chevron" />
+                </summary>
+                <div className="mobile-analysis-popover">
+                  {navSections[3].items.map((item) =>
+                    navLink(item, pathname, (event) =>
+                      event.currentTarget.closest("details")?.removeAttribute("open")
+                    )
+                  )}
+                </div>
+              </details>
+            </li>
             {isAdmin && (
               <li>
                 {navLink(

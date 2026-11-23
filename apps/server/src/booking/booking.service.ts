@@ -34,6 +34,13 @@ export type CreateBookingInput = {
   segments?: { segmentId: string; cores: number; segmentFrom?: string; segmentTo?: string }[];
 };
 
+type BookingPrice = { name: string; unit: string; price: number };
+const defaultBookingPrices: BookingPrice[] = [
+  { name: "Kabel fiber optik", unit: "meter", price: 0 },
+  { name: "Core kabel", unit: "core", price: 0 },
+  { name: "Tiang", unit: "unit", price: 0 },
+];
+
 type CableEnds = { A: [number, number]; B: [number, number] };
 const cableEnds = sql<CableEnds | null>`CASE
   WHEN GeometryType(${networkAssets.geometry}) = 'LINESTRING'
@@ -184,6 +191,28 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       entityType: "SETTING",
     });
     return { days };
+  }
+
+  async getBookingPrices() {
+    const rows = await this.db.orm.select({ value: appSettings.value }).from(appSettings)
+      .where(eq(appSettings.key, "booking_prices"));
+    const value = rows[0]?.value as { items?: BookingPrice[] } | undefined;
+    return { items: value?.items ?? defaultBookingPrices };
+  }
+
+  async setBookingPrices(items: BookingPrice[], userId: string) {
+    if (!Array.isArray(items) || items.length > 50 || items.some((item) =>
+      !item || typeof item.name !== "string" || !item.name.trim() || item.name.trim().length > 80 ||
+      typeof item.unit !== "string" || !item.unit.trim() || item.unit.trim().length > 24 ||
+      !Number.isFinite(item.price) || item.price < 0 || item.price > Number.MAX_SAFE_INTEGER || Math.round(item.price * 100) / 100 !== item.price
+    )) {
+      throw new BadRequestException({ message: "Daftar harga tidak valid; harga harus berupa rupiah bilangan bulat dan tidak negatif." });
+    }
+    const normalized = items.map((item) => ({ name: item.name.trim(), unit: item.unit.trim(), price: item.price }));
+    await this.db.orm.insert(appSettings).values({ key: "booking_prices", value: { items: normalized } })
+      .onConflictDoUpdate({ set: { value: sql`EXCLUDED.value` }, target: appSettings.key });
+    await this.db.orm.insert(auditLogs).values({ action: "BOOKING_PRICES_UPDATED", actorId: userId, details: { items: normalized }, entityId: "booking_prices", entityType: "SETTING" });
+    return { items: normalized };
   }
 
   async createBooking(input: CreateBookingInput, userId: string) {

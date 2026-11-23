@@ -14,7 +14,8 @@ export const analysisMapStyle = {
   locationLabelHaloWidth: 2,
   locationLabelSize: 12,
   locationLabelOffset: [0, 1.5] as [number, number],
-  proposedCableColor: kmzLegend.find((rule) => rule.category === "DROP")!.color,
+  proposedCableColor:
+    kmzLegend.find((rule) => rule.category === "DROP")?.color ?? "#9000FF",
   proposedCableLineWidth: 2,
   proposedCableDash: [3, 2] as number[],
 };

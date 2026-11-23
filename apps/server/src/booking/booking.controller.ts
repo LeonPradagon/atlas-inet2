@@ -12,7 +12,7 @@ import {
 } from "@nestjs/common";
 import { ApiBody, ApiParam } from "@nestjs/swagger";
 import { AuthService } from "../auth/auth.service";
-import { BookingDurationDto, CreateBookingDto } from "./booking.dto";
+import { BookingDurationDto, BookingPricesDto, CreateBookingDto } from "./booking.dto";
 import { BookingService } from "./booking.service";
 
 @Controller()
@@ -119,5 +119,19 @@ export class BookingController {
   ) {
     const user = await this.auth.requireAdmin(req);
     return this.booking.setBookingDuration(Number(body.days), user.id);
+  }
+
+  @Get("settings/booking-prices")
+  async prices(@Req() req: IncomingMessage) {
+    await this.auth.requireUser(req);
+    return this.booking.getBookingPrices();
+  }
+
+  @Patch("settings/booking-prices")
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiBody({ type: BookingPricesDto })
+  async setPrices(@Req() req: IncomingMessage, @Body() body: BookingPricesDto) {
+    const user = await this.auth.requireAdmin(req);
+    return this.booking.setBookingPrices(body.items, user.id);
   }
 }

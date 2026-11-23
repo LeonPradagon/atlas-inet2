@@ -76,6 +76,14 @@ const bookingRoute = createRoute({
     "CoreBookingPage"
   ),
 });
+const bookingPricesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/harga-jaringan",
+  component: lazyRouteComponent(
+    () => import("../features/core-booking/BookingPricesPage"),
+    "BookingPricesPage"
+  ),
+});
 const auditRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/audit-trails",
@@ -109,6 +117,7 @@ const routeTree = rootRoute.addChildren([
   historyRoute,
   surveysRoute,
   bookingRoute,
+  bookingPricesRoute,
   auditRoute,
   profileRoute,
   settingsRoute,

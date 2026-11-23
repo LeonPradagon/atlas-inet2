@@ -382,45 +382,11 @@ type MapImportPackage = {
   ftthFolderCount: number;
   folderPaths: string[];
   companies: string[];
+  provinceCodes: string[];
   createdAt: string;
   actorName: string | null;
   actorEmail: string | null;
 };
-type SavedMapSelection = {
-  provinceCode: string;
-  importIds: string[];
-  companyValue: string;
-  activeImportId: string;
-};
-const mapSelectionStorageKey = "atlas-map-selection-v1";
-function readSavedMapSelection(): SavedMapSelection {
-  const empty: SavedMapSelection = {
-    provinceCode: "",
-    importIds: [],
-    companyValue: "",
-    activeImportId: "",
-  };
-  try {
-    const value = sessionStorage.getItem(mapSelectionStorageKey);
-    if (!value) {
-      return empty;
-    }
-    const parsed = JSON.parse(value) as Partial<SavedMapSelection>;
-    return {
-      provinceCode:
-        typeof parsed.provinceCode === "string" ? parsed.provinceCode : "",
-      importIds: Array.isArray(parsed.importIds)
-        ? parsed.importIds.filter((id): id is string => typeof id === "string")
-        : [],
-      companyValue:
-        typeof parsed.companyValue === "string" ? parsed.companyValue : "",
-      activeImportId:
-        typeof parsed.activeImportId === "string" ? parsed.activeImportId : "",
-    };
-  } catch {
-    return empty;
-  }
-}
 type RouteLine = Feature<
   LineString,
   {
@@ -1085,16 +1051,10 @@ function isMapMarkerClickTarget(target: EventTarget | null) {
   return target instanceof Element && target.closest(".maplibregl-marker") !== null;
 }
 export function MapPage() {
-  const [savedMapSelection] = useState(readSavedMapSelection);
   const proposalSurveys = useQuery({
     queryKey: ["surveys"],
     queryFn: () =>
       api<SurveyMapRecord[]>("/surveys"),
-  });
-  const mapImportsQuery = useQuery({
-    queryKey: ["network-map-imports"],
-    queryFn: () => api<MapImportPackage[]>("/assets/imports"),
-    staleTime: 30_000,
   });
   const mapProvincesQuery = useQuery({
     queryKey: ["network-map-provinces"],
@@ -1104,19 +1064,16 @@ export function MapPage() {
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
   });
-  const [provinceCode, setProvinceCode] = useState(
-    savedMapSelection.provinceCode
-  );
-  const [selectedImportIds, setSelectedImportIds] = useState<string[]>(
-    savedMapSelection.importIds
-  );
-  const [selectedCompanyValue, setSelectedCompanyValue] = useState(
-    savedMapSelection.companyValue
-  );
-  const [activeImportId, setActiveImportId] = useState(
-    savedMapSelection.activeImportId
-  );
-  const restorePackageBounds = useRef(savedMapSelection.importIds.length > 0);
+  const mapImportsQuery = useQuery({
+    queryKey: ["network-map-imports"],
+    queryFn: () => api<MapImportPackage[]>("/assets/imports"),
+    enabled: mapProvincesQuery.isSuccess,
+    staleTime: 30_000,
+  });
+  const [provinceCode, setProvinceCode] = useState("");
+  const [selectedImportIds, setSelectedImportIds] = useState<string[]>([]);
+  const [selectedCompanyValue, setSelectedCompanyValue] = useState("");
+  const [activeImportId, setActiveImportId] = useState("");
   const [globeEnabled, setGlobeEnabled] = useState(true);
   const [satelliteEnabled, setSatelliteEnabled] = useState(false);
   const previousMapView = useRef<{
@@ -1129,13 +1086,17 @@ export function MapPage() {
   const packageMenuRef = useRef<HTMLDetailsElement>(null);
   const packageBoundsRequest = useRef(0);
   const importPackages = mapImportsQuery.data ?? [];
+  const provinceImportPackages = useMemo(
+    () => importPackages.filter((item) => item.provinceCodes?.includes(provinceCode)),
+    [importPackages, provinceCode]
+  );
   const companyOptions = [
-    ...new Set(importPackages.flatMap((item) => item.companies ?? [])),
+    ...new Set(provinceImportPackages.flatMap((item) => item.companies ?? [])),
   ].sort((a, b) => a.localeCompare(b, "id-ID"));
-  const selectedImportPackages = importPackages.filter((item) =>
+  const selectedImportPackages = provinceImportPackages.filter((item) =>
     selectedImportIds.includes(item.id)
   );
-  const companyPackages = importPackages.filter((item) =>
+  const companyPackages = provinceImportPackages.filter((item) =>
     selectedCompanyValue === "__unassigned__"
       ? !item.companies?.length
       : selectedCompanyValue === "__multiple__"
@@ -1145,7 +1106,7 @@ export function MapPage() {
               item.companies?.includes(selectedCompanyValue)
           )
   );
-  const hasUnassignedCompanyPackages = importPackages.some(
+  const hasUnassignedCompanyPackages = provinceImportPackages.some(
     (item) => !item.companies?.length
   );
   const activeImportPackage =
@@ -1159,21 +1120,6 @@ export function MapPage() {
   const selectedProvinceCodeRef = useRef(provinceCode);
   selectedProvinceCodeRef.current = provinceCode;
   useEffect(() => {
-    try {
-      sessionStorage.setItem(
-        mapSelectionStorageKey,
-        JSON.stringify({
-          provinceCode,
-          importIds: selectedImportIds,
-          companyValue: selectedCompanyValue,
-          activeImportId,
-        } satisfies SavedMapSelection)
-      );
-    } catch {
-      // Ignore storage restrictions; the map still works for this visit.
-    }
-  }, [provinceCode, selectedImportIds, selectedCompanyValue, activeImportId]);
-  useEffect(() => {
     if (!mapProvincesQuery.isSuccess || !provinceCode) {
       return;
     }
@@ -1185,10 +1131,10 @@ export function MapPage() {
     }
   }, [mapProvincesQuery.isSuccess, provinceCode, provinces]);
   useEffect(() => {
-    if (!mapImportsQuery.isSuccess) {
+    if (!mapImportsQuery.isSuccess || !provinceCode) {
       return;
     }
-    const availableIds = new Set(importPackages.map((item) => item.id));
+    const availableIds = new Set(provinceImportPackages.map((item) => item.id));
     const validImportIds = selectedImportIds.filter((id) =>
       availableIds.has(id)
     );
@@ -1202,18 +1148,21 @@ export function MapPage() {
     if (nextActiveId !== activeImportId) {
       setActiveImportId(nextActiveId);
     }
-    if (
-      selectedCompanyValue &&
-      !["__multiple__", "__unassigned__"].includes(selectedCompanyValue) &&
-      !importPackages.some((item) =>
-        item.companies?.includes(selectedCompanyValue)
-      )
-    ) {
+    const hasSelectedCompany =
+      selectedCompanyValue === "__unassigned__"
+        ? provinceImportPackages.some((item) => !item.companies?.length)
+        : selectedCompanyValue === "__multiple__"
+          ? validImportIds.length > 0
+          : provinceImportPackages.some((item) =>
+              item.companies?.includes(selectedCompanyValue)
+            );
+    if (selectedCompanyValue && !hasSelectedCompany) {
       setSelectedCompanyValue("");
     }
   }, [
     mapImportsQuery.isSuccess,
     importPackages,
+    provinceImportPackages,
     selectedCompanyValue,
     selectedImportIds,
     activeImportId,
@@ -1483,7 +1432,7 @@ export function MapPage() {
     const counts = new Map<string, number>();
     for (const asset of mapAssetsQuery.data ?? []) {
       if (asset.geometryType?.toUpperCase() === "POINT") {
-        const category = assetIconCategory(asset);
+          const category = legendStyle(asset).category;
         counts.set(category, (counts.get(category) ?? 0) + 1);
       }
     }
@@ -2277,6 +2226,9 @@ export function MapPage() {
         attribution:
           "Esri, Maxar, Earthstar Geographics, and the GIS User Community",
       });
+      const firstLabelLayer = instance
+        .getStyle()
+        .layers?.find((layer) => layer.type === "symbol")?.id;
       instance.addLayer(
         {
           id: "satellite-imagery",
@@ -2284,7 +2236,7 @@ export function MapPage() {
           source: "satellite-imagery",
           layout: { visibility: "none" },
         },
-        "selected-ftth-boundary-fill"
+        firstLabelLayer ?? "selected-ftth-boundary-fill"
       );
       instance.addLayer({
         id: "selected-ftth-boundary-line",
@@ -2930,6 +2882,7 @@ export function MapPage() {
           ? formatMapCoordinate(proposal.latitude, proposal.longitude)
           : undefined;
         const isPhotoLocation = photoLocation !== null;
+        const isOcrLocation = findings.imageLocationSource === "OCR";
         const coreCount = proposal?.cores;
         addMarker(
           [markerLocation.longitude, markerLocation.latitude],
@@ -2937,7 +2890,11 @@ export function MapPage() {
           createSurveyMapPopup("Lokasi survei terverifikasi", [
             ...sharedFacts,
             [
-              isPhotoLocation ? "Koordinat foto GPS" : "Koordinat titik survei",
+              isPhotoLocation
+                ? isOcrLocation
+                  ? "Koordinat foto (OCR)"
+                  : "Koordinat foto GPS"
+                : "Koordinat titik survei",
               coordinate,
             ],
             proposalCoordinate && isPhotoLocation
@@ -2950,7 +2907,9 @@ export function MapPage() {
             [
               "Catatan lokasi",
               isPhotoLocation
-                ? "Posisi diambil dari metadata GPS foto survei."
+                ? isOcrLocation
+                  ? "Posisi dibaca dari teks koordinat pada foto dan dikonfirmasi pengguna."
+                  : "Posisi diambil dari metadata GPS foto survei."
                 : "Posisi mengikuti titik analisis awal; koordinat foto GPS tidak tersedia.",
             ],
           ])
@@ -3057,6 +3016,7 @@ export function MapPage() {
             photoLocation: photoLocation
               ? formatMapCoordinate(photoLocation.latitude, photoLocation.longitude)
               : "",
+            photoLocationSource: findings.imageLocationSource ?? "",
             actualRoute: findings.route ?? "",
             actualLength: findings.length ? `${findings.length} m` : "",
             actualCapacity: findings.capacity ?? "",
@@ -3090,6 +3050,7 @@ export function MapPage() {
               photoLocation: photoLocation
                 ? formatMapCoordinate(photoLocation.latitude, photoLocation.longitude)
                 : "",
+              photoLocationSource: findings.imageLocationSource ?? "",
               actualRoute: findings.route ?? "",
               actualLength: findings.length ? `${findings.length} m` : "",
               actualCapacity: findings.capacity ?? "",
@@ -3147,7 +3108,15 @@ export function MapPage() {
             ["Kabel sumber", properties.sourceCable],
             ["Dari", properties.endpointFrom],
             ["Ke", properties.endpointTo],
-            ["Koordinat foto GPS", properties.photoLocation],
+            ["Koordinat foto", properties.photoLocation],
+            [
+              "Sumber koordinat foto",
+              properties.photoLocationSource === "OCR"
+                ? "Teks foto (OCR, dikonfirmasi pengguna)"
+                : properties.photoLocation
+                  ? "Metadata GPS"
+                  : undefined,
+            ],
             ["Jalur aktual hasil survei", properties.actualRoute],
             ["Panjang aktual", properties.actualLength],
             ["Kapasitas / core aktual", properties.actualCapacity],
@@ -3200,50 +3169,6 @@ export function MapPage() {
     setAssetPopup(null);
     setAssetChoices(null);
   }, [mapReady, provinceCode, provinces]);
-  useEffect(() => {
-    if (
-      !restorePackageBounds.current ||
-      !mapReady ||
-      !mapImportsQuery.isSuccess ||
-      !mapProvincesQuery.isSuccess ||
-      !provinces.some((item) => item.code === provinceCode)
-    ) {
-      return;
-    }
-    restorePackageBounds.current = false;
-    const availableIds = new Set(importPackages.map((item) => item.id));
-    const ids = selectedImportIds.filter((id) => availableIds.has(id));
-    if (!ids.length) {
-      return;
-    }
-    const request = ++packageBoundsRequest.current;
-    void api<{ bounds: [number, number, number, number] | null }>(
-      `/assets/bounds?importIds=${ids.join(",")}&provinceCode=${encodeURIComponent(provinceCode)}`
-    )
-      .then(({ bounds }) => {
-        if (request === packageBoundsRequest.current && bounds && map.current) {
-          setMapBounds(bounds);
-          map.current.fitBounds(bounds, {
-            padding: 64,
-            maxZoom: 12,
-            duration: 500,
-          });
-        }
-      })
-      .catch(() => {
-        if (request === packageBoundsRequest.current) {
-          setFileError("Batas paket peta gagal dipulihkan.");
-        }
-      });
-  }, [
-    importPackages,
-    mapImportsQuery.isSuccess,
-    mapProvincesQuery.isSuccess,
-    mapReady,
-    provinceCode,
-    provinces,
-    selectedImportIds,
-  ]);
   useEffect(() => {
     (
       map.current?.getSource("network-shapes") as GeoJSONSource | undefined
@@ -3362,17 +3287,23 @@ export function MapPage() {
       const packageIds = [
         ...new Set([...selectedImportIds, response.importId]),
       ];
-      setSelectedImportIds(packageIds);
-      setActiveImportId(response.importId);
+      await queryClient.invalidateQueries({
+        queryKey: ["network-map-provinces"],
+      });
       await queryClient.invalidateQueries({
         queryKey: ["network-map-imports"],
       });
       const updatedPackages =
         queryClient.getQueryData<MapImportPackage[]>(["network-map-imports"]) ??
         [];
-      const selectedPackages = updatedPackages.filter((item) =>
-        packageIds.includes(item.id)
+      const selectedPackages = updatedPackages.filter(
+        (item) =>
+          packageIds.includes(item.id) &&
+          (!provinceCode || item.provinceCodes?.includes(provinceCode))
       );
+      const selectedPackageIds = selectedPackages.map((item) => item.id);
+      setSelectedImportIds(selectedPackageIds);
+      setActiveImportId(response.importId);
       const importedCompanies = [
         ...new Set(selectedPackages.flatMap((item) => item.companies ?? [])),
       ];
@@ -3384,16 +3315,13 @@ export function MapPage() {
             ? importedCompanies[0]
             : "__multiple__"
       );
-      await queryClient.invalidateQueries({
-        queryKey: ["network-map-provinces"],
-      });
       await invalidateNetwork();
       setSelectedId(response.firstId ?? "");
       if (response.firstId) {
         const { bounds } = await api<{
           bounds: [number, number, number, number] | null;
         }>(
-          `/assets/bounds?importIds=${packageIds.join(",")}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`
+          `/assets/bounds?importIds=${selectedPackageIds.join(",")}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`
         );
         if (bounds && map.current) {
           setMapBounds(bounds);
@@ -3463,8 +3391,8 @@ export function MapPage() {
     setSelectedCompanyValue(company);
     const matchingPackages = company
       ? company === "__unassigned__"
-        ? importPackages.filter((item) => !item.companies?.length)
-        : importPackages.filter((item) => item.companies?.includes(company))
+        ? provinceImportPackages.filter((item) => !item.companies?.length)
+        : provinceImportPackages.filter((item) => item.companies?.includes(company))
       : [];
     const packageIds = matchingPackages.map((item) => item.id);
     const nextActiveId = packageIds.includes(activeImportId)
@@ -3861,7 +3789,7 @@ export function MapPage() {
                 !provinceCode ||
                 mapImportsQuery.isPending ||
                 mapImportsQuery.isError ||
-                !importPackages.length
+                !provinceImportPackages.length
               }
               id="map-company-select"
               onChange={(event) => selectCompanyPackages(event.target.value)}
@@ -3872,7 +3800,7 @@ export function MapPage() {
                 <option key={company} value={company}>
                   {company} ·{" "}
                   {
-                    importPackages.filter((item) =>
+                    provinceImportPackages.filter((item) =>
                       item.companies?.includes(company)
                     ).length
                   }{" "}
@@ -3883,7 +3811,7 @@ export function MapPage() {
                 <option value="__unassigned__">
                   Tanpa perusahaan ·{" "}
                   {
-                    importPackages.filter((item) => !item.companies?.length)
+                    provinceImportPackages.filter((item) => !item.companies?.length)
                       .length
                   }{" "}
                   paket
@@ -3895,6 +3823,14 @@ export function MapPage() {
                 </option>
               )}
             </select>
+            {provinceCode &&
+              !mapImportsQuery.isPending &&
+              !mapImportsQuery.isError &&
+              !provinceImportPackages.length && (
+                <small className="d-block mb-2 text-muted">
+                  Belum ada paket KMZ di provinsi ini.
+                </small>
+              )}
             {!provinceCode && (
               <button
                 className="map-province-guidance"
@@ -3940,7 +3876,7 @@ export function MapPage() {
                   {!selectedCompanyValue &&
                     !mapImportsQuery.isPending &&
                     !mapImportsQuery.isError &&
-                    importPackages.length > 0 && (
+                    provinceImportPackages.length > 0 && (
                       <small>Pilih perusahaan terlebih dahulu.</small>
                     )}
                   {companyPackages.map((item) => {

@@ -64,6 +64,9 @@ const assetImportId = `COALESCE(a.attributes->>'__atlasImportId', (SELECT legacy
   WHERE legacy.action='NETWORK_IMPORTED' AND legacy.entity_type='NETWORK_IMPORT'
     AND legacy.details->>'source'='kml/kmz' AND legacy.created_at=a.created_at AND a.source='kml'
   ORDER BY legacy.id LIMIT 1))`;
+const assetCompany = `COALESCE(NULLIF(btrim(a.attributes->>'Company'),''),NULLIF(btrim(a.attributes->>'company'),''),
+  CASE WHEN upper(package_import.file_name) ~ '^RTFTTH_[A-Z0-9]+_' THEN
+    substring(upper(package_import.file_name) FROM '^RTFTTH_([^_]+)_') END)`;
 const provinceMatch = (provinceParam: number) =>
   `a.attributes->>'__atlasProvinceCode'=$${provinceParam}`;
 type RegionName = {
@@ -435,6 +438,9 @@ export class AtlasService {
       const image = body.image ?? survey.findings.image ?? "";
       let imageLatitude = String(survey.findings.imageLatitude ?? "");
       let imageLongitude = String(survey.findings.imageLongitude ?? "");
+      let imageLocationSource = String(
+        survey.findings.imageLocationSource ?? ""
+      );
       if (typeof image !== "string") {
         throw new BadRequestException({
           message: "Gambar survei tidak valid.",
@@ -474,27 +480,49 @@ export class AtlasService {
         if (image !== survey.findings.image) {
           const location = await gps(data).catch(() => undefined);
           if (
-            !location ||
-            !Number.isFinite(location.latitude) ||
-            !Number.isFinite(location.longitude) ||
-            Math.abs(location.latitude) > 90 ||
-            Math.abs(location.longitude) > 180
+            location &&
+            Number.isFinite(location.latitude) &&
+            Number.isFinite(location.longitude) &&
+            Math.abs(location.latitude) <= 90 &&
+            Math.abs(location.longitude) <= 180
           ) {
-            throw new BadRequestException({
-              message:
-                "Foto harus memiliki koordinat GPS. Aktifkan lokasi pada kamera dan unggah foto asli.",
-            });
+            imageLatitude = String(location.latitude);
+            imageLongitude = String(location.longitude);
+            imageLocationSource = "EXIF";
+          } else {
+            const submittedLatitude = String(body.imageLatitude ?? "").trim();
+            const submittedLongitude = String(body.imageLongitude ?? "").trim();
+            const latitude = Number(submittedLatitude);
+            const longitude = Number(submittedLongitude);
+            if (
+              body.imageLocationSource !== "OCR" ||
+              body.imageLocationConfirmed !== true ||
+              !submittedLatitude ||
+              !submittedLongitude ||
+              !Number.isFinite(latitude) ||
+              !Number.isFinite(longitude) ||
+              Math.abs(latitude) > 90 ||
+              Math.abs(longitude) > 180
+            ) {
+              throw new BadRequestException({
+                message:
+                  "Foto harus memiliki GPS EXIF atau koordinat hasil OCR yang valid dan dikonfirmasi.",
+              });
+            }
+            imageLatitude = String(latitude);
+            imageLongitude = String(longitude);
+            imageLocationSource = "OCR";
           }
-          imageLatitude = String(location.latitude);
-          imageLongitude = String(location.longitude);
         }
       } else {
         imageLatitude = "";
         imageLongitude = "";
+        imageLocationSource = "";
       }
       findings.image = image;
       findings.imageLatitude = imageLatitude;
       findings.imageLongitude = imageLongitude;
+      findings.imageLocationSource = imageLocationSource;
       if (
         ["REVIEW", "VERIFIED"].includes(status) &&
         ["connection", "route", "length", "capacity", "evidence"].some(
@@ -795,7 +823,17 @@ export class AtlasService {
             WHERE ${assetImportId}=l.entity_id
           ) company
           WHERE company.name IS NOT NULL
-        ), '[]'::jsonb) AS companies,
+        ), CASE
+          WHEN upper(l.details->>'fileName') ~ '^RTFTTH_[A-Z0-9]+_' THEN
+            jsonb_build_array(substring(upper(l.details->>'fileName') FROM '^RTFTTH_([^_]+)_'))
+          ELSE '[]'::jsonb
+        END) AS companies,
+        COALESCE((
+          SELECT jsonb_agg(DISTINCT a.attributes->>'__atlasProvinceCode' ORDER BY a.attributes->>'__atlasProvinceCode')
+          FROM network_assets a
+          WHERE ${assetImportId}=l.entity_id
+            AND NULLIF(a.attributes->>'__atlasProvinceCode','') IS NOT NULL
+        ), '[]'::jsonb) AS "provinceCodes",
         COALESCE((l.details->>'ftthFolderCount')::int, (
           SELECT count(DISTINCT array_to_string((string_to_array(a.attributes->>'folderPath', '/'))[1:p.ordinality], ' / '))::int
           FROM network_assets a
@@ -1238,13 +1276,20 @@ export class AtlasService {
       ST_AsGeoJSON(CASE WHEN $5::float8 > 0 AND a.source<>'kml' THEN ST_SimplifyPreserveTopology(a.geometry,$5::float8) ELSE a.geometry END,6)::json AS geometry,
       GeometryType(a.geometry) AS "geometryType",a.attributes,a.created_at AS "createdAt"
       FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+      LEFT JOIN LATERAL (
+        SELECT l.details->>'fileName' AS file_name
+        FROM audit_logs l
+        WHERE l.action='NETWORK_IMPORTED' AND l.entity_type='NETWORK_IMPORT'
+          AND l.details->>'source'='kml/kmz' AND l.entity_id=${assetImportId}
+        ORDER BY l.id LIMIT 1
+      ) package_import ON true
       WHERE a.geometry && ST_MakeEnvelope($1,$2,$3,$4,4326)
         AND ST_Intersects(a.geometry,ST_MakeEnvelope($1,$2,$3,$4,4326))
         AND ($6::text IS NULL OR ${provinceMatch(6)})
         AND ($7::text IS NULL OR ${assetImportId}=ANY(string_to_array($7, ',')))
         AND ($8::text IS NULL OR CASE WHEN $8='__unassigned__'
-          THEN COALESCE(NULLIF(btrim(a.attributes->>'Company'),''),NULLIF(btrim(a.attributes->>'company'),'')) IS NULL
-          ELSE lower(COALESCE(NULLIF(btrim(a.attributes->>'Company'),''),NULLIF(btrim(a.attributes->>'company'),'')))=lower($8) END)
+          THEN ${assetCompany} IS NULL
+          ELSE lower(${assetCompany})=lower($8) END)
       GROUP BY a.id ORDER BY a.name`,
       [...bounds, tolerance, provinceCode ?? null, importId ?? null, company ?? null]
     );
@@ -2795,7 +2840,7 @@ export class AtlasService {
             COALESCE(NULLIF(btrim(a.area),''),NULLIF(btrim(a.attributes->>'Region'),''),NULLIF(btrim(a.attributes->>'region'),''),NULLIF(btrim(a.attributes->>'Wilayah'),''),NULLIF(btrim(a.attributes->>'wilayah'),''),NULLIF(btrim(a.attributes->>'Kota'),''),NULLIF(btrim(a.attributes->>'kota'),''),'Wilayah belum dicatat') AS area,
             COALESCE(NULLIF(btrim(p.name),''),NULLIF(btrim(a.attributes->>'Province'),''),NULLIF(btrim(a.attributes->>'Provinsi'),''),'Provinsi belum dicatat') AS province,
             a.cable_type AS "cableType",
-            COALESCE(NULLIF(btrim(a.attributes->>'Company'),''),NULLIF(btrim(a.attributes->>'company'),'')) AS company,
+            ${assetCompany} AS company,
             COALESCE(ST_Length(a.geometry::geography),0)::float8 AS "lengthMeters",
             COALESCE(a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true',false) AS verified,
             a.total_cores AS "totalCores",
@@ -2805,6 +2850,13 @@ export class AtlasService {
           FROM network_assets a
           LEFT JOIN indonesia_provinces p ON p.code=a.attributes->>'__atlasProvinceCode'
           LEFT JOIN core_usage c ON c.asset_id=a.id
+          LEFT JOIN LATERAL (
+            SELECT l.details->>'fileName' AS file_name
+            FROM audit_logs l
+            WHERE l.action='NETWORK_IMPORTED' AND l.entity_type='NETWORK_IMPORT'
+              AND l.details->>'source'='kml/kmz' AND l.entity_id=${assetImportId}
+            ORDER BY l.id LIMIT 1
+          ) package_import ON true
           WHERE a.asset_type='segment'
         ), company_totals AS (
           SELECT company,count(*)::int AS "segmentCount",sum("lengthMeters")::float8 AS "lengthMeters"

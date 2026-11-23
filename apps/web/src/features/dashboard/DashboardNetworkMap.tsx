@@ -64,6 +64,9 @@ export function DashboardNetworkMap({ company }: { company: string }) {
         type: "geojson",
         data: emptyCollection,
       });
+      const firstLabelLayer = instance
+        .getStyle()
+        .layers?.find((layer) => layer.type === "symbol")?.id;
       instance.addLayer({
         id: "dashboard-network-lines",
         type: "line",
@@ -79,7 +82,7 @@ export function DashboardNetworkMap({ company }: { company: string }) {
           "line-width": ["interpolate", ["linear"], ["zoom"], 2, 1, 8, 3],
           "line-opacity": 0.85,
         },
-      });
+      }, firstLabelLayer);
       setMapReady(true);
     });
     const resizeObserver = new ResizeObserver(() => instance.resize());

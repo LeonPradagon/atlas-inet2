@@ -267,9 +267,17 @@ export class UpdateSurveyDto {
   @ApiPropertyOptional({
     type: String,
     description:
-      "Data URL gambar JPEG/PNG/WebP maksimal 2 MB; gambar baru harus memuat GPS",
+      "Data URL gambar JPEG/PNG/WebP maksimal 2 MB; gambar baru harus memuat GPS EXIF atau koordinat OCR yang dikonfirmasi",
   })
   image?: string;
+  @ApiPropertyOptional({ type: String, description: "Lintang GPS EXIF atau hasil OCR yang dikonfirmasi" })
+  imageLatitude?: string;
+  @ApiPropertyOptional({ type: String, description: "Bujur GPS EXIF atau hasil OCR yang dikonfirmasi" })
+  imageLongitude?: string;
+  @ApiPropertyOptional({ enum: ["EXIF", "OCR"] })
+  imageLocationSource?: "EXIF" | "OCR";
+  @ApiPropertyOptional({ type: Boolean })
+  imageLocationConfirmed?: boolean;
 }
 export class RoutePreviewDto {
   @ApiProperty({
