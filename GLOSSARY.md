@@ -45,3 +45,25 @@ _Avoid_: Core connection; an endpoint identifies the shared physical location, w
 **Core connection**:
 The recorded attachment for one numbered core at an end or at a mid-span access location: a splice to another cable core, a termination at the network asset, or a device port.
 _Avoid_: Core status; a core can be marked available or used independently of whether its physical connection has been recorded.
+
+## Core booking
+
+**Core path**:
+A continuous sequence of connected core sections between two network devices.
+_Avoid_: Cable route, when physical core connectivity has not been established.
+
+**Dedicated core booking**:
+A request to reserve one or more core paths for a customer between a chosen start device and destination device.
+_Avoid_: Splitter output booking; a dedicated core path is allocated exclusively along its booked sections.
+
+**Candidate booking path**:
+A possible route between devices presented for planning whose required core connections may still need verification.
+_Avoid_: Confirmed core path, until its required connections are recorded.
+
+**Core allocation**:
+An exclusive assignment of a core section to a booking along a specified part of its path.
+_Avoid_: Whole-cable allocation, when only part of the core is assigned.
+
+**Booking request**:
+A request for dedicated core paths that has not yet reserved those paths while awaiting approval or verification.
+_Avoid_: Core allocation; an unapproved request does not reserve a core.
