@@ -2875,11 +2875,18 @@ body {
   position: relative;
   height: 420px;
   overflow: hidden;
-  background: #e8edf4;
+  background: #071327;
 }
 .dashboard-network-map {
   position: absolute;
   inset: 0;
+}
+.dashboard-map-style-toggle {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  box-shadow: 0 2px 8px #14223840;
 }
 .dashboard-map-message {
   position: absolute;
@@ -2887,17 +2894,18 @@ body {
   display: grid;
   place-content: center;
   gap: 8px;
-  color: #64748b;
-  background: #e8edf4cc;
+  color: #d5def0;
+  background: #071327b8;
   pointer-events: none;
   text-align: center;
 }
 .dashboard-map-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 12px 18px;
   padding: 10px 16px;
-  color: #64748b;
+  color: #aebbd1;
+  background: #081327;
   font-size: 12px;
 }
 .dashboard-map-legend span {
@@ -2907,12 +2915,34 @@ body {
 }
 .dashboard-map-legend-line {
   width: 22px;
-  height: 3px;
+  height: 2px;
   border-radius: 2px;
-  background: #4285f4;
+  background: #b69cff;
+  box-shadow: 0 0 7px currentColor;
+}
+.dashboard-map-legend-line.backbone {
+  color: #f3f6ff;
+  background: #f3f6ff;
+}
+.dashboard-map-legend-line.feeder {
+  color: #ff6b7a;
+  background: #ff6b7a;
+}
+.dashboard-map-legend-line.distribution {
+  color: #48e18b;
+  background: #48e18b;
+}
+.dashboard-map-legend-line.drop {
+  color: #f5d34f;
+  background: #f5d34f;
 }
 .dashboard-map-legend-line.submarine {
-  background: #a78bfa;
+  color: #48d8f2;
+  background: #48d8f2;
+}
+.dashboard-map-legend-line.other {
+  color: #b69cff;
+  background: #b69cff;
 }
 .dashboard-card-header > .text-link {
   justify-self: end;

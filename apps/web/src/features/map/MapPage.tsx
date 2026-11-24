@@ -3261,32 +3261,67 @@ export function MapPage() {
     }
     return loadNetworkMapIcons(instance, allNetworkFeatures);
   }, [allNetworkFeatures, mapReady]);
-  async function importFile(file?: File) {
-    if (!file) {
+  async function importFiles(selection?: FileList | File[]) {
+    const files = Array.from(selection ?? []);
+    if (!files.length) {
       return;
     }
     setImporting(true);
-    setImportAttemptName(file.name);
-    try {
-      setFileError("");
-      const form = new FormData();
-      form.append("file", file);
-      const response = await api<{
+    setFileError("");
+    let packageIds = [...selectedImportIds];
+    const imported: {
+      file: File;
+      response: {
         importedCount: number;
         segmentCount: number;
-        ftthFolderCount: number;
         folderPaths: string[];
         firstId?: string;
         importId: string;
-        bounds: [number, number, number, number] | null;
-      }>("/assets/import", { method: "POST", data: form });
-      setFileName(file.name);
-      setFileImportCount(response.importedCount);
-      setFileImportSegmentCount(response.segmentCount);
-      setFileImportFolderCount(response.folderPaths.length);
-      const packageIds = [
-        ...new Set([...selectedImportIds, response.importId]),
-      ];
+      };
+    }[] = [];
+    const errors: string[] = [];
+    try {
+      for (const file of files) {
+        setImportAttemptName(file.name);
+        try {
+          const form = new FormData();
+          form.append("file", file);
+          const response = await api<{
+            importedCount: number;
+            segmentCount: number;
+            folderPaths: string[];
+            firstId?: string;
+            importId: string;
+          }>("/assets/import", { method: "POST", data: form });
+          imported.push({ file, response });
+          packageIds = [...new Set([...packageIds, response.importId])];
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "File tidak dapat dibaca.";
+          errors.push(`${file.name}: ${message}`);
+        }
+      }
+
+      if (!imported.length) {
+        const message = errors.join(" · ");
+        setFileError(message);
+        notify(message, "error");
+        return;
+      }
+
+      setFileName(imported.map(({ file }) => file.name).join(", "));
+      setFileImportCount(
+        imported.reduce((total, item) => total + item.response.importedCount, 0)
+      );
+      setFileImportSegmentCount(
+        imported.reduce((total, item) => total + item.response.segmentCount, 0)
+      );
+      setFileImportFolderCount(
+        imported.reduce(
+          (total, item) => total + item.response.folderPaths.length,
+          0
+        )
+      );
       await queryClient.invalidateQueries({
         queryKey: ["network-map-provinces"],
       });
@@ -3303,7 +3338,8 @@ export function MapPage() {
       );
       const selectedPackageIds = selectedPackages.map((item) => item.id);
       setSelectedImportIds(selectedPackageIds);
-      setActiveImportId(response.importId);
+      const lastImport = imported[imported.length - 1].response;
+      setActiveImportId(lastImport.importId);
       const importedCompanies = [
         ...new Set(selectedPackages.flatMap((item) => item.companies ?? [])),
       ];
@@ -3316,8 +3352,8 @@ export function MapPage() {
             : "__multiple__"
       );
       await invalidateNetwork();
-      setSelectedId(response.firstId ?? "");
-      if (response.firstId) {
+      setSelectedId(lastImport.firstId ?? "");
+      if (lastImport.firstId && selectedPackageIds.length) {
         const { bounds } = await api<{
           bounds: [number, number, number, number] | null;
         }>(
@@ -3331,10 +3367,16 @@ export function MapPage() {
             duration: 500,
           });
         } else {
-          await focusGeometry(response.firstId);
+          await focusGeometry(lastImport.firstId);
         }
       }
-      notify("File jaringan berhasil diimpor.");
+      if (errors.length) {
+        const message = `${imported.length} dari ${files.length} file berhasil; ${errors.length} gagal.`;
+        setFileError(`${message} ${errors.join(" · ")}`);
+        notify(message, "error");
+      } else {
+        notify(`${imported.length} file jaringan berhasil diimpor.`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "File tidak dapat dibaca.";
       setFileError(message);
@@ -4659,10 +4701,11 @@ export function MapPage() {
                 accept=".kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz"
                 className="d-none"
                 onChange={(event) => {
-                  void importFile(event.target.files?.[0]);
+                  void importFiles(event.target.files ?? undefined);
                   event.currentTarget.value = "";
                 }}
                 ref={importInput}
+                multiple
                 type="file"
               />
             )}
@@ -6378,7 +6421,7 @@ export function MapPage() {
                 </h2>
                 <p>
                   {fileModal === "import"
-                    ? "Pilih file KML atau KMZ untuk diunggah."
+                    ? "Pilih satu atau beberapa file KML/KMZ untuk diunggah."
                     : exporting
                       ? "Sedang menyiapkan file…"
                       : "Unduh seluruh aset jaringan."}
@@ -6408,8 +6451,8 @@ export function MapPage() {
                     <div>
                       <b>KML / KMZ</b>
                       <small>
-                        Impor geometri, ikon, warna, dan atribut dari Google
-                        Earth.
+                        Impor beberapa file sekaligus, termasuk geometri, ikon,
+                        warna, dan atribut dari Google Earth.
                       </small>
                     </div>
                     <i className="bi bi-chevron-right" />

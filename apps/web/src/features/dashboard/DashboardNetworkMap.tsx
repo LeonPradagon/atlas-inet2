@@ -10,14 +10,38 @@ import {
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { api, type NetworkAsset } from "../../lib/api";
+import { registerSatelliteTiles } from "../map/satelliteTiles";
 
 const indonesiaBounds = "94,-12,142,7";
 const emptyCollection: FeatureCollection = { type: "FeatureCollection", features: [] };
+const routeColors = {
+  BACKBONE: "#f3f6ff",
+  FEEDER: "#ff6b7a",
+  DISTRIBUTION: "#48e18b",
+  DROP: "#f5d34f",
+  SUBMARINE: "#48d8f2",
+  OTHER: "#b69cff",
+} as const;
+
+function routeType(asset: NetworkAsset) {
+  const text = `${asset.name} ${asset.cableType} ${String(asset.attributes?.routeType ?? "")}`;
+  if (/SUBMARINE|SUBSEA|UNDERSEA/iu.test(text)) return "SUBMARINE";
+  if (/BACKBONE|\bBB[-_ ]/iu.test(text)) return "BACKBONE";
+  if (/FEEDER|\bFDR\b/iu.test(text)) return "FEEDER";
+  if (/DISTRIB|\b(?:DST|DTB)[-_]/iu.test(text)) return "DISTRIBUTION";
+  if (/DROP/iu.test(text)) return "DROP";
+  return "OTHER";
+}
+
+function cableColor(asset: NetworkAsset) {
+  return routeColors[routeType(asset)];
+}
 
 export function DashboardNetworkMap({ company }: { company: string }) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [satelliteEnabled, setSatelliteEnabled] = useState(false);
   const assetsQuery = useQuery({
     queryKey: ["dashboard-map-assets", company],
     queryFn: () =>
@@ -40,6 +64,7 @@ export function DashboardNetworkMap({ company }: { company: string }) {
                 id: asset.id,
                 name: asset.name,
                 cableType: asset.cableType,
+                lineColor: cableColor(asset),
               },
             }]
           : []
@@ -50,6 +75,7 @@ export function DashboardNetworkMap({ company }: { company: string }) {
   useEffect(() => {
     if (!container.current || map.current) return;
     setWorkerUrl(workerUrl);
+    registerSatelliteTiles();
     const instance = new MapLibreMap({
       container: container.current,
       style: "https://tiles.openfreemap.org/styles/liberty",
@@ -60,27 +86,47 @@ export function DashboardNetworkMap({ company }: { company: string }) {
     instance.addControl(new NavigationControl(), "top-right");
     instance.on("load", () => {
       instance.setProjection({ type: "globe" });
-      instance.addSource("dashboard-network", {
-        type: "geojson",
-        data: emptyCollection,
+      instance.addSource("satellite-imagery", {
+        type: "raster",
+        tiles: ["atlas-satellite://{z}/{x}/{y}"],
+        tileSize: 256,
+        maxzoom: 23,
+        attribution:
+          "Esri, Maxar, Earthstar Geographics, and the GIS User Community",
       });
       const firstLabelLayer = instance
         .getStyle()
         .layers?.find((layer) => layer.type === "symbol")?.id;
+      instance.addLayer({
+        id: "satellite-imagery",
+        type: "raster",
+        source: "satellite-imagery",
+        layout: { visibility: "none" },
+      }, firstLabelLayer);
+      instance.addSource("dashboard-network", {
+        type: "geojson",
+        data: emptyCollection,
+      });
+      instance.addLayer({
+        id: "dashboard-network-glow",
+        type: "line",
+        source: "dashboard-network",
+        paint: {
+          "line-color": ["get", "lineColor"],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 2, 3, 8, 6],
+          "line-opacity": 0.35,
+          "line-blur": 2,
+        },
+      }, firstLabelLayer);
       instance.addLayer({
         id: "dashboard-network-lines",
         type: "line",
         source: "dashboard-network",
         filter: ["match", ["geometry-type"], ["LineString", "MultiLineString"], true, false],
         paint: {
-          "line-color": [
-            "case",
-            [">=", ["index-of", "submarine", ["downcase", ["to-string", ["get", "cableType"]]]], 0],
-            "#a78bfa",
-            "#4285f4",
-          ],
-          "line-width": ["interpolate", ["linear"], ["zoom"], 2, 1, 8, 3],
-          "line-opacity": 0.85,
+          "line-color": ["get", "lineColor"],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 2, 1, 8, 2.5],
+          "line-opacity": 0.98,
         },
       }, firstLabelLayer);
       setMapReady(true);
@@ -120,6 +166,25 @@ export function DashboardNetworkMap({ company }: { company: string }) {
   return (
     <div className="dashboard-network-map-wrap">
       <div aria-label="Peta jaringan fiber optik" className="dashboard-network-map" ref={container} />
+      <button
+        aria-label={satelliteEnabled ? "Tampilkan peta standar" : "Tampilkan citra satelit"}
+        aria-pressed={satelliteEnabled}
+        className="btn btn-sm btn-light dashboard-map-style-toggle"
+        disabled={!mapReady}
+        onClick={() => {
+          const next = !satelliteEnabled;
+          map.current?.setLayoutProperty(
+            "satellite-imagery",
+            "visibility",
+            next ? "visible" : "none"
+          );
+          setSatelliteEnabled(next);
+        }}
+        type="button"
+      >
+        <i aria-hidden="true" className="bi bi-layers me-1" />
+        {satelliteEnabled ? "Peta standar" : "Satelit"}
+      </button>
       {assetsQuery.isPending && <div className="dashboard-map-message"><span className="spinner-border spinner-border-sm" /> Memuat jalur jaringan...</div>}
       {assetsQuery.isError && <div className="dashboard-map-message">Peta jaringan tidak dapat dimuat.</div>}
       {!assetsQuery.isPending && !assetsQuery.isError && !features.length && (

@@ -285,8 +285,12 @@ export function DashboardPage() {
             <div className="card-body p-0">
               <DashboardNetworkMap company={selectedCompany} />
               <div className="dashboard-map-legend">
-                <span><i className="dashboard-map-legend-line" /> Fiber optik</span>
+                <span><i className="dashboard-map-legend-line backbone" /> Backbone</span>
+                <span><i className="dashboard-map-legend-line feeder" /> Feeder</span>
+                <span><i className="dashboard-map-legend-line distribution" /> Distribusi</span>
+                <span><i className="dashboard-map-legend-line drop" /> Drop</span>
                 <span><i className="dashboard-map-legend-line submarine" /> Submarine</span>
+                <span><i className="dashboard-map-legend-line other" /> Lainnya / belum diklasifikasi</span>
               </div>
             </div>
           </section>
