@@ -169,7 +169,7 @@ export function DashboardNetworkMap({ company }: { company: string }) {
       <button
         aria-label={satelliteEnabled ? "Tampilkan peta standar" : "Tampilkan citra satelit"}
         aria-pressed={satelliteEnabled}
-        className="btn btn-sm btn-light dashboard-map-style-toggle"
+        className="btn btn-sm btn-outline-primary atlas-secondary-action dashboard-map-style-toggle"
         disabled={!mapReady}
         onClick={() => {
           const next = !satelliteEnabled;
@@ -182,7 +182,7 @@ export function DashboardNetworkMap({ company }: { company: string }) {
         }}
         type="button"
       >
-        <i aria-hidden="true" className="bi bi-layers me-1" />
+        <i aria-hidden="true" className="bi bi-layers atlas-secondary-action-icon" />
         {satelliteEnabled ? "Peta standar" : "Satelit"}
       </button>
       {assetsQuery.isPending && <div className="dashboard-map-message"><span className="spinner-border spinner-border-sm" /> Memuat jalur jaringan...</div>}

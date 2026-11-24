@@ -120,7 +120,7 @@ export function BookingPricesPage() {
             <h3>Daftar harga satuan</h3>
             <p>Atur nama item, satuan, dan harga dalam rupiah. Tarif bersatuan core otomatis digunakan untuk menghitung estimasi booking.</p>
           </div>
-          {user?.role === "ADMIN" && <button className="btn btn-outline-primary pricing-add-top" disabled={pricesQuery.isPending || pricesQuery.isError || prices.length >= 50} onClick={() => setPrices((current) => [...current, { name: "", unit: "unit", price: 0 }])} type="button"><i className="bi bi-plus-lg me-2" />Tambah item</button>}
+          {user?.role === "ADMIN" && <button className="btn btn-outline-primary atlas-secondary-action pricing-add-top" disabled={pricesQuery.isPending || pricesQuery.isError || prices.length >= 50} onClick={() => setPrices((current) => [...current, { name: "", unit: "unit", price: 0 }])} type="button"><i aria-hidden="true" className="bi bi-plus-lg atlas-secondary-action-icon" />Tambah item</button>}
         </div>
         <div className="card-body pricing-card-body">
           {pricesQuery.isPending ? <div className="pricing-loading" role="status"><span className="spinner-border spinner-border-sm" /> Memuat daftar harga...</div> : pricesQuery.isError ? <div className="alert alert-danger mb-0">Daftar harga gagal dimuat. Muat ulang halaman untuk mencoba lagi.</div> : <>
@@ -135,7 +135,7 @@ export function BookingPricesPage() {
                         <td>{user?.role === "ADMIN" ? <input aria-label={`Nama item harga ${index + 1}`} className="form-control pricing-item-input" maxLength={80} onChange={(event) => setPrices((current) => current.map((row, i) => i === index ? { ...row, name: event.target.value } : row))} placeholder="Contoh: Kabel fiber optik" value={item.name} /> : <span className="pricing-item-name">{item.name}</span>}</td>
                         <td>{user?.role === "ADMIN" ? <input aria-label={`Satuan item harga ${index + 1}`} className="form-control pricing-unit-input" maxLength={24} onChange={(event) => setPrices((current) => current.map((row, i) => i === index ? { ...row, unit: event.target.value } : row))} placeholder="meter" value={item.unit} /> : <span className="pricing-unit-badge">/{item.unit}</span>}</td>
                         <td>{user?.role === "ADMIN" ? <div className="input-group pricing-price-input"><span className="input-group-text">Rp</span><input aria-label={`Harga item ${index + 1}`} className="form-control" min="0" onChange={(event) => setPrices((current) => current.map((row, i) => i === index ? { ...row, price: Number(event.target.value) } : row))} type="number" step="0.01" value={item.price} /></div> : <span className="pricing-price-value">Rp{item.price.toLocaleString("id-ID", { maximumFractionDigits: 2 })}</span>}</td>
-                        {user?.role === "ADMIN" && <td className="pricing-action-cell"><button aria-label={`Hapus ${item.name || "item harga"}`} className="btn btn-sm btn-outline-secondary pricing-remove" onClick={() => setPrices((current) => current.filter((_, i) => i !== index))} type="button"><i className="bi bi-trash3" /><span className="visually-hidden">Hapus</span></button></td>}
+                        {user?.role === "ADMIN" && <td className="pricing-action-cell"><button aria-label={`Hapus ${item.name || "item harga"}`} className="btn btn-sm btn-outline-danger pricing-remove" onClick={() => setPrices((current) => current.filter((_, i) => i !== index))} type="button"><i aria-hidden="true" className="bi bi-trash3" /><span className="visually-hidden">Hapus</span></button></td>}
                       </tr>
                     ))}
                     {!prices.length && <tr><td className="pricing-empty" colSpan={user?.role === "ADMIN" ? 5 : 4}><i className="bi bi-inboxes" /><strong>Belum ada item harga</strong><span>Tambahkan item untuk mulai mengelola referensi harga.</span></td></tr>}
@@ -146,7 +146,7 @@ export function BookingPricesPage() {
             <div className="pricing-card-footer">
               <div className="pricing-footer-note"><i className="bi bi-info-circle" /><span>Harga Rp0 menandakan nilai belum ditetapkan. Satuan dapat disesuaikan dengan kebutuhan, misalnya meter, core, atau unit.</span></div>
               {user?.role === "ADMIN" ? <div className="pricing-actions">
-                <button className="btn btn-primary" disabled={pricesQuery.isPending || pricesQuery.isError || save.isPending || !hasChanges || !canSave} onClick={() => save.mutate(prices)} type="button"><i className="bi bi-check2-circle me-2" />{save.isPending ? "Menyimpan..." : "Simpan perubahan"}</button>
+                <button className="btn btn-outline-primary atlas-secondary-action" disabled={pricesQuery.isPending || pricesQuery.isError || save.isPending || !hasChanges || !canSave} onClick={() => save.mutate(prices)} type="button"><i aria-hidden="true" className="bi bi-check2-circle atlas-secondary-action-icon" />{save.isPending ? "Menyimpan..." : "Simpan perubahan"}</button>
               </div> : <span className="pricing-readonly"><i className="bi bi-lock-fill" /> Mode lihat saja · perubahan hanya oleh ADMIN</span>}
             </div>
           </>}
@@ -155,7 +155,7 @@ export function BookingPricesPage() {
       <section className="card panel-card procurement-card">
         <div className="card-header procurement-card-header">
           <div><span className="pricing-eyebrow">KALKULASI & KELUARAN</span><h3>Estimasi procurement</h3><p>Masukkan kuantitas material; biaya dihitung dari tarif tersimpan.</p></div>
-          <button className="btn btn-primary" disabled={!procurementLines.some((line) => line.quantity > 0) || pricesQuery.isPending || pricesQuery.isError || bookingsQuery.isPending} onClick={() => void exportProcurement()} type="button"><i className="bi bi-file-earmark-spreadsheet me-2" />Unduh XLSX</button>
+          <button className="btn btn-outline-primary atlas-secondary-action" disabled={!procurementLines.some((line) => line.quantity > 0) || pricesQuery.isPending || pricesQuery.isError || bookingsQuery.isPending} onClick={() => void exportProcurement()} type="button"><i aria-hidden="true" className="bi bi-file-earmark-spreadsheet atlas-secondary-action-icon" />Unduh XLSX</button>
         </div>
         <div className="card-body procurement-card-body">
           {hasChanges && <div className="alert alert-warning py-2">Simpan perubahan harga terlebih dahulu. Kalkulasi memakai tarif yang sudah tersimpan.</div>}
