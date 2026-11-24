@@ -1,4 +1,5 @@
-import { BookingStatusBadge, bookingStatusLabel } from "./BookingStatusBadge";
+import { advanceAnalysisBookings, readAnalysisBookings } from "./analysisBookingDraft";
+import { BookingStatusBadge, bookingDisplayStatus, bookingStatusLabel, type BookingDisplayStatus } from "./BookingStatusBadge";
 import { notify } from "../../components/Snackbar";
 import { assetDetailTitle } from "../map/assetDetailTitle";
 import { DataTableShell } from "../../components/DataTable";
@@ -27,6 +28,32 @@ function rupiahFromCents(cents: number) {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cents / 100);
 }
 
+type BookingDevice = {
+  id: string;
+  name: string;
+  type: string | null;
+  area?: string | null;
+  latitude?: number;
+  longitude?: number;
+  cables?: { id: string; name: string }[];
+  hasCandidateRoute?: boolean;
+};
+type RouteOption = {
+  routeKey: string;
+  cableIds: string[];
+  cableNames: string[];
+  lengthMeters: number;
+  availableCores: number;
+  meetsRequest: boolean;
+  segments?: {
+    name: string;
+    availableCores: number;
+    midspanPoints?: { id: string; name: string }[];
+  }[];
+  intermediatePoints?: (string | null)[];
+  plannedJunctions?: boolean[];
+};
+
 function endpointLabel(segment: EndpointNames | undefined, side: "A" | "B") {
   const linked = segment?.endpointNames?.[side];
   const nearby = segment?.nearbyEndpointNames?.[side];
@@ -47,7 +74,16 @@ export function CoreBookingPage() {
         queryClient.invalidateQueries({ queryKey: [key] })
       )
     );
-  const [showForm, setShowForm] = useState(false);
+  const [draftKey] = useState(() => new URLSearchParams(window.location.search).get("draft") ?? "");
+  const [analysisDrafts, setAnalysisDrafts] = useState(() => readAnalysisBookings(draftKey));
+  const analysisDraft = analysisDrafts[0];
+  const [showForm, setShowForm] = useState(Boolean(analysisDraft));
+  const [formMode, setFormMode] = useState<"route" | "legacy">("route");
+  const [startNodeId, setStartNodeId] = useState(analysisDraft?.startId ?? "");
+  const [endNodeId, setEndNodeId] = useState(analysisDraft?.endId ?? "");
+  const [requestedCores, setRequestedCores] = useState(analysisDraft?.cores ?? 1);
+  const [selectedRouteKey, setSelectedRouteKey] = useState("");
+  const [spanOverrides, setSpanOverrides] = useState<Record<string, Record<number, number>>>({});
   const [selectedSegmentIds, setSelectedSegmentIds] = useState<string[]>([]);
   const [segmentCores, setSegmentCores] = useState<Record<string, number>>({});
   const { data: user } = useQuery({
@@ -65,7 +101,7 @@ export function CoreBookingPage() {
   const bookingDays = duration?.days ?? 30;
   const [newDuration, setNewDuration] = useState(30);
   const [editDuration, setEditDuration] = useState(false);
-  const [filter, setFilter] = useState<"Semua" | Booking["status"]>("Semua");
+  const [filter, setFilter] = useState<"Semua" | BookingDisplayStatus>("Semua");
   const [page, setPage] = useState(1);
   const [bookingPageSize, setBookingPageSize] = useState(5);
   const {
@@ -84,10 +120,79 @@ export function CoreBookingPage() {
         (Pick<
           NetworkAsset,
           "id" | "name" | "area" | "assetType" | "totalCores" | "idleCores" | "usedCores" | "bookedCores" | "attributes"
-        > & { ends: Record<"A" | "B", [number, number]> | null; endpointNames: Partial<Record<"A" | "B", string>> | null; nearbyEndpointNames?: Partial<Record<"A" | "B", string>> | null })[]
+        > & { ends: Record<"A" | "B", [number, number]> | null; endpointIds?: Partial<Record<"A" | "B", string>> | null; endpointNames: Partial<Record<"A" | "B", string>> | null; nearbyEndpointNames?: Partial<Record<"A" | "B", string>> | null })[]
       >("/assets/bookable-segments"),
     refetchInterval: 30_000,
   });
+  const targetId = analysisDraft?.targetId;
+  const matchingSegments = targetId ? (segmentsQuery.data ?? []).filter((segment) => {
+    const ends = segment.endpointIds;
+    return ends?.A && ends.B && ends.A !== ends.B &&
+      (segment.id === targetId || ends.A === targetId || ends.B === targetId);
+  }) : [];
+  const suggestedSegment = matchingSegments.find((segment) => segment.id === targetId)
+    ?? matchingSegments.find((segment) => analysisDraft?.cableIds.includes(segment.id))
+    ?? matchingSegments[0];
+  const suggestedEndpoints = suggestedSegment ? suggestedSegment.endpointIds : undefined;
+  const reverseEndpoints = targetId === suggestedEndpoints?.A;
+  const draftStartId = analysisDraft?.startId ?? (reverseEndpoints ? suggestedEndpoints?.B : suggestedEndpoints?.A);
+  const draftEndId = analysisDraft?.endId ?? (reverseEndpoints ? suggestedEndpoints?.A : suggestedEndpoints?.B);
+  const preferredCableIds = suggestedSegment ? [suggestedSegment.id] : analysisDraft?.cableIds ?? [];
+  useEffect(() => {
+    if (draftStartId && draftEndId && draftStartId !== draftEndId) {
+      setStartNodeId(draftStartId);
+      setEndNodeId(draftEndId);
+      setSelectedRouteKey("");
+    }
+  }, [analysisDraft, draftStartId, draftEndId]);
+  const devicesQuery = useQuery({
+    queryKey: ["bookable-devices"],
+    queryFn: () => api<BookingDevice[]>("/assets/bookable-devices"),
+    enabled: showForm && formMode === "route",
+    staleTime: 30_000,
+  });
+  const preferredRouteKey = preferredCableIds.length && startNodeId === draftStartId && endNodeId === draftEndId
+    ? `verify:${JSON.stringify(preferredCableIds)}`
+    : undefined;
+  const routeQuery = useQuery({
+    queryKey: ["bookable-core-routes", startNodeId, endNodeId, requestedCores, preferredRouteKey],
+    queryFn: () => {
+      const query = new URLSearchParams({ startId: startNodeId, endId: endNodeId, cores: String(requestedCores) });
+      if (preferredRouteKey) query.set("preferredRoute", preferredRouteKey);
+      return api<{ truncated: boolean; options: RouteOption[] }>(`/bookings/confirmed-core-paths?${query}`);
+    },
+    enabled: showForm && formMode === "route" && Boolean(startNodeId && endNodeId && startNodeId !== endNodeId && requestedCores > 0),
+  });
+  const options = routeQuery.data?.options ?? [];
+  const sortedOptions = [...options].sort((left, right) => left.lengthMeters - right.lengthMeters);
+  const preferredRoute = analysisDraft && (
+    sortedOptions.find((route) => route.routeKey === preferredRouteKey) ?? sortedOptions[0]
+  );
+  const recommendedRoute = preferredRoute && (preferredRoute.meetsRequest
+    ? preferredRoute
+    : sortedOptions.find((option) => option.meetsRequest) ?? preferredRoute);
+  const selectedRoute = options.find((option) => option.routeKey === selectedRouteKey) ?? recommendedRoute;
+  const routeEditKey = (option: RouteOption) => JSON.stringify([startNodeId, endNodeId, option.routeKey]);
+  const countsForRoute = (option: RouteOption) =>
+    option.cableIds.map((_, index) => spanOverrides[routeEditKey(option)]?.[index] ?? requestedCores);
+  const selectedCounts = selectedRoute ? countsForRoute(selectedRoute) : [];
+  const validSpanCounts = selectedCounts.every((count) => Number.isInteger(count) && count >= 1 && count <= 4096);
+  const selectedRouteMeetsRequest = selectedRoute
+    ? routeMeetsSpanCounts(selectedRoute, selectedCounts)
+    : false;
+  const usesAlternative = recommendedRoute && preferredRoute?.routeKey !== recommendedRoute.routeKey &&
+    selectedRoute?.routeKey === recommendedRoute.routeKey;
+  const advanceDraft = () => {
+    setSpanOverrides({});
+    const remaining = analysisDrafts.slice(1);
+    advanceAnalysisBookings(draftKey, remaining);
+    setAnalysisDrafts(remaining);
+    setStartNodeId(remaining[0]?.startId ?? "");
+    setEndNodeId(remaining[0]?.endId ?? "");
+    setRequestedCores(remaining[0]?.cores ?? 1);
+    setSelectedRouteKey("");
+    setShowForm(remaining.length > 0);
+  };
   const release = useMutation({
     mutationFn: (booking: Booking) =>
       api<{
@@ -105,16 +210,18 @@ export function CoreBookingPage() {
   });
   const approve = useMutation({
     mutationFn: (booking: Booking) =>
-      api<{ id: string; status: Booking["status"] }>(
+      api<{ id: string; status: Booking["status"]; reviewUpdated?: boolean }>(
         `/bookings/${booking.id}/approve`,
         { method: "POST" }
       ),
     onSuccess: async (result, booking) => {
       await invalidateNetwork();
-      notify(result.status === "Booked"
+      notify(result.reviewUpdated
+          ? `Nomor core booking ${booking.id} berubah. Periksa rincian terbaru sebelum menyetujui lagi.`
+          : result.status === "Booked"
           ? `Booking ${booking.id} disetujui dan core dialokasikan.`
           : `Kapasitas tidak lagi mencukupi; booking ${booking.id} masuk waiting list.`,
-        result.status === "Booked" ? "success" : "warning",
+        result.reviewUpdated ? "warning" : result.status === "Booked" ? "success" : "warning",
       );
     },
     onError: (error) =>
@@ -151,6 +258,18 @@ export function CoreBookingPage() {
       notify(
         error instanceof Error ? error.message : "Booking tidak dapat dibuat.", "error"),
   });
+  const createRoute = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api<Booking & { needsVerification?: boolean }>("/bookings/route", postJson(body)),
+    onSuccess: async (booking) => {
+      await invalidateNetwork();
+      if (analysisDraft) advanceDraft();
+      else setShowForm(false);
+      const message = booking.status === "Waiting List" ? `Jalur booking ${booking.id} masuk waiting list.`
+          : `Jalur booking ${booking.id} diajukan untuk ditinjau ADMIN.`;
+      notify(message, booking.status === "Waiting List" ? "warning" : "success");
+    },
+    onError: (error) => notify(error instanceof Error ? error.message : "Booking jalur tidak dapat dibuat.", "error"),
+  });
   const resubmit = useMutation({
     mutationFn: (booking: Booking) => api(`/bookings/${booking.id}/resubmit`, { method: "POST" }),
     onSuccess: async () => { await invalidateNetwork(); notify("Booking diajukan ulang untuk persetujuan ADMIN."); },
@@ -176,7 +295,7 @@ export function CoreBookingPage() {
       notify(error instanceof Error ? error.message : "Durasi tidak dapat disimpan.", "error"),
   });
   const filtered = bookings.filter(
-    (item) => filter === "Semua" || item.status === filter
+    (item) => filter === "Semua" || bookingDisplayStatus(item) === filter
   );
   const pageCount = Math.max(1, Math.ceil(filtered.length / bookingPageSize));
   const visibleBookings = filtered.slice(
@@ -191,15 +310,13 @@ export function CoreBookingPage() {
   const selectedCoreCount = selectedSegments.reduce((sum, segment) => sum + (segmentCores[segment.id] ?? 1), 0);
   const estimatedBookingCents = coreRateCents * selectedCoreCount;
   const needsWaitingList = selectedSegments.some((segment) => (segmentCores[segment.id] ?? 1) > segment.idleCores);
-  const bookedCount = bookings.filter(
-    (item) => item.status === "Booked"
-  ).length;
-  const waitingCount = bookings.filter(
-    (item) => item.status === "Waiting List"
-  ).length;
-  const pendingApprovalCount = bookings.filter(
-    (item) => item.status === "Pending Approval"
-  ).length;
+  const statusCounts = new Map<BookingDisplayStatus, number>();
+  for (const booking of bookings) {
+    const status = bookingDisplayStatus(booking);
+    statusCounts.set(status, (statusCounts.get(status) ?? 0) + 1);
+  }
+  const bookedCount = statusCounts.get("Booked") ?? 0;
+  const waitingCount = statusCounts.get("Waiting List") ?? 0;
   useEffect(() => {
     if (!bookingId) {
       return;
@@ -245,6 +362,29 @@ export function CoreBookingPage() {
       create.mutate(request);
     }
   };
+  const addRouteBooking = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (createRoute.isPending) return;
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const route = selectedRoute;
+    if (!route || !validSpanCounts) return;
+    const body = {
+      customer: String(form.get("customer") ?? "").trim(),
+      picCustomer: String(form.get("picCustomer") ?? "").trim(),
+      picCustomerEmail: String(form.get("picCustomerEmail") ?? "").trim(),
+      picCustomerPhone: String(form.get("picCustomerPhone") ?? "").trim(),
+      startNodeId,
+      endNodeId,
+      requestedCores,
+      routeKey: route.routeKey,
+      spanCoreCounts: spanOverrides[routeEditKey(route)] ? selectedCounts : undefined,
+    };
+    const message = selectedRouteMeetsRequest
+      ? "Ajukan jalur core ini untuk ditinjau admin? Core baru dialokasikan setelah persetujuan."
+      : "Kapasitas jalur belum cukup. Masukkan permintaan ini ke waiting list?";
+    if (await confirmAction(message, formElement.closest("dialog") ?? undefined)) createRoute.mutate(body);
+  };
   return (
     <>
       <PageHeader
@@ -252,9 +392,20 @@ export function CoreBookingPage() {
           <button
             className="btn btn-outline-primary atlas-secondary-action"
             onClick={() => {
+              if (analysisDraft) {
+                setShowForm(true);
+                return;
+              }
+              setSpanOverrides({});
+              setFormMode("route");
+              setStartNodeId("");
+              setEndNodeId("");
+              setRequestedCores(1);
+              setSelectedRouteKey("");
               setSelectedSegmentIds([]);
               setSegmentCores({});
               create.reset();
+              createRoute.reset();
               setShowForm(true);
             }}
             type="button"
@@ -390,16 +541,9 @@ export function CoreBookingPage() {
                   type="button"
                 >
                   {value === "Semua" ? "Semua" : bookingStatusLabel(value)}
-                  {value === "Semua" && (
-                    <span className="booking-filter-count">{bookings.length}</span>
-                  )}
-                  {value === "Pending Approval" && pendingApprovalCount > 0 && (
-                    <span className="booking-filter-count">{pendingApprovalCount}</span>
-                  )}
-                  {value === "Booked" && bookedCount > 0 && (
-                    <span className="booking-filter-count">{bookedCount}</span>
-                  )}
-                  {value === "Waiting List" && waitingCount > 0 && <span className="booking-filter-count">{waitingCount}</span>}
+                  <span className="booking-filter-count">
+                    {value === "Semua" ? bookings.length : (statusCounts.get(value) ?? 0)}
+                  </span>
                 </button>
               ))}
             </div>
@@ -434,7 +578,7 @@ export function CoreBookingPage() {
                       </small>
                     </td>
                     <td>
-                      <div className="d-grid gap-2">
+                      {booking.pathRequest ? <BookingRouteDetail booking={booking} /> : <div className="d-grid gap-2">
                         {booking.segments.map((segment) => (
                           <div key={segment.segmentId}>
                             <span className="cable-name text-break">{segment.name}</span>
@@ -449,15 +593,31 @@ export function CoreBookingPage() {
                             )}
                           </div>
                         ))}
-                      </div>
+                      </div>}
                       {booking.status === "Waiting List" && (
                         <small className="d-block text-warning">
-                          Menunggu kapasitas tersedia
+                          {booking.pathRequest?.canResubmit ? "Core tersedia. Siap diajukan ulang."
+                              : "Menunggu kapasitas tersedia"}
                         </small>
                       )}
                     </td>
                     <td className="text-nowrap">
-                      <b>{booking.cores} core</b>
+                      {booking.pathRequest ? (
+                        <>
+                          <b className="d-block">
+                            {bookingSpanCounts(booking.pathRequest).reduce((sum, count) => sum + count, 0)}{" "}
+                            {booking.status === "Booked" || booking.status === "Used" ? "alokasi core" : "alokasi dibutuhkan"}
+                          </b>
+                          <small className="d-block text-body-secondary">
+                            {describeSpanCounts(bookingSpanCounts(booking.pathRequest))}
+                          </small>
+                        </>
+                      ) : booking.status === "Booked" || booking.status === "Used" ? <b>{booking.cores} core</b> : (
+                        <>
+                          <span>Belum dialokasikan</span>
+                          <small className="d-block text-body-secondary">Diminta {booking.cores} core</small>
+                        </>
+                      )}
                     </td>
                     <td className="text-break">
                       <span className="d-block fw-semibold">{booking.picCustomer}</span>
@@ -466,7 +626,7 @@ export function CoreBookingPage() {
                     </td>
                     <td>{booking.picPresales}</td>
                     <td>
-                      <BookingStatusBadge status={booking.status} />
+                      <BookingStatusBadge status={bookingDisplayStatus(booking)} />
                     </td>
                     <td className="text-body-secondary text-nowrap">
                       {new Date(booking.requestedAt).toLocaleDateString(
@@ -507,7 +667,7 @@ export function CoreBookingPage() {
                             </button>
                           </>
                         )}
-                      {booking.status === "Booked" && (
+                      {(booking.status === "Booked" || (booking.status === "Used" && user?.role === "ADMIN")) && (
                         <button
                           className="btn btn-sm btn-outline-secondary"
                           disabled={release.isPending}
@@ -524,7 +684,8 @@ export function CoreBookingPage() {
                       {booking.status === "Booked" && user?.role === "ADMIN" && (
                         <button className="btn btn-sm btn-outline-primary atlas-secondary-action ms-1" disabled={issuePo.isPending} type="button" onClick={async () => { if (await confirmAction(`Tandai PO booking ${booking.id} sudah terbit? Core akan menjadi terpakai.`)) issuePo.mutate(booking); }}>PO terbit</button>
                       )}
-                      {booking.status === "Waiting List" && booking.requestedBy === user?.id && (
+                      {booking.status === "Waiting List" && booking.requestedBy === user?.id &&
+                        (!booking.pathRequest || booking.pathRequest.canResubmit) && (
                         <button
                           className="btn btn-sm btn-outline-primary atlas-secondary-action"
                           disabled={resubmit.isPending}
@@ -560,7 +721,111 @@ export function CoreBookingPage() {
           )}
         </section>
       )}
-      {showForm && (
+      {showForm && formMode === "route" && (
+        <ModalDialog labelledBy="booking-title" className="booking-modal" onClose={() => setShowForm(false)}>
+          <div className="modal-heading">
+            <div>
+              <h3 id="booking-title">Booking jalur antarperangkat</h3>
+              <p>Pilih dua perangkat. ATLAS mencari jalur kabel dan memeriksa kapasitas setiap segmen.</p>
+            </div>
+            <button aria-label="Tutup" className="btn-close" onClick={() => setShowForm(false)} type="button" />
+          </div>
+          <form key={analysisDrafts.length} onSubmit={addRouteBooking}>
+            {analysisDraft && (
+              <div className="alert alert-info">
+                <strong>Draf dari analisis: {analysisDraft.label}</strong>
+                {analysisDrafts.length > 1 && <span className="d-block">{analysisDrafts.length} draf tersisa. Tinjau satu per satu.</span>}
+                {preferredRouteKey && preferredRoute && preferredRoute.routeKey !== preferredRouteKey && <span className="d-block">Jalur dari analisis belum tersedia untuk booking. Tinjau jalur kabel yang ditemukan.</span>}
+                {usesAlternative && <span className="d-block">Jalur utama kurang kapasitas. Alternatif dengan kapasitas cukup dipilih otomatis.</span>}
+                {!segmentsQuery.isPending && (!draftStartId || !draftEndId || draftStartId === draftEndId) &&
+                  <span className="d-block">Jalur booking belum tersedia dari hasil ini. Diperlukan dua titik jaringan berbeda.</span>}
+              </div>
+            )}
+            <label className="form-label" htmlFor="booking-customer-route">Nama pelanggan</label>
+            <input className="form-control mb-3" id="booking-customer-route" name="customer" placeholder="Nama perusahaan" required />
+            <div className="row g-3">
+              <div className="col-md-6">
+                <BookingDevicePicker
+                  id="booking-start-device"
+                  label="Perangkat awal"
+                  devices={devicesQuery.data ?? []}
+                  value={startNodeId}
+                  onSelect={(id) => {
+                    setStartNodeId(id);
+                    if (id === endNodeId) setEndNodeId("");
+                    setSelectedRouteKey("");
+                  }}
+                />
+              </div>
+              <div className="col-md-6">
+                <BookingDevicePicker
+                  id="booking-end-device"
+                  label="Perangkat tujuan"
+                  devices={devicesQuery.data ?? []}
+                  value={endNodeId}
+                  excludedId={startNodeId}
+                  onSelect={(id) => { setEndNodeId(id); setSelectedRouteKey(""); }}
+                />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label" htmlFor="booking-route-cores">Jumlah core khusus</label>
+                <input className="form-control" id="booking-route-cores" type="number" min={1} max={4096} value={requestedCores} onChange={(event) => { setRequestedCores(Number(event.target.value)); setSelectedRouteKey(""); }} required />
+                <small className="form-text">Jumlah awal untuk semua ruas. Ubah jumlah pada ruas tertentu setelah memilih jalur.</small>
+              </div>
+            </div>
+            {devicesQuery.isPending && <p className="mt-3" role="status">Memuat daftar perangkat...</p>}
+            {devicesQuery.isError && <div className="alert alert-danger mt-3" role="alert">Daftar perangkat gagal dimuat. <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => void devicesQuery.refetch()}>Coba lagi</button></div>}
+            {startNodeId && endNodeId && startNodeId === endNodeId && <div className="alert alert-warning mt-3">Pilih dua perangkat yang berbeda.</div>}
+            {routeQuery.isFetching && <p className="mt-3" role="status">Menelusuri jalur kabel dan kapasitas...</p>}
+            {routeQuery.isError && <div className="alert alert-danger mt-3" role="alert">Pencarian jalur gagal. Ubah pilihan atau coba kembali.</div>}
+            {routeQuery.data && (
+              <fieldset className="mt-3">
+                <legend className="form-label fs-6 fw-semibold">Pilih jalur</legend>
+                {routeQuery.data.truncated && <p className="small text-warning">Jalur yang ditemukan banyak; hasil dibatasi. Persempit pilihan perangkat.</p>}
+                {!routeQuery.data.options.length ? <div className="alert alert-warning">Belum ada jalur kabel antara kedua perangkat ini.</div> : (
+                  <div className="d-grid gap-2">
+                    {routeQuery.data.options.map((option, index) => (
+                      <BookingRouteOption
+                        key={option.routeKey}
+                        option={option}
+                        index={index}
+                        selected={selectedRoute?.routeKey === option.routeKey}
+                        onSelect={() => setSelectedRouteKey(option.routeKey)}
+                        spanCounts={countsForRoute(option)}
+                        onChangeSpan={option.routeKey.startsWith("verify:") ? (index, count) => {
+                          const key = routeEditKey(option);
+                          setSpanOverrides((current) => ({
+                            ...current,
+                            [key]: { ...current[key], [index]: count },
+                          }));
+                        } : undefined}
+                        startName={devicesQuery.data?.find((device) => device.id === startNodeId)?.name}
+                        endName={devicesQuery.data?.find((device) => device.id === endNodeId)?.name}
+                      />
+                    ))}
+                  </div>
+                )}
+              </fieldset>
+            )}
+            <div className="row g-3 mt-1">
+              <div className="col-md-6"><label className="form-label" htmlFor="booking-route-pic">PIC customer</label><input className="form-control" id="booking-route-pic" name="picCustomer" placeholder="Nama PIC" required /></div>
+              <div className="col-md-6"><label className="form-label" htmlFor="booking-route-email">Email PIC customer</label><input className="form-control" id="booking-route-email" name="picCustomerEmail" type="email" required /></div>
+              <div className="col-md-6"><label className="form-label" htmlFor="booking-route-phone">Telepon PIC customer</label><input className="form-control" id="booking-route-phone" name="picCustomerPhone" type="tel" required /></div>
+              <div className="col-md-6"><label className="form-label" htmlFor="booking-route-presales">PIC presales</label><input className="form-control" id="booking-route-presales" value={user?.name ?? ""} readOnly /></div>
+            </div>
+            {createRoute.isError && <div className="alert alert-danger mt-3" role="alert">{createRoute.error.message}</div>}
+            <div className="modal-actions">
+              <button className="btn btn-light" type="button" onClick={() => setShowForm(false)}>Batal</button>
+              {analysisDrafts.length > 1 && <button className="btn btn-outline-secondary" type="button" onClick={advanceDraft} disabled={createRoute.isPending}>Lewati draf</button>}
+              <button className="btn btn-outline-primary atlas-secondary-action" type="button" onClick={() => { setFormMode("legacy"); create.reset(); }}>Booking per segmen</button>
+              <button className="btn btn-primary" type="submit" disabled={createRoute.isPending || routeQuery.isFetching || routeQuery.isError || !selectedRoute || !startNodeId || !endNodeId || startNodeId === endNodeId || requestedCores < 1 || !validSpanCounts}>
+                {!selectedRoute ? "Pilih jalur dulu" : selectedRouteMeetsRequest ? "Ajukan persetujuan" : "Masuk waiting list"}
+              </button>
+            </div>
+          </form>
+        </ModalDialog>
+      )}
+      {showForm && formMode === "legacy" && (
         <ModalDialog labelledBy="booking-title" className="booking-modal" onClose={() => setShowForm(false)}>
             <div className="modal-heading">
               <div>
@@ -793,5 +1058,225 @@ function BookingEndpoints({ segment }: {
       })}
       {!segment.ends && <small className="text-warning">Dua koordinat ujung yang berbeda belum tersedia untuk kabel ini.</small>}
     </>
+  );
+}
+
+function BookingDevicePicker({
+  id, label, devices, value, excludedId, onSelect,
+}: {
+  id: string;
+  label: string;
+  devices: BookingDevice[];
+  value: string;
+  excludedId?: string;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <>
+      <label className="form-label" htmlFor={id}>{label}</label>
+      <select className="form-select" id={id} value={value} onChange={(event) => onSelect(event.target.value)} required>
+        <option value="">Pilih {label.toLowerCase()}</option>
+        {devices.map((device) => (
+          <option key={device.id} value={device.id} disabled={device.id === excludedId}>
+            {device.name}{device.type ? ` · ${device.type}` : ""}
+          </option>
+        ))}
+      </select>
+    </>
+  );
+}
+
+function routeMeetsSpanCounts(option: RouteOption, counts: number[]) {
+  if (!option.routeKey.startsWith("verify:") || !option.segments) return option.meetsRequest;
+  return option.segments.length === counts.length &&
+    option.segments.every((segment, index) => counts[index] > 0 && segment.availableCores >= counts[index]);
+}
+
+function bookingSpanCounts(route: NonNullable<Booking["pathRequest"]>) {
+  return route.cableIds.map((_, index) => route.spanCoreCounts?.[index] ?? route.requestedCores);
+}
+
+function describeSpanCounts(counts: number[]) {
+  return counts.length && counts.every((count) => count === counts[0])
+    ? `${counts[0]} core × ${counts.length} segmen`
+    : `${counts.join(" + ")} core per ruas`;
+}
+
+function BookingRouteOption({
+  option, index, selected, onSelect, spanCounts, onChangeSpan, startName, endName,
+}: {
+  option: RouteOption;
+  index: number;
+  selected: boolean;
+  onSelect: () => void;
+  spanCounts: number[];
+  onChangeSpan?: (index: number, count: number) => void;
+  startName?: string;
+  endName?: string;
+}) {
+  const titleId = `booking-route-option-${index}-title`;
+  const summaryId = `booking-route-option-${index}-capacity`;
+  return (
+    <div className={`booking-route-option${selected ? " is-selected" : ""}`}>
+      <input
+        id={`booking-route-option-${index}`}
+        className="form-check-input mt-1"
+        type="radio"
+        name="bookingRoute"
+        value={option.routeKey}
+        checked={selected}
+        onChange={onSelect}
+        aria-labelledby={titleId}
+        aria-describedby={summaryId}
+      />
+      <span className="booking-route-content">
+        <span className="booking-route-heading">
+          <label id={titleId} htmlFor={`booking-route-option-${index}`} className="fw-bold">Jalur {index + 1}</label>
+          <span className="booking-route-distance">{(option.lengthMeters / 1000).toFixed(2)} km</span>
+        </span>
+        <span id={summaryId} className="booking-route-capacity">
+          <strong>{option.availableCores} core tersedia</strong>
+          <span>{routeMeetsSpanCounts(option, spanCounts) ? "Kapasitas cukup" : "Kapasitas belum cukup · Waiting List"}</span>
+          {spanCounts.every((count) => count > 0) && spanCounts.length > 0 && (
+            <span className="w-100">
+              Total kebutuhan booking <strong>{spanCounts.reduce((sum, count) => sum + count, 0)} alokasi core</strong>
+              {" "}({describeSpanCounts(spanCounts)})
+            </span>
+          )}
+        </span>
+        <span className="booking-route-itinerary">
+          <span className="booking-route-point"><strong>Awal</strong> {startName ?? "Belum tercatat"}</span>
+          {option.cableNames.map((name, segmentIndex) => {
+            const segment = option.segments?.[segmentIndex];
+            return (
+              <span className="booking-route-leg" key={segmentIndex}>
+                <span className="booking-route-cable">
+                  <span>
+                    <span className="booking-route-segment-label">Segmen {segmentIndex + 1}</span>
+                    <strong className="d-block">{name}</strong>
+                  </span>
+                  <span className="booking-route-segment-capacity">
+                    {segment ? `${segment.availableCores} core tersedia` : "Kapasitas belum tersedia"}
+                  </span>
+                </span>
+                {selected && onChangeSpan ? (
+                  <label className="d-flex align-items-center gap-2 flex-wrap">
+                    <span>Core diminta untuk ruas {segmentIndex + 1}</span>
+                    <input
+                      className="form-control form-control-sm w-auto"
+                      type="number"
+                      min={1}
+                      max={4096}
+                      step={1}
+                      required
+                      value={spanCounts[segmentIndex] || ""}
+                      onChange={(event) => onChangeSpan(segmentIndex, Number(event.target.value))}
+                    />
+                    {segment && spanCounts[segmentIndex] > segment.availableCores && (
+                      <small className="text-warning">Kapasitas ruas ini tidak cukup.</small>
+                    )}
+                  </label>
+                ) : (
+                  <span>{spanCounts[segmentIndex]} core diminta</span>
+                )}
+                {segment?.midspanPoints?.map((point) => (
+                  <span className="booking-route-point" key={point.id}><strong>Sambungan</strong> {point.name}</span>
+                ))}
+                {segmentIndex < option.cableNames.length - 1 && (
+                  <span className="booking-route-point">
+                    <strong>{option.plannedJunctions?.[segmentIndex] ? "Rencana terminasi" : "Terminasi"}</strong>{" "}
+                    {option.intermediatePoints?.[segmentIndex] ?? "Belum tercatat"}
+                  </span>
+                )}
+              </span>
+            );
+          })}
+          <span className="booking-route-point"><strong>Tujuan</strong> {endName ?? "Belum tercatat"}</span>
+        </span>
+      </span>
+    </div>
+  );
+}
+
+function BookingRouteDetail({ booking }: { booking: Booking }) {
+  const route = booking.pathRequest;
+  if (!route) return null;
+
+  const hasAllocation = booking.status === "Booked" || booking.status === "Used";
+  const allocations = hasAllocation
+    ? [...(route.wholeCableAllocations ?? []), ...route.allocatedSections]
+    : booking.status === "Pending Approval" ? route.proposedAllocations : [];
+  const points = [
+    route.startName,
+    ...route.cableIds.slice(1).map((_, index) =>
+      route.plannedSplices?.[index]?.nodeName ?? route.intermediateNames?.[index]
+    ),
+    route.endName,
+  ];
+
+  return (
+    <div className="booking-path-summary">
+      <strong className="d-block">{route.startName} → {route.endName}</strong>
+      <small className="d-block text-body-secondary mt-1">
+        {describeSpanCounts(bookingSpanCounts(route))} · {(route.lengthMeters / 1000).toFixed(2)} km
+      </small>
+      <details className="booking-path-allocation mt-2">
+        <summary>Detail jalur</summary>
+        <strong className="d-block mt-2">Urutan titik</strong>
+        <ol className="ps-3 mb-2">
+          {points.map((name, index) => (
+            <li className="text-break" key={index}>{name || "Belum tercatat"}</li>
+          ))}
+        </ol>
+        <strong className="d-block">Core per segmen</strong>
+        <ol className="ps-3 mb-2">
+          {route.cableIds.map((cableId, index) => {
+            const numbers = [...new Set(allocations.filter((item) => item.cableId === cableId).map((item) => item.coreNumber))]
+              .sort((left, right) => left - right);
+            return (
+              <li className="text-break" key={index}>
+                {route.cableNames[index] ?? cableId}
+                <small className="d-block text-body-secondary">
+                  {bookingSpanCounts(route)[index]} core {hasAllocation ? "dialokasikan" : "diminta"}
+                  {numbers.length > 0 && ` · ${hasAllocation ? "Nomor core" : "Usulan nomor core"}: ${numbers.join(", ")}`}
+                </small>
+                {[...new Set((hasAllocation ? route.allocatedSections : route.proposedAllocations)
+                  .filter((part) => part.cableId === cableId)
+                  .map((part) => `${Math.round(part.startMeters)}–${Math.round(part.endMeters)} m`))].map((range) => (
+                    <small className="d-block text-body-secondary" key={range}>Posisi ruas pada kabel: {range}</small>
+                  ))}
+              </li>
+            );
+          })}
+        </ol>
+        {route.plannedSplices?.length ? (
+          <>
+            <strong className="d-block">Rencana sambungan</strong>
+            <small className="d-block text-body-secondary">Belum dikonfirmasi secara fisik</small>
+            <ol className="ps-3 mb-2">
+              {route.plannedSplices.map((splice, index) => (
+                <li className="mt-2 text-break" key={index}>
+                  <strong>{splice.nodeName}</strong>
+                  <small className="d-block">{splice.from.cableName} → {splice.to.cableName}</small>
+                  {Array.from({ length: Math.max(splice.from.coreNumbers.length, splice.to.coreNumbers.length) }, (_, pairIndex) => {
+                    const incoming = splice.from.coreNumbers[pairIndex];
+                    const outgoing = splice.to.coreNumbers[pairIndex];
+                    return (
+                      <small className="d-block" key={pairIndex}>
+                        {incoming !== undefined && outgoing !== undefined
+                          ? `Core ${incoming} → Core ${outgoing}`
+                          : `Core ${incoming ?? outgoing} (${incoming === undefined ? "keluar" : "masuk"}) · Tidak dipasangkan`}
+                      </small>
+                    );
+                  })}
+                </li>
+              ))}
+            </ol>
+          </>
+        ) : (
+          <small className="d-block text-body-secondary">Sambungan terminasi: {route.terminationRecorded ? "Tercatat" : "Belum tercatat"}</small>
+        )}
+      </details>
+    </div>
   );
 }

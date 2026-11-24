@@ -1,3 +1,4 @@
+import { prepareAnalysisBookings } from "../core-booking/analysisBookingDraft";
 import { addMapDisplayControls } from "../map/mapDisplayControls";
 import { RouteSelector } from "../../components/RouteSelector";
 import { formatDistance } from "../../lib/format";
@@ -27,6 +28,7 @@ import {
   loadNetworkMapIcons,
 } from "../map/networkMap";
 import { analysisMapStyle, searchRadiusFeature } from "./analysisMapStyle";
+import type { TerminationResults } from "./TerminationDetail";
 
 export type ConnectionPoint = {
   longitude: number;
@@ -36,6 +38,7 @@ export type ConnectionPoint = {
 
 export type ConnectionLeg = {
   kind: "new" | "existing";
+  segmentId?: string;
   name: string;
   distanceMeters: number;
   geometry: { type: "LineString"; coordinates: [number, number][] };
@@ -150,6 +153,10 @@ function ConnectionRouteMap({
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
+      map.addSource("connection-terminations", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
       map.addLayer({
         id: "connection-search-radius-fill",
         type: "fill",
@@ -170,6 +177,18 @@ function ConnectionRouteMap({
         },
       });
       const assetLayers = addNetworkAssetLayers(map, "network-assets");
+      map.addLayer({
+        id: "connection-termination-markers",
+        type: "circle",
+        source: "connection-terminations",
+        paint: {
+          "circle-radius": 15,
+          "circle-color": "#e77a12",
+          "circle-opacity": 0,
+          "circle-stroke-color": "#e77a12",
+          "circle-stroke-width": 3,
+        },
+      }, assetLayers.icons);
       addNetworkAssetHitLayers(map, "network-assets");
       addMapDisplayControls(map, {
         radiusLayers: [
@@ -178,6 +197,7 @@ function ConnectionRouteMap({
         ],
         assetLayers: [
           ...Object.values(assetLayers),
+          "connection-termination-markers",
           "asset-point-hit",
           "asset-line-hit",
         ],
@@ -316,6 +336,33 @@ function ConnectionRouteMap({
         visibleBounds.getEast(),
         visibleBounds.getNorth(),
       ];
+      void Promise.all([result.start, result.end].map((point) => {
+        const params = new URLSearchParams({
+          longitude: String(point.longitude),
+          latitude: String(point.latitude),
+          expand: String(searchRadiusMeters > 1000),
+        });
+        return api<TerminationResults>(`/analysis/terminations?${params}`, {
+          signal: request.signal,
+          timeout: 30_000,
+        });
+      })).then((results) => {
+        if (!active) return;
+        const points = new Map(results.flatMap((item) => item.points).map((point) => [point.id, point]));
+        const source = map.getSource("connection-terminations") as import("maplibre-gl").GeoJSONSource;
+        source.setData({
+          type: "FeatureCollection",
+          features: Array.from(points.values())
+            .filter((point) => Number.isFinite(point.longitude) && Number.isFinite(point.latitude))
+            .map((point) => ({
+              type: "Feature",
+              properties: { id: point.id },
+              geometry: { type: "Point", coordinates: [point.longitude, point.latitude] },
+            })),
+        });
+      }).catch(() => {
+        if (active) setError(true);
+      });
       void api<NetworkAsset[]>(`/assets/map?bbox=${bbox.join(",")}&zoom=24`, {
         signal: request.signal,
         timeout: 30_000,
@@ -443,6 +490,12 @@ export function ConnectionAnalysisResult({
       </section>
     );
   }
+  const primary = result.routes.find((item) => item.id === "A") ?? route;
+  const startId = primary.source?.id;
+  const endId = primary.destination?.id;
+  const cableIds = [...new Set(primary.legs.flatMap((leg) =>
+    leg.kind === "existing" && leg.segmentId ? [leg.segmentId] : []
+  ))];
   const gaps = [...(route.terminalLinks ?? []), ...(route.roadSnapGaps ?? [])];
   const visibleLegs = route.legs.slice(
     (legPage - 1) * legPageSize,
@@ -456,6 +509,11 @@ export function ConnectionAnalysisResult({
   return (
     <section aria-label="Hasil analisis dua titik">
       <h3 className="h5">Rencana jalur melalui jaringan</h3>
+      {startId && endId && startId !== endId && primary.legs.some((leg) => leg.kind === "existing") ? (
+        <button className="btn btn-outline-primary mb-3" type="button" onClick={() => prepareAnalysisBookings([
+          { label: `${result.start.label} → ${result.end.label}`, startId, endId, cableIds, cores: 1 },
+        ])}>Siapkan booking</button>
+      ) : <p className="text-body-secondary">Jalur booking belum tersedia.</p>}
       <div
         className={`alert ${uncertain ? "alert-warning" : "alert-info"}`}
         role="status"

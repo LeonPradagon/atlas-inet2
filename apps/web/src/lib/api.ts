@@ -105,6 +105,30 @@ export type Booking = {
   expiresAt: string | null;
   segmentName: string;
   area: string;
+  pathRequest?: {
+    startNodeId: string;
+    endNodeId: string;
+    startName: string;
+    needsVerification?: boolean;
+    canResubmit?: boolean;
+    endName: string;
+    intermediateNames?: (string | null)[];
+    terminationRecorded?: boolean;
+    plannedSplices?: {
+      nodeId: string;
+      nodeName: string;
+      from: { cableId: string; cableName: string; coreNumbers: number[] };
+      to: { cableId: string; cableName: string; coreNumbers: number[] };
+    }[];
+    wholeCableAllocations?: { cableId: string; coreNumber: number }[];
+    cableIds: string[];
+    cableNames: string[];
+    requestedCores: number;
+    spanCoreCounts?: number[];
+    lengthMeters: number;
+    proposedAllocations: { coreId: number; cableId: string; cableName: string; coreNumber: number; startMeters: number; endMeters: number; pathIndex: number }[];
+    allocatedSections: { coreId: number; cableId: string; cableName: string; coreNumber: number; startMeters: number; endMeters: number; status: string }[];
+  };
 };
 export type AssetRelation = {
   assetId: string;

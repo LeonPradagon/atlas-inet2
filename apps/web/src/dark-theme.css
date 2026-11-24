@@ -155,6 +155,16 @@
 [data-bs-theme="dark"] .bg-white {
   background-color: var(--atlas-surface) !important;
 }
+[data-bs-theme="dark"] .booking-route-option {
+  background: var(--atlas-surface);
+}
+[data-bs-theme="dark"] .booking-route-option:hover {
+  background: color-mix(in srgb, var(--atlas-primary, #6174e8) 18%, var(--atlas-surface));
+  border-color: var(--atlas-primary, #6174e8);
+}
+[data-bs-theme="dark"] .booking-route-option.is-selected {
+  background: color-mix(in srgb, var(--atlas-primary, #6174e8) 22%, var(--atlas-surface));
+}
 [data-bs-theme="dark"] :is(.bg-light, .bg-body-tertiary) {
   background-color: var(--bs-tertiary-bg) !important;
 }

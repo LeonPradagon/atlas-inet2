@@ -90,6 +90,7 @@ type CoreEndRecord = {
   peerCoreNumber: number | null;
   peerSide: CorePosition | null;
   peerRouteMeasureM: number | string | null;
+  peerRoutePhysicalSide?: "toward_A" | "toward_B" | null;
   connectionGroupId: string | null;
   portReference: string | null;
   connectionVerificationStatus: "confirmed" | "needs_review" | null;
@@ -138,6 +139,7 @@ type CoreEndDraft =
       peerCoreNumber?: number;
       peerSide?: CorePosition;
       peerRouteMeasureM?: number;
+      peerRoutePhysicalSide?: "toward_A" | "toward_B" | null;
     }
   | { connectionType: "termination" }
   | { connectionType: "device_port"; portReference: string }
@@ -300,7 +302,12 @@ function CorePeerSelector({
               peerSegmentId: selectedPosition?.peerSegmentId,
               peerSide: selectedPosition?.peerSide,
               ...(selectedPosition?.peerSide === "R" && selectedPosition.peerRouteMeasureM !== null
-                ? { peerRouteMeasureM: selectedPosition.peerRouteMeasureM }
+                ? {
+                    peerRouteMeasureM: selectedPosition.peerRouteMeasureM,
+                    peerRoutePhysicalSide: connection?.peerSegmentId === selectedPosition.peerSegmentId
+                      ? connection.peerRoutePhysicalSide ?? null
+                      : null,
+                  }
                 : {}),
               ...(peerCoreNumber > 0 ? { peerCoreNumber } : {}),
             });
@@ -315,6 +322,28 @@ function CorePeerSelector({
           ))}
         </select>
       </div>
+      {selectedPosition?.peerSide === "R" && (
+        <div className="core-peer-selector-field">
+          <label htmlFor={`${idPrefix}-physical-side`}>Sisi core kabel tujuan</label>
+          <select
+            className="form-select form-select-sm"
+            disabled={disabled}
+            id={`${idPrefix}-physical-side`}
+            value={connection?.peerRoutePhysicalSide ?? ""}
+            onChange={(event) => onChange({
+              ...connection,
+              connectionType: "splice",
+              peerRoutePhysicalSide: event.target.value === "toward_A" || event.target.value === "toward_B"
+                ? event.target.value
+                : null,
+            })}
+          >
+            <option value="">Belum diketahui</option>
+            <option value="toward_A">Sisi menuju ujung A kabel tujuan</option>
+            <option value="toward_B">Sisi menuju ujung B kabel tujuan</option>
+          </select>
+        </div>
+      )}
     </div>
   );
 }
@@ -334,12 +363,14 @@ type MidspanConnectionRecord = {
   nodeAssetName: string;
   nodeAssetType: string | null;
   routeMeasureM: number | string;
+  routePhysicalSide?: "toward_A" | "toward_B" | null;
   connectionType: "splice" | "termination" | "device_port";
   peerSegmentId: string | null;
   peerSegmentName: string | null;
   peerCoreNumber: number | null;
   peerSide: CorePosition | null;
   peerRouteMeasureM: number | string | null;
+  peerRoutePhysicalSide?: "toward_A" | "toward_B" | null;
   connectionGroupId: string;
   portReference: string | null;
   verificationStatus: "confirmed" | "needs_review";
@@ -350,6 +381,7 @@ type MidspanConnectionDraft = {
   draftId: string;
   nodeAssetId: string;
   routeMeasureM: number | null;
+  routePhysicalSide?: "toward_A" | "toward_B" | null;
   connection: CoreEndDraft;
 };
 type CoreItem = {
@@ -967,7 +999,7 @@ function VerificationStatus({ asset }: { asset: NetworkAsset }) {
     <small
       className={`segment-verification-status ms-2 ${verified ? "text-success" : "text-warning"}`}
     >
-      {verified ? "Terverifikasi" : "Belum terverifikasi"}
+      {verified ? "Kapasitas Terverifikasi" : "Kapasitas Belum Terverifikasi"}
     </small>
   );
 }
@@ -1275,7 +1307,10 @@ export function MapPage() {
   const pointsRef = useRef<Coordinate[]>([]);
   const provincesRef = useRef(provinces);
   provincesRef.current = provinces;
-  const [selectedId, setSelectedId] = useState<string>("");
+  const [linkedCableId] = useState(() => new URLSearchParams(window.location.search).get("kabel"));
+  const [selectedId, setSelectedId] = useState(linkedCableId ?? "");
+  const coreDetailsRef = useRef<HTMLDetailsElement>(null);
+  const openedLinkedCable = useRef(false);
   const [confirmedRoutes, setConfirmedRoutes] = useState<RouteLine[]>([]);
   const [routePreview, setRoutePreview] = useState<RouteLine | null>(null);
   const [routePoints, setRoutePoints] = useState<Coordinate[]>([]);
@@ -1502,7 +1537,15 @@ export function MapPage() {
     () => pointCollection(routePoints),
     [routePoints]
   );
-  const selectedAsset = knownAssets.find((item) => item.id === selectedId);
+  const linkedCableQuery = useQuery({
+    queryKey: ["segments", "linked-cable", linkedCableId],
+    queryFn: () => api<NetworkAsset[]>(`/assets?${new URLSearchParams({ id: linkedCableId ?? "" })}`),
+    enabled: Boolean(linkedCableId),
+  });
+  const selectedAsset = knownAssets.find((item) => item.id === selectedId)
+    ?? (selectedId === linkedCableId
+      ? linkedCableQuery.data?.find((item) => item.id === selectedId && item.assetType === "segment")
+      : undefined);
   const selectedDraftId = selectedAsset
     ? ftthDesignGroupId(selectedAsset)
     : undefined;
@@ -1579,6 +1622,13 @@ export function MapPage() {
   ]);
   const selectedSegment =
     selectedAsset?.assetType === "segment" ? selectedAsset : undefined;
+  useEffect(() => {
+    if (!linkedCableId || selectedSegment?.id !== linkedCableId || openedLinkedCable.current) return;
+    const details = coreDetailsRef.current;
+    if (!details) return;
+    openedLinkedCable.current = true;
+    details.scrollIntoView({ block: "start" });
+  }, [linkedCableId, selectedSegment?.id]);
   const selectedLegend = selectedAsset ? legendStyle(selectedAsset) : undefined;
   const selectedSegmentGeometry = useQuery({
     queryKey: ["asset-geometry", selectedSegment?.id],
@@ -1733,6 +1783,7 @@ export function MapPage() {
       draftId: record.id,
       nodeAssetId: record.nodeAssetId,
       routeMeasureM: Number(record.routeMeasureM),
+      routePhysicalSide: record.routePhysicalSide ?? null,
       connection:
         record.connectionType === "splice"
           ? {
@@ -1740,6 +1791,7 @@ export function MapPage() {
               peerSegmentId: record.peerSegmentId ?? undefined,
               peerCoreNumber: record.peerCoreNumber ?? undefined,
               peerSide: record.peerSide ?? undefined,
+              peerRoutePhysicalSide: record.peerRoutePhysicalSide ?? null,
               peerRouteMeasureM: record.peerRouteMeasureM == null
                 ? undefined
                 : Number(record.peerRouteMeasureM),
@@ -1976,6 +2028,7 @@ export function MapPage() {
         midspanConnections?: {
           nodeAssetId: string;
           routeMeasureM: number | null;
+          routePhysicalSide?: "toward_A" | "toward_B" | null;
           connection: CoreEndDraft;
         }[];
       }[];
@@ -2085,10 +2138,10 @@ export function MapPage() {
       ? [...filteredSegments, ...filteredImported]
       : filteredImported;
   useEffect(() => {
-    if (!catalogQuery.isPending && visibleAssets.length === 0 && selectedId) {
+    if (!catalogQuery.isPending && visibleAssets.length === 0 && selectedId && selectedId !== linkedCableId) {
       setSelectedId("");
     }
-  }, [catalogQuery.isPending, visibleAssets.length, selectedId]);
+  }, [catalogQuery.isPending, linkedCableId, visibleAssets.length, selectedId]);
   const catalogPageCount = Math.max(
     1,
     Math.ceil(
@@ -3165,10 +3218,10 @@ export function MapPage() {
       duration: 1200,
     });
     setAssetPage(1);
-    setSelectedId("");
+    setSelectedId((current) => current === linkedCableId ? current : "");
     setAssetPopup(null);
     setAssetChoices(null);
-  }, [mapReady, provinceCode, provinces]);
+  }, [linkedCableId, mapReady, provinceCode, provinces]);
   useEffect(() => {
     (
       map.current?.getSource("network-shapes") as GeoJSONSource | undefined
@@ -5100,6 +5153,12 @@ export function MapPage() {
               </div>
             )}
           <div className="segment-detail">
+            {linkedCableId && selectedId === linkedCableId && !selectedSegment && (
+              <p role="status">
+                {linkedCableQuery.isPending ? "Memuat kabel terkait…" :
+                  linkedCableQuery.isError ? "Detail kabel terkait gagal dimuat." : "Kabel terkait tidak ditemukan."}
+              </p>
+            )}
             <div className="segment-detail-toolbar">
               <div className="detail-label">
                 {selectedSegment
@@ -5270,7 +5329,7 @@ export function MapPage() {
                       Nama kabel belum sesuai pola standar.
                     </div>
                   )}
-                <details className="core-list-details" open>
+                <details className="core-list-details" open ref={coreDetailsRef} style={{ scrollMarginTop: "7rem" }}>
                   <summary>
                     Status dan rincian {selectedSegment.totalCores} core
                   </summary>
@@ -5426,9 +5485,10 @@ export function MapPage() {
                                     status: change.status,
                                     endConnections: change.endConnections,
                                     midspanConnections: change.midspanConnections?.map(
-                                      ({ nodeAssetId, routeMeasureM, connection }) => ({
+                                      ({ nodeAssetId, routeMeasureM, routePhysicalSide, connection }) => ({
                                         nodeAssetId,
                                         routeMeasureM,
+                                        routePhysicalSide,
                                         connection,
                                       })
                                     ),
@@ -5501,6 +5561,7 @@ export function MapPage() {
                                   peerSegmentId: saved.peerSegmentId ?? undefined,
                                   peerCoreNumber: saved.peerCoreNumber ?? undefined,
                                   peerSide: saved.peerSide ?? undefined,
+                                  peerRoutePhysicalSide: saved.peerRoutePhysicalSide ?? null,
                                   peerRouteMeasureM: saved.peerRouteMeasureM == null
                                     ? undefined
                                     : Number(saved.peerRouteMeasureM),
@@ -5543,6 +5604,7 @@ export function MapPage() {
                                 draftId: record.id,
                                 nodeAssetId: record.nodeAssetId,
                                 routeMeasureM: Number(record.routeMeasureM),
+                                routePhysicalSide: record.routePhysicalSide ?? null,
                                 connection:
                                   record.connectionType === "splice"
                                     ? {
@@ -5550,6 +5612,7 @@ export function MapPage() {
                                         peerSegmentId: record.peerSegmentId ?? undefined,
                                         peerCoreNumber: record.peerCoreNumber ?? undefined,
                                         peerSide: record.peerSide ?? undefined,
+                                        peerRoutePhysicalSide: record.peerRoutePhysicalSide ?? null,
                                         peerRouteMeasureM: record.peerRouteMeasureM == null
                                           ? undefined
                                           : Number(record.peerRouteMeasureM),
@@ -5619,7 +5682,6 @@ export function MapPage() {
                                 </div>
                                 <details
                                   className="core-end-connections-details"
-                                  hidden
                                   onToggle={(event) => {
                                     const isOpen = event.currentTarget.open;
                                     setExpandedCoreConnections((current) => ({
@@ -5824,6 +5886,7 @@ export function MapPage() {
                                                       updateDraft({
                                                         nodeAssetId: node?.id ?? "",
                                                         routeMeasureM: node ? Number(node.routeMeasureM) : null,
+                                                        routePhysicalSide: null,
                                                         connection: null,
                                                       });
                                                     }}
@@ -5843,6 +5906,24 @@ export function MapPage() {
                                                   )}
                                                 </div>
                                                 <div className="core-midspan-connection">
+                                                  <label htmlFor={`core-${core.coreNumber}-midspan-${draft.draftId}-physical-side`}>
+                                                    Sisi core yang tersambung
+                                                  </label>
+                                                  <select
+                                                    className="form-select form-select-sm"
+                                                    disabled={!draft.nodeAssetId || core.status === "Booked"}
+                                                    id={`core-${core.coreNumber}-midspan-${draft.draftId}-physical-side`}
+                                                    value={draft.routePhysicalSide ?? ""}
+                                                    onChange={(event) => updateDraft({
+                                                      routePhysicalSide: event.target.value === "toward_A" || event.target.value === "toward_B"
+                                                        ? event.target.value
+                                                        : null,
+                                                    })}
+                                                  >
+                                                    <option value="">Belum diketahui</option>
+                                                    <option value="toward_A">Sisi menuju ujung A kabel ini</option>
+                                                    <option value="toward_B">Sisi menuju ujung B kabel ini</option>
+                                                  </select>
                                                   <label htmlFor={`core-${core.coreNumber}-midspan-${draft.draftId}-type`}>
                                                     Sambungan di titik ini
                                                   </label>

@@ -1,3 +1,4 @@
+import { prepareAnalysisBookings, segmentBookingDraft, type AnalysisBookingDraft } from "../core-booking/analysisBookingDraft";
 import { notify } from "../../components/Snackbar";
 import { formatDistance } from "../../lib/format";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -113,6 +114,8 @@ export function BulkAnalysisPage() {
   const [pageSize, setPageSize] = useState(5);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [bookingSelection, setBookingSelection] = useState<{ jobId: string; rows: Record<number, AnalysisBookingDraft> }>({ jobId, rows: {} });
+  const bookingDrafts = bookingSelection.jobId === jobId ? Object.values(bookingSelection.rows) : [];
   const [selectedRowNumber, setSelectedRowNumber] = useState<number | null>(
     null
   );
@@ -512,6 +515,10 @@ export function BulkAnalysisPage() {
         const plan = row.result
           ? resultForRoute(row.result, routeId).terminationPlan
           : undefined;
+        const draft = row.status === "OK" ? segmentBookingDraft(
+          row.address, row.result?.network ?? row.network,
+          row.result?.terminationPlan?.requirement?.requiredCores
+        ) : null;
         const canSubmitSurvey =
           row.status === "OK" &&
           validCoordinates &&
@@ -523,6 +530,23 @@ export function BulkAnalysisPage() {
             className="bulk-row-actions"
             onClick={(event) => event.stopPropagation()}
           >
+            {draft && (
+              <label className="d-flex align-items-center gap-2">
+                <input className="form-check-input" type="checkbox"
+                  checked={bookingSelection.jobId === jobId && Boolean(bookingSelection.rows[row.row])}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setBookingSelection((current) => {
+                      const rows = current.jobId === jobId ? { ...current.rows } : {};
+                      if (checked) rows[row.row] = draft;
+                      else delete rows[row.row];
+                      return { jobId, rows };
+                    });
+                  }}
+                />
+                Pilih untuk booking
+              </label>
+            )}
             {canSubmitSurvey && plan && jobQuery.data?.historyId ? (
               <SubmitSurveyButton
                 compact
@@ -809,6 +833,13 @@ export function BulkAnalysisPage() {
                 </select>
               </div>
             </div>
+            {bookingDrafts.length > 0 && (
+              <div className="px-3 pb-3">
+                <button className="btn btn-outline-primary" type="button" onClick={() => prepareAnalysisBookings(bookingDrafts)}>
+                  Siapkan booking ({bookingDrafts.length})
+                </button>
+              </div>
+            )}
             {selectedRow && (
               <div className="selected-location-bar" role="status">
                 <span>
