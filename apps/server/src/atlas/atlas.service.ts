@@ -64,6 +64,9 @@ const assetImportId = `COALESCE(a.attributes->>'__atlasImportId', (SELECT legacy
   WHERE legacy.action='NETWORK_IMPORTED' AND legacy.entity_type='NETWORK_IMPORT'
     AND legacy.details->>'source'='kml/kmz' AND legacy.created_at=a.created_at AND a.source='kml'
   ORDER BY legacy.id LIMIT 1))`;
+const assetCompany = `COALESCE(NULLIF(btrim(a.attributes->>'Company'),''),NULLIF(btrim(a.attributes->>'company'),''),
+  CASE WHEN upper(package_import.file_name) ~ '^RTFTTH_[A-Z0-9]+_' THEN
+    substring(upper(package_import.file_name) FROM '^RTFTTH_([^_]+)_') END)`;
 const provinceMatch = (provinceParam: number) =>
   `a.attributes->>'__atlasProvinceCode'=$${provinceParam}`;
 type RegionName = {
@@ -435,6 +438,9 @@ export class AtlasService {
       const image = body.image ?? survey.findings.image ?? "";
       let imageLatitude = String(survey.findings.imageLatitude ?? "");
       let imageLongitude = String(survey.findings.imageLongitude ?? "");
+      let imageLocationSource = String(
+        survey.findings.imageLocationSource ?? ""
+      );
       if (typeof image !== "string") {
         throw new BadRequestException({
           message: "Gambar survei tidak valid.",
@@ -474,27 +480,49 @@ export class AtlasService {
         if (image !== survey.findings.image) {
           const location = await gps(data).catch(() => undefined);
           if (
-            !location ||
-            !Number.isFinite(location.latitude) ||
-            !Number.isFinite(location.longitude) ||
-            Math.abs(location.latitude) > 90 ||
-            Math.abs(location.longitude) > 180
+            location &&
+            Number.isFinite(location.latitude) &&
+            Number.isFinite(location.longitude) &&
+            Math.abs(location.latitude) <= 90 &&
+            Math.abs(location.longitude) <= 180
           ) {
-            throw new BadRequestException({
-              message:
-                "Foto harus memiliki koordinat GPS. Aktifkan lokasi pada kamera dan unggah foto asli.",
-            });
+            imageLatitude = String(location.latitude);
+            imageLongitude = String(location.longitude);
+            imageLocationSource = "EXIF";
+          } else {
+            const submittedLatitude = String(body.imageLatitude ?? "").trim();
+            const submittedLongitude = String(body.imageLongitude ?? "").trim();
+            const latitude = Number(submittedLatitude);
+            const longitude = Number(submittedLongitude);
+            if (
+              body.imageLocationSource !== "OCR" ||
+              body.imageLocationConfirmed !== true ||
+              !submittedLatitude ||
+              !submittedLongitude ||
+              !Number.isFinite(latitude) ||
+              !Number.isFinite(longitude) ||
+              Math.abs(latitude) > 90 ||
+              Math.abs(longitude) > 180
+            ) {
+              throw new BadRequestException({
+                message:
+                  "Foto harus memiliki GPS EXIF atau koordinat hasil OCR yang valid dan dikonfirmasi.",
+              });
+            }
+            imageLatitude = String(latitude);
+            imageLongitude = String(longitude);
+            imageLocationSource = "OCR";
           }
-          imageLatitude = String(location.latitude);
-          imageLongitude = String(location.longitude);
         }
       } else {
         imageLatitude = "";
         imageLongitude = "";
+        imageLocationSource = "";
       }
       findings.image = image;
       findings.imageLatitude = imageLatitude;
       findings.imageLongitude = imageLongitude;
+      findings.imageLocationSource = imageLocationSource;
       if (
         ["REVIEW", "VERIFIED"].includes(status) &&
         ["connection", "route", "length", "capacity", "evidence"].some(
@@ -795,7 +823,17 @@ export class AtlasService {
             WHERE ${assetImportId}=l.entity_id
           ) company
           WHERE company.name IS NOT NULL
-        ), '[]'::jsonb) AS companies,
+        ), CASE
+          WHEN upper(l.details->>'fileName') ~ '^RTFTTH_[A-Z0-9]+_' THEN
+            jsonb_build_array(substring(upper(l.details->>'fileName') FROM '^RTFTTH_([^_]+)_'))
+          ELSE '[]'::jsonb
+        END) AS companies,
+        COALESCE((
+          SELECT jsonb_agg(DISTINCT a.attributes->>'__atlasProvinceCode' ORDER BY a.attributes->>'__atlasProvinceCode')
+          FROM network_assets a
+          WHERE ${assetImportId}=l.entity_id
+            AND NULLIF(a.attributes->>'__atlasProvinceCode','') IS NOT NULL
+        ), '[]'::jsonb) AS "provinceCodes",
         COALESCE((l.details->>'ftthFolderCount')::int, (
           SELECT count(DISTINCT array_to_string((string_to_array(a.attributes->>'folderPath', '/'))[1:p.ordinality], ' / '))::int
           FROM network_assets a
@@ -914,22 +952,6 @@ export class AtlasService {
       pageSize,
       total: countRows[0].total,
     };
-  }
-  async listDashboardSegments() {
-    const { rows } =
-      await this.db.query<AssetRecord>(`SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
-      a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
-      count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
-      count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
-      count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
-      NULL::text AS "geometryType",NULL::jsonb AS geometry,a.attributes,a.created_at AS "createdAt"
-      FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
-      WHERE a.asset_type='segment' GROUP BY a.id ORDER BY a.name,a.id LIMIT 8`);
-    const pattern = new RegExp((await this.getCableNamePattern()).pattern);
-    return rows.map((asset) => ({
-      ...asset,
-      nameValid: pattern.test(asset.name),
-    }));
   }
   async mapBounds(provinceCode?: string, importId?: string) {
     const provinceCondition = provinceMatch(1);
@@ -1240,7 +1262,8 @@ export class AtlasService {
     bounds: [number, number, number, number],
     zoom = 16,
     provinceCode?: string,
-    importId?: string
+    importId?: string,
+    company?: string
   ) {
     // Display geometry only; original geometry stays available for editing and exports.
     const tolerance = zoom >= 16 ? 0 : 360 / (512 * 2 ** zoom);
@@ -1253,12 +1276,22 @@ export class AtlasService {
       ST_AsGeoJSON(CASE WHEN $5::float8 > 0 AND a.source<>'kml' THEN ST_SimplifyPreserveTopology(a.geometry,$5::float8) ELSE a.geometry END,6)::json AS geometry,
       GeometryType(a.geometry) AS "geometryType",a.attributes,a.created_at AS "createdAt"
       FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+      LEFT JOIN LATERAL (
+        SELECT l.details->>'fileName' AS file_name
+        FROM audit_logs l
+        WHERE l.action='NETWORK_IMPORTED' AND l.entity_type='NETWORK_IMPORT'
+          AND l.details->>'source'='kml/kmz' AND l.entity_id=${assetImportId}
+        ORDER BY l.id LIMIT 1
+      ) package_import ON true
       WHERE a.geometry && ST_MakeEnvelope($1,$2,$3,$4,4326)
         AND ST_Intersects(a.geometry,ST_MakeEnvelope($1,$2,$3,$4,4326))
         AND ($6::text IS NULL OR ${provinceMatch(6)})
         AND ($7::text IS NULL OR ${assetImportId}=ANY(string_to_array($7, ',')))
+        AND ($8::text IS NULL OR CASE WHEN $8='__unassigned__'
+          THEN ${assetCompany} IS NULL
+          ELSE lower(${assetCompany})=lower($8) END)
       GROUP BY a.id ORDER BY a.name`,
-      [...bounds, tolerance, provinceCode ?? null, importId ?? null]
+      [...bounds, tolerance, provinceCode ?? null, importId ?? null, company ?? null]
     );
     const pattern = new RegExp((await this.getCableNamePattern()).pattern);
     return rows.map((asset) => ({
@@ -2780,19 +2813,103 @@ export class AtlasService {
       return { assetId, coreNumber, status: current[0].status };
     });
   }
-  async dashboard() {
-    const [assets, bookings, topSegments] = await Promise.all([
+  async dashboard(company?: string, page = 1, pageSize = 10) {
+    const selectedCompany = company?.trim() || null;
+    const unassignedCompany = selectedCompany === "__unassigned__";
+    const companyValue = unassignedCompany ? null : selectedCompany;
+    const safePage = Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1;
+    const safePageSize = Number.isFinite(pageSize)
+      ? Math.max(1, Math.min(50, Math.floor(pageSize)))
+      : 10;
+    const offset = (safePage - 1) * safePageSize;
+    const [assets, bookings, companyData] = await Promise.all([
       this.db.query(`SELECT (SELECT count(*)::int FROM network_assets WHERE asset_type='segment') AS segments,
        COALESCE((SELECT sum(total_cores)::int FROM network_assets WHERE asset_type='segment'),0) AS "totalCores",
        (SELECT count(*)::int FROM network_cores c JOIN network_assets a ON a.id=c.asset_id WHERE a.asset_type='segment' AND c.status='Used') AS "usedCores",
        (SELECT count(*)::int FROM network_cores c JOIN network_assets a ON a.id=c.asset_id WHERE a.asset_type='segment' AND c.status='Booked') AS "bookedCores"`),
       this.booking.listBookings(),
-      this.listDashboardSegments(),
+      this.db.query(
+        `WITH core_usage AS (
+          SELECT asset_id,
+            count(*) FILTER (WHERE status='Used')::int AS "usedCores",
+            count(*) FILTER (WHERE status='Booked')::int AS "bookedCores",
+            count(*) FILTER (WHERE status='Available')::int AS "idleCores"
+          FROM network_cores GROUP BY asset_id
+        ), base AS MATERIALIZED (
+          SELECT a.id,a.name,
+            COALESCE(NULLIF(btrim(a.area),''),NULLIF(btrim(a.attributes->>'Region'),''),NULLIF(btrim(a.attributes->>'region'),''),NULLIF(btrim(a.attributes->>'Wilayah'),''),NULLIF(btrim(a.attributes->>'wilayah'),''),NULLIF(btrim(a.attributes->>'Kota'),''),NULLIF(btrim(a.attributes->>'kota'),''),'Wilayah belum dicatat') AS area,
+            COALESCE(NULLIF(btrim(p.name),''),NULLIF(btrim(a.attributes->>'Province'),''),NULLIF(btrim(a.attributes->>'Provinsi'),''),'Provinsi belum dicatat') AS province,
+            a.cable_type AS "cableType",
+            ${assetCompany} AS company,
+            COALESCE(ST_Length(a.geometry::geography),0)::float8 AS "lengthMeters",
+            COALESCE(a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true',false) AS verified,
+            a.total_cores AS "totalCores",
+            CASE WHEN a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true' THEN COALESCE(c."usedCores",0) ELSE 0 END AS "usedCores",
+            CASE WHEN a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true' THEN COALESCE(c."bookedCores",0) ELSE 0 END AS "bookedCores",
+            CASE WHEN a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true' THEN COALESCE(c."idleCores",0) ELSE 0 END AS "idleCores"
+          FROM network_assets a
+          LEFT JOIN indonesia_provinces p ON p.code=a.attributes->>'__atlasProvinceCode'
+          LEFT JOIN core_usage c ON c.asset_id=a.id
+          LEFT JOIN LATERAL (
+            SELECT l.details->>'fileName' AS file_name
+            FROM audit_logs l
+            WHERE l.action='NETWORK_IMPORTED' AND l.entity_type='NETWORK_IMPORT'
+              AND l.details->>'source'='kml/kmz' AND l.entity_id=${assetImportId}
+            ORDER BY l.id LIMIT 1
+          ) package_import ON true
+          WHERE a.asset_type='segment'
+        ), company_totals AS (
+          SELECT company,count(*)::int AS "segmentCount",sum("lengthMeters")::float8 AS "lengthMeters"
+          FROM base GROUP BY company
+        ), filtered AS MATERIALIZED (
+          SELECT * FROM base
+          WHERE CASE
+            WHEN $1::boolean THEN company IS NULL
+            WHEN $2::text IS NULL THEN true
+            ELSE lower(company)=lower($2)
+          END
+        ), area_totals AS (
+          SELECT area,province,count(*)::int AS "segmentCount",sum("lengthMeters")::float8 AS "lengthMeters"
+          FROM filtered GROUP BY area,province
+        )
+        SELECT
+          (SELECT count(*)::int FROM company_totals WHERE company IS NOT NULL) AS "companyCount",
+          COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'value',COALESCE(company,'__unassigned__'),
+            'name',COALESCE(company,'Tanpa perusahaan'),
+            'segmentCount',"segmentCount",
+            'lengthMeters',"lengthMeters"
+          ) ORDER BY company NULLS LAST) FROM company_totals),'[]'::jsonb) AS companies,
+          (SELECT jsonb_build_object(
+            'segmentCount',count(*)::int,
+            'lengthMeters',COALESCE(sum("lengthMeters"),0)::float8,
+            'provinceCount',count(DISTINCT NULLIF(province,'Provinsi belum dicatat'))::int,
+            'areaCount',count(DISTINCT NULLIF(area,'Wilayah belum dicatat'))::int,
+            'totalCores',COALESCE(sum("totalCores"),0)::int,
+            'verifiedCores',COALESCE(sum("totalCores") FILTER (WHERE verified),0)::int,
+            'unverifiedCores',COALESCE(sum("totalCores") FILTER (WHERE NOT verified),0)::int,
+            'usedCores',COALESCE(sum("usedCores"),0)::int,
+            'bookedCores',COALESCE(sum("bookedCores"),0)::int,
+            'idleCores',COALESCE(sum("idleCores"),0)::int
+          ) FROM filtered) AS "companySummary",
+          COALESCE((SELECT jsonb_agg(jsonb_build_object(
+            'area',area,'province',province,'segmentCount',"segmentCount",'lengthMeters',"lengthMeters"
+          ) ORDER BY "segmentCount" DESC,"lengthMeters" DESC,area)
+            FROM (SELECT * FROM area_totals ORDER BY "segmentCount" DESC,"lengthMeters" DESC,area LIMIT 8) areas),'[]'::jsonb) AS regions,
+          (SELECT count(*)::int FROM filtered) AS "segmentTotal",
+          COALESCE((SELECT jsonb_agg(to_jsonb(segments)) FROM (
+            SELECT id,name,area,province,"cableType","lengthMeters","totalCores","usedCores","bookedCores","idleCores"
+            FROM filtered ORDER BY "lengthMeters" DESC,name LIMIT $3 OFFSET $4
+          ) segments),'[]'::jsonb) AS "segmentItems"`,
+        [unassignedCompany, companyValue, safePageSize, offset]
+      ),
     ]);
     return {
       ...assets.rows[0],
       recentBookings: bookings.slice(0, 4),
-      topSegments,
+      ...companyData.rows[0],
+      page: safePage,
+      pageSize: safePageSize,
       waitingCount: bookings.filter((item) => item.status === "Waiting List")
         .length,
     };

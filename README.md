@@ -68,7 +68,9 @@ docker volume create uptime-kuma
 docker compose -f deploy/compose.uptime-kuma.yaml up -d
 ```
 
-Panel hanya mendengarkan di localhost server. Dari komputer operator, buka tunnel SSH lalu akses <http://localhost:3001>:
+Panel tersedia di <https://kuma.110-239-80-32.sslip.io/> melalui frontend Nginx dan dilindungi autentikasi HTTP tambahan sebelum login Uptime Kuma. File password hash di server disimpan di `/opt/uptime-kuma/auth/.htpasswd`; direktori tersebut dipasang ke frontend melalui `KUMA_AUTH_DIR`. Gunakan kata sandi kuat yang berbeda untuk kedua login dan aktifkan 2FA. Frontend memakai sertifikat untuk hostname tersebut dan server saat ini memuat ulang Nginx melalui hook Certbot.
+
+Alternatifnya, panel tetap mendengarkan di localhost server. Dari komputer operator, buka tunnel SSH lalu akses <http://localhost:3001>:
 
 ```sh
 ssh -N -L 3001:127.0.0.1:3001 root@110.239.80.32

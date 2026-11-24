@@ -1,3 +1,4 @@
+import { ApiUnauthorizedResponse, ApiForbiddenResponse } from "@nestjs/swagger";
 import type { IncomingMessage } from "node:http";
 import {
   BadRequestException,
@@ -8,6 +9,8 @@ import {
   Post,
   Req,
 } from "@nestjs/common";
+import { ApiBody, ApiOperation } from "@nestjs/swagger";
+import { CreateUserDto } from "../atlas/api.dto";
 import { AuthService } from "./auth.service";
 
 @Controller()
@@ -15,6 +18,8 @@ export class AuthController {
   constructor(@Inject(AuthService) private readonly authService: AuthService) {}
 
   @Get("me")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async me(@Req() request: IncomingMessage) {
     const user = await this.authService.requireUser(request);
     return {
@@ -26,14 +31,13 @@ export class AuthController {
   }
 
   @Post("users")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiOperation({ summary: "Buat akun pengguna (admin)" })
+  @ApiBody({ type: CreateUserDto })
   async createUser(
     @Req() request: IncomingMessage,
-    @Body() body: {
-      name?: string;
-      email?: string;
-      password?: string;
-      role?: string;
-    }
+    @Body() body: CreateUserDto
   ) {
     const actor = await this.authService.requireAdmin(request);
     try {

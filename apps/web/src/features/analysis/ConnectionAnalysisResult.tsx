@@ -12,6 +12,7 @@ import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { useEffect, useRef, useState } from "react";
 import { DetailTable } from "../../components/DetailTable";
 import { DataTableShell } from "../../components/DataTable";
+import { TablePagination } from "../../components/TablePagination";
 import { api, type NetworkAsset, postJson } from "../../lib/api";
 import {
   addAtlasMapIcons,
@@ -421,9 +422,12 @@ export function ConnectionAnalysisResult({
   result: ConnectionResult;
 }) {
   const [selectedRouteId, setSelectedRouteId] = useState<"A" | "B">("A");
+  const [legPage, setLegPage] = useState(1);
+  const [legPageSize, setLegPageSize] = useState(5);
   const route =
     result.routes?.find((item) => item.id === selectedRouteId) ??
     result.routes?.[0];
+  useEffect(() => setLegPage(1), [route?.id]);
   if (!route) {
     return (
       <section aria-label="Hasil koneksi">
@@ -440,6 +444,10 @@ export function ConnectionAnalysisResult({
     );
   }
   const gaps = [...(route.terminalLinks ?? []), ...(route.roadSnapGaps ?? [])];
+  const visibleLegs = route.legs.slice(
+    (legPage - 1) * legPageSize,
+    legPage * legPageSize
+  );
   const uncertain =
     (route.unverifiedGapMeters ?? 0) > 0 ||
     route.legs.some(
@@ -540,7 +548,7 @@ export function ConnectionAnalysisResult({
             </tr>
           </thead>
           <tbody>
-            {route.legs.map((leg, index) => (
+            {visibleLegs.map((leg, index) => (
               <tr
                 key={`${leg.kind}-${leg.name.replace(/^A → /u, "Titik lokasi 1 → ").replace(/→ B$/u, "→ Titik lokasi 2")}-${JSON.stringify(leg.geometry.coordinates)}`}
               >
@@ -565,6 +573,14 @@ export function ConnectionAnalysisResult({
           </tbody>
         </table>
       </DataTableShell>
+      <TablePagination
+        label="ruas rute"
+        onPageChange={setLegPage}
+        onPageSizeChange={(size) => { setLegPageSize(size); setLegPage(1); }}
+        page={legPage}
+        pageSize={legPageSize}
+        total={route.legs.length}
+      />
       {result.historyId && (
         <ConnectionSurvey
           historyId={result.historyId}

@@ -126,6 +126,7 @@ services:
     volumes:
       - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
       - ./var/certbot:/var/www/certbot:ro
+      - ${KUMA_AUTH_DIR:-/opt/uptime-kuma/auth}:/etc/nginx/kuma:ro
     depends_on:
       backend:
         condition: service_healthy

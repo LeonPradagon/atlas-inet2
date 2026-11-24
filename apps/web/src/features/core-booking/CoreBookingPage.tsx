@@ -4,7 +4,7 @@ import { assetDetailTitle } from "../map/assetDetailTitle";
 import { DataTableShell } from "../../components/DataTable";
 import { ModalDialog } from "../../components/ModalDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearch } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
@@ -17,12 +17,15 @@ import {
 } from "../../lib/api";
 import { confirmAction } from "../../lib/dialogs";
 
-const bookingPageSize = 20;
-
 type EndpointNames = {
   endpointNames: Partial<Record<"A" | "B", string>> | null;
   nearbyEndpointNames?: Partial<Record<"A" | "B", string>> | null;
 };
+type BookingPrice = { name: string; unit: string; price: number };
+
+function rupiahFromCents(cents: number) {
+  return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cents / 100);
+}
 
 function endpointLabel(segment: EndpointNames | undefined, side: "A" | "B") {
   const linked = segment?.endpointNames?.[side];
@@ -55,11 +58,16 @@ export function CoreBookingPage() {
     queryKey: ["booking-duration"],
     queryFn: () => api<{ days: number }>("/settings/booking-duration"),
   });
+  const pricesQuery = useQuery({
+    queryKey: ["booking-prices"],
+    queryFn: () => api<{ items: BookingPrice[] }>("/settings/booking-prices"),
+  });
   const bookingDays = duration?.days ?? 30;
   const [newDuration, setNewDuration] = useState(30);
   const [editDuration, setEditDuration] = useState(false);
   const [filter, setFilter] = useState<"Semua" | Booking["status"]>("Semua");
   const [page, setPage] = useState(1);
+  const [bookingPageSize, setBookingPageSize] = useState(5);
   const {
     data: bookings = [],
     isPending,
@@ -178,6 +186,10 @@ export function CoreBookingPage() {
   const bookableSegments = segmentsQuery.data ?? [];
   const segmentById = new Map(bookableSegments.map((segment) => [segment.id, segment]));
   const selectedSegments = bookableSegments.filter((segment) => selectedSegmentIds.includes(segment.id));
+  const corePriceItems = (pricesQuery.data?.items ?? []).filter((item) => item.unit.trim().toLowerCase() === "core");
+  const coreRateCents = corePriceItems.reduce((sum, item) => sum + Math.round(item.price * 100), 0);
+  const selectedCoreCount = selectedSegments.reduce((sum, segment) => sum + (segmentCores[segment.id] ?? 1), 0);
+  const estimatedBookingCents = coreRateCents * selectedCoreCount;
   const needsWaitingList = selectedSegments.some((segment) => (segmentCores[segment.id] ?? 1) > segment.idleCores);
   const bookedCount = bookings.filter(
     (item) => item.status === "Booked"
@@ -535,6 +547,7 @@ export function CoreBookingPage() {
           <TablePagination
             label="booking"
             onPageChange={setPage}
+            onPageSizeChange={(size) => { setBookingPageSize(size); setPage(1); }}
             page={page}
             pageSize={bookingPageSize}
             total={filtered.length}
@@ -651,6 +664,23 @@ export function CoreBookingPage() {
                   })}
                 </div>
               </fieldset>
+              {selectedSegments.length > 0 && (
+                <section aria-label="Perkiraan biaya booking" className="booking-price-estimate mt-3">
+                  <div className="booking-price-estimate-heading">
+                    <div><span>ESTIMASI BOOKING CORE</span><strong>{rupiahFromCents(estimatedBookingCents)}</strong></div>
+                    <small>{selectedCoreCount} core × {rupiahFromCents(coreRateCents)} per core</small>
+                  </div>
+                  {pricesQuery.isError ? <p role="status" className="mb-0">Tarif belum dapat dimuat, jadi estimasi belum tersedia.</p> : corePriceItems.length && coreRateCents > 0 ? (
+                    <div className="booking-price-breakdown">
+                      {selectedSegments.map((segment) => {
+                        const count = segmentCores[segment.id] ?? 1;
+                        return <div key={segment.id}><span>{segment.name} · {count} core</span><b>{rupiahFromCents(coreRateCents * count)}</b></div>;
+                      })}
+                      <small>Rumus: jumlah core yang diminta × total tarif dengan satuan “core” di Manajemen Harga. Tarif meter/unit tidak termasuk estimasi booking ini.</small>
+                    </div>
+                  ) : <p className="booking-price-missing mb-0">Tarif per core belum ditetapkan. <Link to="/harga-jaringan">Atur di Manajemen Harga</Link>.</p>}
+                </section>
+              )}
               <div className="row g-3">
                 <div className="col-12">
                   <label className="form-label" htmlFor="booking-pic-customer">

@@ -67,3 +67,8 @@ export class BookingDurationDto {
   })
   days?: number;
 }
+
+export class BookingPricesDto {
+  @ApiProperty({ type: "array", items: { type: "object" } })
+  items!: { name: string; unit: string; price: number }[];
+}

@@ -5,6 +5,7 @@ import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
 import { Pool } from "pg";
 import { AtlasService } from "./atlas/atlas.service";
 import { migrateDatabase } from "./database/migration-runner";
+import { addResponseSchemas } from "./openapi/responses";
 
 async function bootstrap() {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -95,7 +96,7 @@ async function bootstrap() {
   const swaggerConfig = new DocumentBuilder()
     .setTitle("ATLAS API")
     .setDescription(
-      "Dokumentasi API ATLAS. Login menggunakan email dan kata sandi untuk membuat sesi cookie; endpoint yang membutuhkan autentikasi menggunakan sesi tersebut. Beberapa skema request belum tersedia secara otomatis."
+      "Dokumentasi API ATLAS. Login menggunakan email dan kata sandi untuk membuat sesi cookie; endpoint yang membutuhkan autentikasi menggunakan sesi tersebut. Data impor dan hasil analisis yang dinamis dapat memiliki field tambahan."
     )
     .setVersion("0.1.0")
     .build();
@@ -121,7 +122,20 @@ async function bootstrap() {
           },
         },
         responses: {
-          200: { description: "Login berhasil; cookie sesi disimpan di browser." },
+          200: {
+            description: "Login berhasil; cookie sesi disimpan di browser.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    token: { type: "string" },
+                    user: { type: "object", additionalProperties: true },
+                  },
+                },
+              },
+            },
+          },
           401: { description: "Email atau kata sandi tidak valid." },
         },
       },
@@ -130,9 +144,22 @@ async function bootstrap() {
       post: {
         tags: ["Autentikasi"],
         summary: "Akhiri sesi",
-        responses: { 200: { description: "Logout berhasil." } },
+        responses: {
+          200: {
+            description: "Logout berhasil.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: { success: { type: "boolean" } },
+                },
+              },
+            },
+          },
+        },
       },
     };
+    addResponseSchemas(document);
     return document;
   });
   app.enableShutdownHooks();

@@ -1,3 +1,4 @@
+import { ApiUnauthorizedResponse, ApiForbiddenResponse } from "@nestjs/swagger";
 import type { IncomingMessage } from "node:http";
 import {
   BadRequestException,
@@ -16,7 +17,13 @@ import {
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
-import { ApiBody, ApiConsumes, ApiOperation } from "@nestjs/swagger";
+import {
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+} from "@nestjs/swagger";
 import { AuthService } from "../auth/auth.service";
 import {
   GeocodingService,
@@ -28,8 +35,27 @@ import { AtlasService } from "./atlas.service";
 import { BulkAnalysisService } from "./bulk-analysis.service";
 import { analyzeCoordinates } from "./address-analysis";
 import type { CoreRequirement } from "./termination-plan";
-import { ConnectionService, type ConnectionInput, validateConnectionInput } from "./connection.service";
-import { AnalyzeAddressDto, AssetImportDto } from "./api.dto";
+import {
+  ConnectionService,
+  validateConnectionInput,
+} from "./connection.service";
+import {
+  AnalyzeAddressDto,
+  AssetImportDto,
+  PointAssetDto,
+  FtthDesignDto,
+  UpdateAssetDto,
+  CoreMappingDto,
+  VerifyCoresDto,
+  SaveRelationsDto,
+  SetCoreStatusDto,
+  CableNamePatternDto,
+  AnalyzeConnectionDto,
+  ExpandBulkRowDto,
+  CreateSurveyDto,
+  UpdateSurveyDto,
+  RoutePreviewDto,
+} from "./api.dto";
 
 function queryValues(query: Record<string, unknown>, key: string) {
   const value = query[key];
@@ -188,12 +214,27 @@ export class AtlasController {
   ) {}
 
   @Get("dashboard")
-  async dashboard(@Req() req: IncomingMessage) {
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiQuery({ name: "company", type: String, required: false })
+  @ApiQuery({ name: "page", type: String, required: false })
+  @ApiQuery({ name: "pageSize", type: String, required: false })
+  async dashboard(
+    @Req() req: IncomingMessage,
+    @Query("company") company?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string
+  ) {
     await this.auth.requireUser(req);
-    return this.atlas.dashboard();
+    return this.atlas.dashboard(company, Number(page), Number(pageSize));
   }
 
   @Get("audit-trails")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiQuery({ name: "search", type: String, required: false })
+  @ApiQuery({ name: "limit", type: String, required: false })
+  @ApiQuery({ name: "kind", type: String, required: false })
   async auditTrails(
     @Req() req: IncomingMessage,
     @Query("search") search?: string,
@@ -205,24 +246,44 @@ export class AtlasController {
   }
 
   @Get("reports/network-usage")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async networkUsageReport(@Req() req: IncomingMessage) {
     await this.auth.requireUser(req);
     return this.atlas.networkUsageReport();
   }
 
   @Get("assets")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiQuery({ name: "search", type: String, required: false })
   async assets(@Req() req: IncomingMessage, @Query("search") search?: string) {
     await this.auth.requireUser(req);
     return this.atlas.listAssets(search ?? "");
   }
 
   @Get("assets/imports")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async assetImports(@Req() req: IncomingMessage) {
     await this.auth.requireUser(req);
     return this.atlas.listAssetImports();
   }
 
   @Get("assets/catalog")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiQuery({ name: "search", type: String, required: false })
+  @ApiQuery({ name: "page", type: String, required: false })
+  @ApiQuery({ name: "pageSize", type: String, required: false })
+  @ApiQuery({ name: "coreFilter", type: String, required: false })
+  @ApiQuery({ name: "provinceCode", type: String, required: false })
+  @ApiQuery({ name: "importId", type: String, required: false })
+  @ApiQuery({ name: "importIds", type: String, required: false })
+  @ApiQuery({ name: "assetType", type: String, required: false })
+  @ApiQuery({ name: "cableFamily", type: String, required: false })
+  @ApiQuery({ name: "cableStatus", type: String, required: false })
+  @ApiQuery({ name: "networkKind", type: String, required: false })
   async assetCatalog(
     @Req() req: IncomingMessage,
     @Query("search") search?: string,
@@ -303,18 +364,25 @@ export class AtlasController {
   }
 
   @Get("assets/provinces")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async mapProvinces(@Req() req: IncomingMessage) {
     await this.auth.requireUser(req);
     return this.atlas.listKmzProvinces();
   }
 
   @Get("assets/provinces/boundaries")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async mapProvinceBoundaries(@Req() req: IncomingMessage) {
     await this.auth.requireUser(req);
     return this.atlas.listKmzProvinceBoundaries();
   }
 
   @Get("assets/kml-icons/:id")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async kmzIcon(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
     if (!/^[a-f0-9]{64}$/u.test(id)) {
@@ -324,6 +392,11 @@ export class AtlasController {
   }
 
   @Get("assets/bounds")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiQuery({ name: "provinceCode", type: String, required: false })
+  @ApiQuery({ name: "importId", type: String, required: false })
+  @ApiQuery({ name: "importIds", type: String, required: false })
   async mapBounds(
     @Req() req: IncomingMessage,
     @Query("provinceCode") provinceCode?: string,
@@ -341,13 +414,22 @@ export class AtlasController {
   }
 
   @Get("assets/map")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiQuery({ name: "bbox", type: String, required: true })
+  @ApiQuery({ name: "zoom", type: String, required: false })
+  @ApiQuery({ name: "provinceCode", type: String, required: false })
+  @ApiQuery({ name: "importId", type: String, required: false })
+  @ApiQuery({ name: "importIds", type: String, required: false })
+  @ApiQuery({ name: "company", type: String, required: false })
   async mapAssets(
     @Req() req: IncomingMessage,
     @Query("bbox") bbox?: string,
     @Query("zoom") zoom?: string,
     @Query("provinceCode") provinceCode?: string,
     @Query("importId") importId?: string,
-    @Query("importIds") importIds?: string
+    @Query("importIds") importIds?: string,
+    @Query("company") company?: string
   ) {
     await this.auth.requireUser(req);
     const values = bbox?.split(",").map(Number) ?? [];
@@ -374,35 +456,30 @@ export class AtlasController {
       values as [number, number, number, number],
       level,
       provinceCode,
-      importFilter(importId, importIds)
+      importFilter(importId, importIds),
+      company?.trim() || undefined
     );
   }
 
   @Post("assets/point")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiBody({ type: PointAssetDto })
   async createPointAsset(
     @Req() req: IncomingMessage,
-    @Body() body: {
-      name?: unknown;
-      kind?: unknown;
-      longitude?: unknown;
-      latitude?: unknown;
-      area?: unknown;
-      poleHeight?: unknown;
-    }
+    @Body() body: PointAssetDto
   ) {
     const user = await this.auth.requireAdmin(req);
     return this.atlas.createPointAsset(body, user.id);
   }
 
   @Post("assets/ftth-design")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiBody({ type: FtthDesignDto })
   async saveFtthDesign(
     @Req() req: IncomingMessage,
-    @Body() body: {
-      features?: unknown;
-      area?: unknown;
-      sourceAnalysisId?: unknown;
-      sourceRow?: unknown;
-    }
+    @Body() body: FtthDesignDto
   ) {
     const user = await this.auth.requireAdmin(req);
     return this.atlas.saveFtthDesign(body?.features, user.id, body?.area, {
@@ -412,12 +489,19 @@ export class AtlasController {
   }
 
   @Get("assets/:id/geometry")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async assetGeometry(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
     return this.atlas.assetGeometry(id);
   }
 
   @Patch("assets/:id")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
+  @ApiBody({ type: UpdateAssetDto })
   async updateAsset(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
@@ -428,30 +512,48 @@ export class AtlasController {
   }
 
   @Get("assets/:id/cores")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async cores(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
     return this.atlas.listCores(id);
   }
 
   @Get("assets/:id/cores/destinations")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async coreDestinations(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
     return this.atlas.listCoreDestinations(id);
   }
 
   @Get("assets/:id/cores/endpoints")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async coreEndpoints(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
     return this.atlas.listCoreEndpoints(id);
   }
 
   @Get("assets/:id/cores/route-nodes")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async coreRouteNodes(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
     return this.atlas.listCoreRouteNodes(id);
   }
 
   @Get("assets/:id/cores/connection-peers")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
+  @ApiQuery({ name: "nodeAssetId", type: String, required: false })
+  @ApiQuery({ name: "side", type: String, required: false })
+  @ApiQuery({ name: "routeMeasureM", type: String, required: false })
   async coreConnectionPeers(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
@@ -469,24 +571,47 @@ export class AtlasController {
   }
 
   @Get("assets/:id/core-mappings")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async coreMappings(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
     return this.atlas.listCoreMappings(id);
   }
 
   @Post("assets/:id/core-mappings")
-  async createCoreMapping(@Req() req: IncomingMessage, @Param("id") id: string, @Body() body: Record<string, unknown>) {
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiParam({ name: "id", type: String })
+  @ApiBody({ type: CoreMappingDto })
+  async createCoreMapping(
+    @Req() req: IncomingMessage,
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>
+  ) {
     const user = await this.auth.requireAdmin(req);
     return this.atlas.createCoreMapping(id, body, user.id);
   }
 
   @Delete("assets/:id/core-mappings/:mappingId")
-  async deleteCoreMapping(@Req() req: IncomingMessage, @Param("id") id: string, @Param("mappingId") mappingId: string) {
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiParam({ name: "id", type: String })
+  @ApiParam({ name: "mappingId", type: String })
+  async deleteCoreMapping(
+    @Req() req: IncomingMessage,
+    @Param("id") id: string,
+    @Param("mappingId") mappingId: string
+  ) {
     const user = await this.auth.requireAdmin(req);
     return this.atlas.deleteCoreMapping(id, mappingId, user.id);
   }
 
   @Post("assets/:id/cores/verify")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
+  @ApiBody({ type: VerifyCoresDto })
   async verifyCoreUsage(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
@@ -541,27 +666,39 @@ export class AtlasController {
   }
 
   @Get("assets/:id/relations")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async relations(@Req() req: IncomingMessage, @Param("id") id: string) {
     await this.auth.requireUser(req);
     return this.atlas.listRelations(id);
   }
 
   @Put("assets/:id/relations")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiParam({ name: "id", type: String })
+  @ApiBody({ type: SaveRelationsDto })
   async saveRelations(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
-    @Body() body: { relations?: unknown }
+    @Body() body: SaveRelationsDto
   ) {
     const user = await this.auth.requireAdmin(req);
     return this.atlas.saveRelations(id, body?.relations, user.id);
   }
 
   @Patch("assets/:id/cores/:coreNumber")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
+  @ApiParam({ name: "coreNumber", type: String })
+  @ApiBody({ type: SetCoreStatusDto })
   async setCoreStatus(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
     @Param("coreNumber") coreNumber: string,
-    @Body() body: { status?: string }
+    @Body() body: SetCoreStatusDto
   ) {
     const user = await this.auth.requireUser(req);
     return this.atlas.setCoreStatus(
@@ -573,7 +710,11 @@ export class AtlasController {
   }
 
   @Post("assets/import")
-  @ApiOperation({ summary: "Impor aset dari KML atau KMZ (admin, maksimal 50 MB)" })
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiOperation({
+    summary: "Impor aset dari KML atau KMZ (admin, maksimal 50 MB)",
+  })
   @ApiConsumes("multipart/form-data")
   @ApiBody({ type: AssetImportDto })
   @UseInterceptors(
@@ -591,6 +732,8 @@ export class AtlasController {
   }
 
   @Post("assets/import/xlsx")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
   @ApiOperation({ summary: "Impor aset dari XLSX (admin, maksimal 10 MB)" })
   @ApiConsumes("multipart/form-data")
   @ApiBody({ type: AssetImportDto })
@@ -613,42 +756,66 @@ export class AtlasController {
   }
 
   @Get("settings/cable-name-pattern")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async cableNamePattern(@Req() req: IncomingMessage) {
     await this.auth.requireUser(req);
     return this.atlas.getCableNamePattern();
   }
 
   @Patch("settings/cable-name-pattern")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Akses hanya untuk ADMIN." })
+  @ApiBody({ type: CableNamePatternDto })
   async setCableNamePattern(
     @Req() req: IncomingMessage,
-    @Body() body: { pattern?: string }
+    @Body() body: CableNamePatternDto
   ) {
     const user = await this.auth.requireAdmin(req);
     return this.atlas.setCableNamePattern(String(body.pattern ?? ""), user.id);
   }
 
   @Get("notifications")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async notifications(@Req() req: IncomingMessage) {
     const user = await this.auth.requireUser(req);
     return this.atlas.notifications(user.id);
   }
 
   @Patch("notifications/:id/read")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async markRead(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
     return this.atlas.markNotificationRead(id, user.id);
   }
 
   @Post("analysis/connection")
-  async analyzeConnection(@Req() req: IncomingMessage, @Body() body: ConnectionInput) {
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiBody({ type: AnalyzeConnectionDto })
+  async analyzeConnection(
+    @Req() req: IncomingMessage,
+    @Body() body: AnalyzeConnectionDto
+  ) {
     const user = await this.auth.requireUser(req);
     const input = validateConnectionInput(body);
     const result = await this.connection!.analyze(input);
-    const historyId = await this.atlas.saveAnalysisHistory(user.id, "ADDRESS", result.address, { ...input, inputMode: "connection" }, result);
+    const historyId = await this.atlas.saveAnalysisHistory(
+      user.id,
+      "ADDRESS",
+      result.address,
+      { ...input, inputMode: "connection" },
+      result
+    );
     return { ...result, historyId };
   }
 
   @Post("analysis/address")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiBody({ type: AnalyzeAddressDto })
   async analyzeAddress(
     @Req() req: IncomingMessage,
@@ -769,6 +936,26 @@ export class AtlasController {
   }
 
   @Get("analysis/address/suggestions")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiQuery({ name: "q", type: String, required: false })
+  @ApiQuery({ name: "city", type: String, required: false })
+  @ApiQuery({ name: "district", type: String, required: false })
+  @ApiQuery({ name: "subdistrict", type: String, required: false })
+  @ApiQuery({ name: "postalCode", type: String, required: false })
+  @ApiQuery({ name: "province", type: String, required: false })
+  @ApiQuery({ name: "lat", type: String, required: false })
+  @ApiQuery({ name: "lon", type: String, required: false })
+  @ApiQuery({ name: "limit", type: String, required: false })
+  @ApiQuery({ name: "zoom", type: String, required: false })
+  @ApiQuery({ name: "location_bias_scale", type: String, required: false })
+  @ApiQuery({ name: "bbox", type: String, required: false })
+  @ApiQuery({ name: "dedupe", type: String, required: false })
+  @ApiQuery({ name: "lang", type: String, required: false })
+  @ApiQuery({ name: "layer", type: String, required: false })
+  @ApiQuery({ name: "include", type: String, required: false })
+  @ApiQuery({ name: "exclude", type: String, required: false })
+  @ApiQuery({ name: "osm_tag", type: String, required: false })
   async addressSuggestions(
     @Req() req: IncomingMessage,
     @Query() query: Record<string, unknown>
@@ -793,6 +980,10 @@ export class AtlasController {
   }
 
   @Get("analysis/address/reverse")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiQuery({ name: "longitude", type: String, required: true })
+  @ApiQuery({ name: "latitude", type: String, required: true })
   async reverseAddress(
     @Req() req: IncomingMessage,
     @Query("longitude") longitude?: string,
@@ -814,6 +1005,11 @@ export class AtlasController {
   }
 
   @Post("analysis/bulk")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiOperation({ summary: "Analisis file XLSX (maksimal 15 MB)" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({ type: AssetImportDto })
   @UseInterceptors(
     FileInterceptor("file", { limits: { fileSize: 15 * 1024 * 1024 } })
   )
@@ -870,6 +1066,11 @@ export class AtlasController {
   }
 
   @Post("analysis/bulk/jobs")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiOperation({ summary: "Analisis file XLSX (maksimal 15 MB)" })
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({ type: AssetImportDto })
   @UseInterceptors(
     FileInterceptor("file", { limits: { fileSize: 15 * 1024 * 1024 } })
   )
@@ -885,12 +1086,22 @@ export class AtlasController {
   }
 
   @Get("analysis/bulk/jobs/:id")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async bulkJobProgress(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
     return this.bulk.progress(user.id, id, user.role === "ADMIN");
   }
 
   @Get("analysis/bulk/jobs/:id/rows")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
+  @ApiQuery({ name: "page", type: String, required: false })
+  @ApiQuery({ name: "pageSize", type: String, required: false })
+  @ApiQuery({ name: "search", type: String, required: false })
+  @ApiQuery({ name: "status", type: String, required: false })
   async bulkJobRows(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
@@ -912,17 +1123,25 @@ export class AtlasController {
   }
 
   @Get("analysis/bulk/jobs/:id/map-points")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async bulkJobMapPoints(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
     return this.bulk.mapPoints(user.id, id, user.role === "ADMIN");
   }
 
   @Post("analysis/bulk/jobs/:id/rows/:row/expand")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
+  @ApiParam({ name: "row", type: String })
+  @ApiBody({ type: ExpandBulkRowDto })
   async expandBulkRow(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
     @Param("row") row: string,
-    @Body() body: { confirmed?: boolean }
+    @Body() body: ExpandBulkRowDto
   ) {
     const user = await this.auth.requireUser(req);
     if (body.confirmed !== true) {
@@ -937,12 +1156,20 @@ export class AtlasController {
   }
 
   @Post("analysis/bulk/jobs/:id/cancel")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async cancelBulkJob(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
     return this.bulk.cancel(user.id, id);
   }
 
   @Get("analysis/history")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiQuery({ name: "type", type: String, required: false })
+  @ApiQuery({ name: "page", type: String, required: false })
+  @ApiQuery({ name: "pageSize", type: String, required: false })
   async analysisHistory(
     @Req() req: IncomingMessage,
     @Query("type") type?: string,
@@ -981,27 +1208,28 @@ export class AtlasController {
   }
 
   @Get("surveys/candidates")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async surveyCandidates(@Req() req: IncomingMessage) {
     const user = await this.auth.requireUser(req);
     return this.atlas.surveyCandidates(user.id);
   }
 
   @Get("surveys")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async surveys(@Req() req: IncomingMessage) {
     const user = await this.auth.requireUser(req);
     return this.atlas.listSurveys(user.id, user.role === "ADMIN");
   }
 
   @Post("surveys")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiBody({ type: CreateSurveyDto })
   async createSurvey(
     @Req() req: IncomingMessage,
-    @Body() body: {
-      historyId?: string;
-      rowNumber?: number;
-      proposal?: unknown;
-      plan?: unknown;
-      routeId?: unknown;
-    }
+    @Body() body: CreateSurveyDto
   ) {
     const user = await this.auth.requireUser(req);
     return this.atlas.createSurvey(
@@ -1015,6 +1243,10 @@ export class AtlasController {
   }
 
   @Patch("surveys/:id")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
+  @ApiBody({ type: UpdateSurveyDto })
   async updateSurvey(
     @Req() req: IncomingMessage,
     @Param("id") id: string,
@@ -1025,6 +1257,9 @@ export class AtlasController {
   }
 
   @Get("analysis/history/:id")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async analysisHistoryDetail(
     @Req() req: IncomingMessage,
     @Param("id") id: string
@@ -1034,6 +1269,9 @@ export class AtlasController {
   }
 
   @Delete("analysis/history/:id")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiParam({ name: "id", type: String })
   async deleteAnalysisHistory(
     @Req() req: IncomingMessage,
     @Param("id") id: string
@@ -1048,14 +1286,25 @@ export class AtlasController {
     return this.analyzeCoordinates(longitude, latitude, address);
   }
 
-  private async analyzeCoordinates(...args: Parameters<typeof analyzeCoordinates> extends [unknown, unknown, ...infer Rest] ? Rest : never) {
+  private async analyzeCoordinates(
+    ...args: Parameters<typeof analyzeCoordinates> extends [
+      unknown,
+      unknown,
+      ...infer Rest,
+    ]
+      ? Rest
+      : never
+  ) {
     return analyzeCoordinates(this.atlas, this.routing, ...args);
   }
 
   @Post("routes/preview")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiBody({ type: RoutePreviewDto })
   async routePreview(
     @Req() req: IncomingMessage,
-    @Body() body: { coordinates?: unknown }
+    @Body() body: RoutePreviewDto
   ) {
     const user = await this.auth.requireUser(req);
     const points = this.parseRouteCoordinates(body?.coordinates);
@@ -1068,9 +1317,12 @@ export class AtlasController {
   }
 
   @Post("routes/preview-ftth")
+  @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
+  @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
+  @ApiBody({ type: RoutePreviewDto })
   async ftthRoutePreview(
     @Req() req: IncomingMessage,
-    @Body() body: { coordinates?: unknown }
+    @Body() body: RoutePreviewDto
   ) {
     const user = await this.auth.requireUser(req);
     const points = this.parseRouteCoordinates(body?.coordinates);

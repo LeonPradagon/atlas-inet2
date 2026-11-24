@@ -27,6 +27,7 @@ type SurveyChange = {
   survey: Survey;
   status: string;
   findings: Record<string, string>;
+  imageLocationConfirmed?: boolean;
 };
 type TerminationReference = {
   id: string;
@@ -34,6 +35,124 @@ type TerminationReference = {
   location: string;
   detail: string;
 };
+
+type PhotoCoordinates = { latitude: number; longitude: number };
+type CoordinateCandidate = {
+  value: number;
+  axis: "latitude" | "longitude" | null;
+};
+type PaddleOCREngine = Awaited<
+  ReturnType<typeof import("@paddleocr/paddleocr-js").PaddleOCR.create>
+>;
+const paddleOcrScoreThreshold = 0.85;
+let paddleOCREnginePromise: Promise<PaddleOCREngine> | undefined;
+
+function parseCoordinateText(text: string): PhotoCoordinates | null {
+  const candidates: CoordinateCandidate[] = [];
+  for (const match of text.matchAll(
+    /([+-]?\d{1,3})\s*[°º]\s*(\d{1,2})\s*['′’]\s*(\d{1,2}(?:[.,]\d+)?)\s*["″]?\s*([NSEW])?/giu
+  )) {
+    const degrees = Number(match[1]);
+    const minutes = Number(match[2]);
+    const seconds = Number(match[3].replace(",", "."));
+    const direction = match[4]?.toUpperCase();
+    if (minutes >= 60 || seconds >= 60) {
+      continue;
+    }
+    let value = Math.abs(degrees) + minutes / 60 + seconds / 3600;
+    if (degrees < 0 || direction === "S" || direction === "W") {
+      value *= -1;
+    }
+    candidates.push({
+      value,
+      axis:
+        direction === "N" || direction === "S"
+          ? "latitude"
+          : direction === "E" || direction === "W"
+            ? "longitude"
+            : null,
+    });
+  }
+  for (const match of text.matchAll(
+    /([+-]?\d{1,3}[.,]\d{3,})\s*°?\s*([NSEW])?/giu
+  )) {
+    let value = Number(match[1].replace(",", "."));
+    const direction = match[2]?.toUpperCase();
+    if (direction === "S" || direction === "W") {
+      value = -Math.abs(value);
+    } else if (direction === "N" || direction === "E") {
+      value = Math.abs(value);
+    }
+    candidates.push({
+      value,
+      axis:
+        direction === "N" || direction === "S"
+          ? "latitude"
+          : direction === "E" || direction === "W"
+            ? "longitude"
+            : null,
+    });
+  }
+  for (let index = 0; index < candidates.length - 1; index++) {
+    const first = candidates[index];
+    const second = candidates[index + 1];
+    let latitude: number;
+    let longitude: number;
+    if (first.axis === "latitude" && second.axis === "longitude") {
+      ({ value: latitude } = first);
+      ({ value: longitude } = second);
+    } else if (first.axis === "longitude" && second.axis === "latitude") {
+      ({ value: longitude } = first);
+      ({ value: latitude } = second);
+    } else if (first.axis === "latitude" || second.axis === "longitude") {
+      ({ value: latitude } = first);
+      ({ value: longitude } = second);
+    } else if (first.axis === "longitude" || second.axis === "latitude") {
+      ({ value: longitude } = first);
+      ({ value: latitude } = second);
+    } else if (Math.abs(first.value) <= 90) {
+      ({ value: latitude } = first);
+      ({ value: longitude } = second);
+    } else {
+      ({ value: longitude } = first);
+      ({ value: latitude } = second);
+    }
+    if (
+      Math.abs(latitude) <= 90 &&
+      Math.abs(longitude) <= 180
+    ) {
+      return { latitude, longitude };
+    }
+  }
+  return null;
+}
+
+async function readPhotoCoordinates(file: File) {
+  const { PaddleOCR } = await import("@paddleocr/paddleocr-js");
+  const enginePromise = (paddleOCREnginePromise ??= PaddleOCR.create({
+    lang: "en",
+    ocrVersion: "PP-OCRv6",
+    textRecScoreThresh: paddleOcrScoreThreshold,
+    worker: true,
+    ortOptions: { backend: "wasm", numThreads: 1 },
+  }));
+  let engine: PaddleOCREngine;
+  try {
+    engine = await enginePromise;
+  } catch (error) {
+    if (paddleOCREnginePromise === enginePromise) {
+      paddleOCREnginePromise = undefined;
+    }
+    throw error;
+  }
+  const [result] = await engine.predict(file);
+  return parseCoordinateText(
+    result?.items
+      .filter((item) => item.score >= paddleOcrScoreThreshold)
+      .map((item) => item.text)
+      .join(" ") ?? ""
+  );
+}
 
 const terminationReferenceColumns: readonly DataTableColumn<TerminationReference>[] =
   [
@@ -177,11 +296,12 @@ export function SurveysPage() {
   const client = useQueryClient();
   const [filter, setFilter] = useState("ALL");
   const [page, setPage] = useState(1);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(5);
   const [selected, setSelected] = useState<Survey | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [imageError, setImageError] = useState("");
   const [readingImage, setReadingImage] = useState(false);
+  const [confirmedOcrLocation, setConfirmedOcrLocation] = useState(false);
   const [isDraggingImage, setIsDraggingImage] = useState(false);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -217,6 +337,9 @@ export function SurveysPage() {
     imageReadId.current++;
     setImageError("");
     setReadingImage(false);
+    setConfirmedOcrLocation(
+      survey.findings?.imageLocationSource === "OCR"
+    );
     setIsDraggingImage(false);
     setImageFile(null);
     setSelected(survey);
@@ -230,12 +353,14 @@ export function SurveysPage() {
     const readId = ++imageReadId.current;
     setImageError("");
     setReadingImage(false);
+    setConfirmedOcrLocation(false);
     setImageFile(null);
     setForm((current) => ({
       ...current,
       image: "",
       imageLatitude: "",
       imageLongitude: "",
+      imageLocationSource: "",
     }));
     if (
       !["image/jpeg", "image/png", "image/webp"].includes(file.type) ||
@@ -255,26 +380,56 @@ export function SurveysPage() {
       if (readId !== imageReadId.current) {
         return;
       }
+      if (typeof reader.result !== "string") {
+        setImageError("Gambar tidak dapat dibaca.");
+        setReadingImage(false);
+        return;
+      }
       if (
-        !location ||
-        !Number.isFinite(location.latitude) ||
-        !Number.isFinite(location.longitude) ||
-        Math.abs(location.latitude) > 90 ||
-        Math.abs(location.longitude) > 180 ||
-        typeof reader.result !== "string"
+        location &&
+        Number.isFinite(location.latitude) &&
+        Number.isFinite(location.longitude) &&
+        Math.abs(location.latitude) <= 90 &&
+        Math.abs(location.longitude) <= 180
       ) {
-        setImageError(
-          "Foto tidak memiliki koordinat GPS. Aktifkan lokasi pada kamera dan pilih foto asli."
-        );
-      } else {
         setForm((current) => ({
           ...current,
           image: reader.result as string,
           imageLatitude: String(location.latitude),
           imageLongitude: String(location.longitude),
+          imageLocationSource: "EXIF",
         }));
+      } else {
+        try {
+          const coordinates = await readPhotoCoordinates(file);
+          if (readId !== imageReadId.current) {
+            return;
+          }
+          if (!coordinates) {
+            setImageError(
+              "OCR belum membaca koordinat dengan keyakinan minimal 85%. Gunakan foto dengan teks koordinat yang lebih jelas."
+            );
+          } else {
+            setForm((current) => ({
+              ...current,
+              image: reader.result as string,
+              imageLatitude: String(coordinates.latitude),
+              imageLongitude: String(coordinates.longitude),
+              imageLocationSource: "OCR",
+            }));
+          }
+          setConfirmedOcrLocation(false);
+        } catch {
+          if (readId === imageReadId.current) {
+            setImageError(
+              "OCR gagal membaca koordinat. Pastikan teks koordinat terlihat jelas pada foto."
+            );
+          }
+        }
       }
-      setReadingImage(false);
+      if (readId === imageReadId.current) {
+        setReadingImage(false);
+      }
     };
     reader.onerror = () => {
       if (readId === imageReadId.current) {
@@ -287,10 +442,15 @@ export function SurveysPage() {
   const update = useMutation({
     meta: { successNotice: "Perubahan survei berhasil disimpan.", errorNotice: "Tindakan gagal diproses." },
 
-    mutationFn: ({ survey, status, findings }: SurveyChange) =>
+    mutationFn: ({
+      survey,
+      status,
+      findings,
+      imageLocationConfirmed,
+    }: SurveyChange) =>
       api("/surveys/" + survey.id, {
         method: "PATCH",
-        data: { ...findings, status },
+        data: { ...findings, imageLocationConfirmed, status },
       }),
     onSuccess: async (_result, change) => {
       if (change.status === "IN_PROGRESS") {
@@ -424,6 +584,7 @@ export function SurveysPage() {
               )
             }
             label="Daftar survei"
+            pagination={false}
             rowKey={(survey: Survey) => survey.id}
             rows={visible}
           />
@@ -432,6 +593,7 @@ export function SurveysPage() {
           <TablePagination
             label="survei"
             onPageChange={setPage}
+            onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
             page={currentPage}
             pageSize={pageSize}
             total={filtered.length}
@@ -648,8 +810,8 @@ export function SurveysPage() {
                               : "Unggah foto bukti survei"}
                       </strong>
                       <span id="survey-image-help">
-                        JPG, PNG, atau WebP, maksimal 2 MB. Foto harus memiliki
-                        koordinat GPS.
+                        JPG, PNG, atau WebP, maksimal 2 MB. GPS EXIF atau
+                        koordinat desimal / DMS yang terbaca di foto diperlukan.
                       </span>
                       {(imageFile || form.image) && (
                         <span
@@ -726,7 +888,9 @@ export function SurveysPage() {
                     {form.imageLatitude && form.imageLongitude ? (
                       <span className="survey-image-gps">
                         <i aria-hidden="true" className="bi bi-geo-alt-fill" />
-                        Koordinat GPS terbaca
+                        {form.imageLocationSource === "OCR"
+                          ? "Koordinat terbaca dari teks foto (OCR)"
+                          : "Koordinat GPS terbaca dari metadata foto"}
                       </span>
                     ) : (
                       <span className="text-secondary">
@@ -738,6 +902,28 @@ export function SurveysPage() {
                         {form.imageLatitude}, {form.imageLongitude}
                       </span>
                     )}
+                    {form.imageLocationSource === "OCR" &&
+                      selected.status === "IN_PROGRESS" && (
+                        <div className="mt-3">
+                          <label className="form-check mt-2">
+                            <input
+                              checked={confirmedOcrLocation}
+                              className="form-check-input"
+                              onChange={(event) =>
+                                setConfirmedOcrLocation(event.target.checked)
+                              }
+                              type="checkbox"
+                            />
+                            <span className="form-check-label">
+                              Saya sudah memeriksa koordinat yang dibaca sistem.
+                            </span>
+                          </label>
+                          <small className="text-secondary">
+                            Koordinat OCR tidak dapat diedit. Sistem hanya
+                            menerima hasil dengan skor pembacaan minimal 85%.
+                          </small>
+                        </div>
+                      )}
                     {selected.status === "IN_PROGRESS" && (
                       <button
                         className="btn btn-sm btn-outline-danger mt-2"
@@ -751,7 +937,9 @@ export function SurveysPage() {
                             image: "",
                             imageLatitude: "",
                             imageLongitude: "",
+                            imageLocationSource: "",
                           }));
+                          setConfirmedOcrLocation(false);
                         }}
                         type="button"
                       >
@@ -769,12 +957,20 @@ export function SurveysPage() {
               {selected.status === "IN_PROGRESS" && (
                 <button
                   className="btn btn-outline-primary atlas-secondary-action"
-                  disabled={update.isPending || readingImage}
+                  disabled={
+                    update.isPending ||
+                    readingImage ||
+                    (form.imageLocationSource === "OCR" &&
+                      !confirmedOcrLocation)
+                  }
                   onClick={() =>
                     update.mutate({
                       survey: selected,
                       status: "REVIEW",
                       findings: form,
+                      imageLocationConfirmed:
+                        form.imageLocationSource !== "OCR" ||
+                        confirmedOcrLocation,
                     })
                   }
                   type="button"

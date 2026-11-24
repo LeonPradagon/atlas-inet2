@@ -5,6 +5,7 @@ import ExcelJS from "exceljs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DataTable, type DataTableColumn } from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
+import { TablePagination } from "../../components/TablePagination";
 import { api, postJson } from "../../lib/api";
 import { confirmAction } from "../../lib/dialogs";
 import { bulkJobStatusLabel } from "./bulkJobStatus";
@@ -109,6 +110,7 @@ export function BulkAnalysisPage() {
     () => new URLSearchParams(window.location.search).get("jobId") ?? ""
   );
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(5);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [selectedRowNumber, setSelectedRowNumber] = useState<number | null>(
@@ -140,14 +142,14 @@ export function BulkAnalysisPage() {
     "FAILED",
   ].includes(jobQuery.data?.status ?? "");
   const pageQuery = useQuery({
-    queryKey: ["bulk-job-rows", jobId, page, search, statusFilter],
+    queryKey: ["bulk-job-rows", jobId, page, pageSize, search, statusFilter],
     queryFn: () =>
       api<{ rows: AnalysisRow[]; total: number }>(
         "/analysis/bulk/jobs/" +
           jobId +
           "/rows?page=" +
           page +
-          "&pageSize=50&search=" +
+          "&pageSize=" + pageSize + "&search=" +
           encodeURIComponent(search) +
           "&status=" +
           encodeURIComponent(statusFilter)
@@ -831,6 +833,7 @@ export function BulkAnalysisPage() {
               columns={columns}
               density="compact"
               label="Hasil analisis massal"
+              pagination={false}
               onRowClick={(row) => selectResultRow(row.row)}
               rowAriaLabel={(row) => `Buka detail lokasi ${row.address}`}
               rowClassName={(row) => {
@@ -843,29 +846,14 @@ export function BulkAnalysisPage() {
               rowKey={(row) => String(row.row)}
               rows={rows}
             />
-            <div className="d-flex justify-content-between align-items-center">
-              <small>
-                Halaman {page} · {pageQuery.data?.total ?? 0} baris
-              </small>
-              <div className="btn-group">
-                <button
-                  className="btn btn-outline-secondary"
-                  disabled={page === 1}
-                  onClick={() => setPage((p) => p - 1)}
-                  type="button"
-                >
-                  Sebelumnya
-                </button>
-                <button
-                  className="btn btn-outline-secondary"
-                  disabled={page * 50 >= (pageQuery.data?.total ?? 0)}
-                  onClick={() => setPage((p) => p + 1)}
-                  type="button"
-                >
-                  Berikutnya
-                </button>
-              </div>
-            </div>
+            <TablePagination
+              label="baris hasil"
+              onPageChange={setPage}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+              page={page}
+              pageSize={pageSize}
+              total={pageQuery.data?.total ?? 0}
+            />
             {selectedRow &&
               selectedRowResult &&
               Number.isFinite(selectedRow.latitude) &&

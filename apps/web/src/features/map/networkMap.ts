@@ -118,10 +118,7 @@ export function legendStyle(asset: NetworkAsset) {
     rule = kmzLegend.find(
       (entry) =>
         Boolean(entry.iconUrl) === (asset.assetType !== "segment") &&
-        entry.folder !== "-" &&
-        entry.folder
-          .split("/")
-          .some((folder) => normalize(folder) === normalize(value))
+        entry.aliases.some((alias) => normalize(alias) === normalize(value))
     );
     if (rule) {
       break;
@@ -162,20 +159,23 @@ export function legendStyle(asset: NetworkAsset) {
       asset.totalCores ||
       Number(
         text.match(
-          /(?:^|[^0-9])(288|144|96|48|32|24|16|12|8)\s*(?:C(?:ORE)?S?|PORT)(?:$|[^A-Z])/iu
+          /(?:^|[^0-9])(576|288|144|96|48|32|24|16|12|8|6|4|2|1)\s*(?:C(?:ORE)?S?|PORT)(?:$|[^A-Z])/iu
         )?.[1] ?? 0
       );
     const candidates = kmzLegend.filter((entry) => entry.category === category);
     rule =
       candidates.find(
         (entry) =>
-          capacity > 0 && entry.name.match(/\d+/u)?.[0] === String(capacity)
+          capacity > 0 &&
+          (entry.cores?.includes(capacity) ||
+            entry.name.match(/\d+/u)?.[0] === String(capacity))
       ) ?? (candidates.length === 1 ? candidates[0] : undefined);
   }
   const isLine = asset.assetType === "segment";
   return {
     category: rule?.category ?? category,
     color: rule?.color,
+    opacity: rule?.opacity ?? 1,
     size: rule?.size ?? 1,
     labelSize: rule?.labelSize ?? 0,
     cableLineWidth: isLine ? rule?.size : undefined,
@@ -336,7 +336,7 @@ export const assetFeatures = (
                         ? "#ffffff"
                         : "#3454d1")
               ),
-            lineOpacity: style?.lineOpacity ?? 1,
+            lineOpacity: style?.lineOpacity ?? legend.opacity,
             lineWidth:
               style?.lineWidth ??
               legend.cableLineWidth ??
@@ -353,6 +353,7 @@ export const assetFeatures = (
                         : 3),
             fillColor:
               style?.fillColor ??
+              legend.color ??
               (item.source === "kml" ? "#ffffff" : "#3454d1"),
             fillOpacity:
               style?.fillOpacity ?? (item.source === "kml" ? 1 : 0.25),
@@ -362,7 +363,7 @@ export const assetFeatures = (
               ((item.geometry.type !== "Polygon" &&
                 item.geometry.type !== "MultiPolygon") ||
                 item.source === "kml"),
-            iconColor: style?.iconColor ?? "#ffffff",
+            iconColor: style?.iconColor ?? legend.color ?? "#ffffff",
             markerColor:
               style?.iconColor ??
               (
@@ -380,7 +381,8 @@ export const assetFeatures = (
               "#3454d1",
             isManagedFtth: item.attributes?.source === "ftth-design",
             iconOpacity: style?.iconOpacity ?? 1,
-            iconScale: style?.iconScale ?? 1,
+            iconScale:
+              style?.iconScale ?? (style?.iconHref ? 1 : legend.size),
             iconAnchor:
               style?.iconAnchor ?? (googlePushpin ? "bottom-right" : "center"),
             iconOffset:
@@ -652,7 +654,7 @@ export function addNetworkAssetLayers(
       ],
       paint: {
         "fill-color": ["get", "fillColor"],
-        "fill-opacity": ["min", ["get", "fillOpacity"], 0.15],
+        "fill-opacity": ["get", "fillOpacity"],
       },
     },
     options.insertLinesBefore
@@ -691,19 +693,7 @@ export function addNetworkAssetLayers(
         ["image", ["get", "fallbackIconImageId"]],
         ["image", ["get", "atlasIconId"]],
       ],
-      "icon-size": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        12,
-        ["*", ["get", "legendIconScale"], 0.35],
-        14,
-        ["*", ["get", "legendIconScale"], 0.5],
-        16,
-        ["*", ["get", "legendIconScale"], 0.75],
-        18,
-        ["get", "legendIconScale"],
-      ],
+      "icon-size": ["get", "legendIconScale"],
       "icon-anchor": ["get", "iconAnchor"],
       "icon-allow-overlap": true,
       "icon-ignore-placement": true,
@@ -714,7 +704,6 @@ export function addNetworkAssetLayers(
     id: ids.labels,
     type: "symbol",
     source: sourceId,
-    minzoom: 17,
     filter: [
       "all",
       ["==", ["geometry-type"], "Point"],
