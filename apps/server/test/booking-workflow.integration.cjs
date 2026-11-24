@@ -31,7 +31,8 @@ async function main() {
     assert.equal(first.status, 'Pending Approval');
     assert.equal((await service.approveBooking(first.id, 'admin')).status, 'Booked');
     const waiting = await service.createBooking(input, 'presales');
-    assert.equal(waiting.status, 'Waiting List');
+    assert.equal(waiting.status, 'Pending Approval');
+    assert.equal((await service.approveBooking(waiting.id, 'admin')).status, 'Waiting List');
     await assert.rejects(() => service.resubmitBooking(waiting.id, 'presales'));
     await service.releaseBooking(first.id, 'presales');
     assert.equal((await q('SELECT status FROM bookings WHERE id=$1', [waiting.id])).rows[0].status, 'Waiting List');
@@ -43,6 +44,9 @@ async function main() {
     assert.equal((await q("SELECT count(*)::int AS n FROM network_cores WHERE asset_id='segment' AND status='Used'")).rows[0].n, 2);
     assert.equal((await q('SELECT expires_at FROM bookings WHERE id=$1', [waiting.id])).rows[0].expires_at, null);
     await assert.rejects(() => service.markPurchaseOrderIssued(waiting.id, 'admin'));
+    await assert.rejects(() => service.releaseBooking(waiting.id, 'presales'));
+    assert.equal((await service.releaseBooking(waiting.id, 'admin', true)).released, waiting.id);
+    assert.equal((await q("SELECT count(*)::int AS n FROM network_cores WHERE asset_id='segment' AND status='Available'")).rows[0].n, 2);
     console.log('PASS: waiting notification, owner resubmission, approval, and PO transition');
 
     await q(`INSERT INTO network_assets(id,name,asset_type,source,total_cores,attributes) VALUES ('second','Second','segment','managed',2,'{}')`);
@@ -58,7 +62,8 @@ async function main() {
     await service.approveBooking(multi.id, 'admin');
     assert.equal((await q('SELECT count(*)::int AS n FROM booking_cores WHERE booking_id=$1', [multi.id])).rows[0].n, 3);
     const queued = await service.createBooking(multiInput, 'presales');
-    assert.equal(queued.status, 'Waiting List');
+    assert.equal(queued.status, 'Pending Approval');
+    assert.equal((await service.approveBooking(queued.id, 'admin')).status, 'Waiting List');
     await assert.rejects(() => service.resubmitBooking(queued.id, 'presales'));
     await service.releaseBooking(multi.id, 'presales');
     assert.equal((await q("SELECT count(*)::int AS n FROM notifications WHERE user_id='presales' AND booking_id=$1 AND title='Core tersedia untuk waiting list'", [queued.id])).rows[0].n, 1);

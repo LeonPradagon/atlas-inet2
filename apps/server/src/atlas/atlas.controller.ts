@@ -257,9 +257,10 @@ export class AtlasController {
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiQuery({ name: "search", type: String, required: false })
-  async assets(@Req() req: IncomingMessage, @Query("search") search?: string) {
+  @ApiQuery({ name: "id", type: String, required: false })
+  async assets(@Req() req: IncomingMessage, @Query("search") search?: string, @Query("id") id?: string) {
     await this.auth.requireUser(req);
-    return this.atlas.listAssets(search ?? "");
+    return this.atlas.listAssets(search ?? "", id);
   }
 
   @Get("assets/imports")
@@ -625,6 +626,7 @@ export class AtlasController {
         midspanConnections?: {
           nodeAssetId: string;
           routeMeasureM: number;
+          routePhysicalSide?: "toward_A" | "toward_B" | null;
           connection:
             | {
                 connectionType: "splice";
@@ -632,6 +634,7 @@ export class AtlasController {
                 peerCoreNumber: number;
                 peerSide: "A" | "B" | "R";
                 peerRouteMeasureM?: number;
+                peerRoutePhysicalSide?: "toward_A" | "toward_B" | null;
               }
             | { connectionType: "termination" }
             | { connectionType: "device_port"; portReference: string };
@@ -645,6 +648,7 @@ export class AtlasController {
                 peerCoreNumber: number;
                 peerSide: "A" | "B" | "R";
                 peerRouteMeasureM?: number;
+                peerRoutePhysicalSide?: "toward_A" | "toward_B" | null;
               }
             | { connectionType: "termination" }
             | { connectionType: "device_port"; portReference: string }
@@ -977,6 +981,22 @@ export class AtlasController {
       },
       photonSearchOptions(query)
     );
+  }
+
+  @Get("analysis/terminations")
+  async nearbyAnalysisTerminations(
+    @Req() req: IncomingMessage,
+    @Query("longitude") longitude?: string,
+    @Query("latitude") latitude?: string,
+    @Query("expand") expand?: string
+  ) {
+    await this.auth.requireUser(req);
+    const lon = Number(longitude);
+    const lat = Number(latitude);
+    if (!longitude || !latitude || !Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90) {
+      throw new BadRequestException({ message: "Koordinat tidak valid." });
+    }
+    return this.atlas.nearbyTerminations(lon, lat, expand === "true");
   }
 
   @Get("analysis/address/reverse")

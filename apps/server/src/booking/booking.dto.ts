@@ -37,6 +37,9 @@ export class CreateBookingDto {
   @ApiPropertyOptional({ type: String })
   picCustomerPhone?: string;
 
+  @ApiPropertyOptional({ type: String, description: "PIC presales yang menangani permintaan" })
+  picPresales?: string;
+
   @ApiPropertyOptional({
     type: String,
     description:

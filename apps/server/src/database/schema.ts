@@ -287,6 +287,7 @@ export const networkCoreEndConnections = pgTable(
       .notNull()
       .references(() => networkAssets.id, { onDelete: "restrict" }),
     routeMeasureM: numeric("route_measure_m", { precision: 10, scale: 2 }),
+    routePhysicalSide: text("route_physical_side"),
     peerCoreId: bigint("peer_core_id", { mode: "number" }).references(
       () => networkCores.id,
       { onDelete: "restrict" }
@@ -296,6 +297,7 @@ export const networkCoreEndConnections = pgTable(
       precision: 10,
       scale: 2,
     }),
+    peerRoutePhysicalSide: text("peer_route_physical_side"),
     portReference: text("port_reference"),
     verificationStatus: text("verification_status")
       .default("confirmed")
@@ -341,6 +343,10 @@ export const networkCoreEndConnections = pgTable(
     check(
       "network_core_end_connections_route_measure_check",
       sql`(side = 'R'::text AND route_measure_m IS NOT NULL AND route_measure_m >= 0) OR (side <> 'R'::text AND route_measure_m IS NULL)`
+    ),
+    check(
+      "network_core_end_connections_physical_side_check",
+      sql`(${table.routePhysicalSide} IS NULL OR (${table.side} = 'R' AND ${table.routePhysicalSide} IN ('toward_A', 'toward_B'))) AND (${table.peerRoutePhysicalSide} IS NULL OR (${table.peerSide} IS NOT DISTINCT FROM 'R' AND ${table.peerRoutePhysicalSide} IN ('toward_A', 'toward_B')))`
     ),
     check(
       "network_core_end_connections_peer_route_measure_check",
@@ -549,6 +555,46 @@ export const bookingSegments = pgTable("booking_segments", {
   primaryKey({ columns: [table.bookingId, table.segmentId] }),
   check("booking_segments_cores_check", sql`${table.cores} > 0`),
 ]);
+
+// Overlapping active ranges are guarded by the SQL migration's exclusion constraint.
+export const bookingCoreSections = pgTable("booking_core_sections", {
+  id: bigserial({ mode: "number" }).primaryKey(),
+  bookingId: text("booking_id").notNull().references(() => bookings.id, { onDelete: "restrict" }),
+  coreId: bigint("core_id", { mode: "number" }).notNull().references(() => networkCores.id, { onDelete: "restrict" }),
+  startM: numeric("start_m", { precision: 12, scale: 3 }).notNull(),
+  endM: numeric("end_m", { precision: 12, scale: 3 }).notNull(),
+  status: text().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+}, (table) => [
+  index("booking_core_sections_booking_idx").on(table.bookingId),
+  check("booking_core_sections_status_check", sql`${table.status} IN ('Booked', 'Used', 'Released')`),
+  check("booking_core_sections_range_check", sql`${table.startM} >= 0 AND ${table.endM} > ${table.startM}`),
+]);
+
+// Booking requests created from a connected device-to-device route. Legacy
+// requests continue to use booking_segments and booking_cores unchanged.
+export const bookingCorePathRequests = pgTable("booking_core_path_requests", {
+  bookingId: text("booking_id").primaryKey().references(() => bookings.id, { onDelete: "cascade" }),
+  startNodeId: text("start_node_id").notNull().references(() => networkAssets.id),
+  endNodeId: text("end_node_id").notNull().references(() => networkAssets.id),
+  routeKey: text("route_key").notNull(),
+  routeCableIds: jsonb("route_cable_ids").$type<string[]>().notNull(),
+  requestedCores: integer("requested_cores").notNull(),
+  routeLengthMeters: numeric("route_length_m", { precision: 12, scale: 3 }).notNull(),
+  proposedAllocations: jsonb("proposed_allocations").$type<Array<{
+    coreId: number;
+    cableId: string;
+    cableName: string;
+    coreNumber: number;
+    startMeters: number;
+    endMeters: number;
+    pathIndex: number;
+  }>>().notNull().default(sql`'[]'::jsonb`),
+  reviewFingerprint: text("review_fingerprint").notNull(),
+  plannedSplices: jsonb("planned_splices").notNull().default(sql`'[]'::jsonb`),
+  spanCoreCounts: jsonb("span_core_counts").$type<number[]>().notNull().default(sql`'[]'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
 
 export const indonesiaSubdistricts = pgTable(
   "indonesia_subdistricts",

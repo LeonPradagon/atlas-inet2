@@ -43,6 +43,7 @@ type CoreEndConnectionInput =
       peerCoreNumber: number;
       peerSide: CorePosition;
       peerRouteMeasureM?: number;
+      peerRoutePhysicalSide?: "toward_A" | "toward_B" | null;
     }
   | { connectionType: "termination" }
   | { connectionType: "device_port"; portReference: string }
@@ -50,6 +51,7 @@ type CoreEndConnectionInput =
 type MidspanConnectionInput = {
   nodeAssetId: string;
   routeMeasureM: number;
+  routePhysicalSide?: "toward_A" | "toward_B" | null;
   connection: Exclude<CoreEndConnectionInput, null>;
 };
 type CoreStatusUpdate = {
@@ -791,7 +793,7 @@ export class AtlasService {
     );
     return rows;
   }
-  async listAssets(search = "") {
+  async listAssets(search = "", id?: string) {
     const { rows } = await this.db.query<AssetRecord>(
       `SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
       a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
@@ -799,10 +801,11 @@ export class AtlasService {
       count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
       count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
       GeometryType(a.geometry) AS "geometryType",NULL::jsonb AS geometry,a.attributes,a.created_at AS "createdAt"
-      FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
-      WHERE $1='' OR a.name ILIKE '%'||$1||'%' OR a.area ILIKE '%'||$1||'%'
+      FROM network_assets a LEFT JOIN network_core_booking_status c ON c.asset_id=a.id
+      WHERE ($2::text IS NULL OR a.id=$2)
+        AND ($1='' OR a.name ILIKE '%'||$1||'%' OR a.area ILIKE '%'||$1||'%')
       GROUP BY a.id ORDER BY a.name`,
-      [search]
+      [search, id ?? null]
     );
     const pattern = new RegExp((await this.getCableNamePattern()).pattern);
     return rows.map((asset) => ({
@@ -887,8 +890,8 @@ export class AtlasService {
         ELSE 'lainnya' END=$7)
       AND ($8='all' OR ($8='verified' AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true'))
         OR ($8='unverified' AND NOT (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true'))
-        OR ($8='available' AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true') AND EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available'))
-        OR ($8='unavailable' AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true') AND NOT EXISTS(SELECT 1 FROM network_cores c WHERE c.asset_id=a.id AND c.status='Available')))
+        OR ($8='available' AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true') AND EXISTS(SELECT 1 FROM network_core_booking_status c WHERE c.asset_id=a.id AND c.status='Available'))
+        OR ($8='unavailable' AND (a.source='managed' OR a.attributes->'__coreUsageVerification'->>'verified'='true' OR a.attributes->>'__coreUsageVerified'='true') AND NOT EXISTS(SELECT 1 FROM network_core_booking_status c WHERE c.asset_id=a.id AND c.status='Available')))
       AND ($9='all' OR CASE
         WHEN upper(concat_ws(' ',a.attributes->>'assetKind',a.name)) LIKE '%ODC%' THEN 'odc'
         WHEN upper(concat_ws(' ',a.attributes->>'assetKind',a.name)) LIKE '%ODP%' THEN 'odp'
@@ -925,7 +928,7 @@ export class AtlasService {
           count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
           count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
           GeometryType(a.geometry) AS "geometryType",NULL::jsonb AS geometry,a.attributes,a.created_at AS "createdAt"
-        FROM page p JOIN network_assets a ON a.id=p.id LEFT JOIN network_cores c ON c.asset_id=a.id
+        FROM page p JOIN network_assets a ON a.id=p.id LEFT JOIN network_core_booking_status c ON c.asset_id=a.id
         GROUP BY a.id ORDER BY a.name,a.id`,
         [
           filter,
@@ -1275,7 +1278,7 @@ export class AtlasService {
       count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
       ST_AsGeoJSON(CASE WHEN $5::float8 > 0 AND a.source<>'kml' THEN ST_SimplifyPreserveTopology(a.geometry,$5::float8) ELSE a.geometry END,6)::json AS geometry,
       GeometryType(a.geometry) AS "geometryType",a.attributes,a.created_at AS "createdAt"
-      FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+      FROM network_assets a LEFT JOIN network_core_booking_status c ON c.asset_id=a.id
       LEFT JOIN LATERAL (
         SELECT l.details->>'fileName' AS file_name
         FROM audit_logs l
@@ -1902,13 +1905,13 @@ export class AtlasService {
       );
     }
     const { rows } = await this.db.query(
-      `SELECT c.core_number AS "coreNumber",c.status,
+      `SELECT c.core_number AS "coreNumber",booking_status.status,
         CASE WHEN nea.segment_id IS NULL AND ea.id IS NULL THEN NULL ELSE jsonb_build_object(
           'nodeAssetId',COALESCE(ea.node_asset_id,nea.node_asset_id),'nodeAssetName',COALESCE(na.name,ena.name),
           'nodeAssetType',na.attributes->>'Tipe Perangkat','longitude',ST_X(na.geometry)::float8,'latitude',ST_Y(na.geometry)::float8,
           'verificationStatus',nea.verification_status,'endpointSource',nea.source,'endpointNote',nea.note,
           'connectionType',ea.connection_type,'peerSegmentId',pa.asset_id,'peerSegmentName',pas.name,
-          'peerCoreNumber',pa.core_number,'peerSide',ea.peer_side,'peerRouteMeasureM',ea.peer_route_measure_m,
+          'peerCoreNumber',pa.core_number,'peerSide',ea.peer_side,'peerRouteMeasureM',ea.peer_route_measure_m,'peerRoutePhysicalSide',ea.peer_route_physical_side,
           'connectionGroupId',ea.connection_group_id,'portReference',ea.port_reference,
           'connectionVerificationStatus',ea.verification_status,'connectionSource',ea.source,'connectionNote',ea.note
         ) END AS "endA",
@@ -1917,7 +1920,7 @@ export class AtlasService {
           'nodeAssetType',nb.attributes->>'Tipe Perangkat','longitude',ST_X(nb.geometry)::float8,'latitude',ST_Y(nb.geometry)::float8,
           'verificationStatus',neb.verification_status,'endpointSource',neb.source,'endpointNote',neb.note,
           'connectionType',eb.connection_type,'peerSegmentId',pb.asset_id,'peerSegmentName',pbs.name,
-          'peerCoreNumber',pb.core_number,'peerSide',eb.peer_side,'peerRouteMeasureM',eb.peer_route_measure_m,
+          'peerCoreNumber',pb.core_number,'peerSide',eb.peer_side,'peerRouteMeasureM',eb.peer_route_measure_m,'peerRoutePhysicalSide',eb.peer_route_physical_side,
           'connectionGroupId',eb.connection_group_id,'portReference',eb.port_reference,
           'connectionVerificationStatus',eb.verification_status,'connectionSource',eb.source,'connectionNote',eb.note
         ) END AS "endB",
@@ -1925,9 +1928,11 @@ export class AtlasService {
           SELECT jsonb_agg(jsonb_build_object(
             'id',middle.id,'nodeAssetId',middle.node_asset_id,'nodeAssetName',middleNode.name,
             'nodeAssetType',middleNode.attributes->>'Tipe Perangkat','routeMeasureM',middle.route_measure_m,
+            'routePhysicalSide',middle.route_physical_side,
             'connectionType',middle.connection_type,'peerSegmentId',middlePeer.asset_id,
             'peerSegmentName',middlePeerAsset.name,'peerCoreNumber',middlePeer.core_number,
             'peerSide',middle.peer_side,'peerRouteMeasureM',middle.peer_route_measure_m,
+            'peerRoutePhysicalSide',middle.peer_route_physical_side,
             'connectionGroupId',middle.connection_group_id,'portReference',middle.port_reference,
             'verificationStatus',middle.verification_status,'source',middle.source,'note',middle.note
           ) ORDER BY middle.route_measure_m,middle.node_asset_id)
@@ -1938,8 +1943,14 @@ export class AtlasService {
           WHERE middle.core_id=c.id AND middle.side='R'
         ),'[]'::jsonb) AS "midspanConnections",
         c.connected_asset_id AS "legacyConnectedAssetId",c.connected_side AS "legacyConnectedSide",legacy.name AS "legacyConnectedAssetName",
-        b.id AS "bookingId",b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",b.expires_at AS "expiresAt"
+        b.id AS "bookingId",b.customer,b.pic_customer AS "picCustomer",b.pic_presales AS "picPresales",b.expires_at AS "expiresAt",
+        COALESCE((SELECT jsonb_agg(jsonb_build_object('bookingId',section.booking_id,'customer',section_booking.customer,
+          'status',section.status,'startMeters',section.start_m,'endMeters',section.end_m)
+          ORDER BY section.start_m,section.end_m,section.booking_id)
+          FROM booking_core_sections section JOIN bookings section_booking ON section_booking.id=section.booking_id
+          WHERE section.core_id=c.id AND section.status IN ('Booked','Used')),'[]'::jsonb) AS "sectionBookings"
       FROM network_cores c LEFT JOIN booking_cores bc ON bc.core_id=c.id LEFT JOIN bookings b ON b.id=bc.booking_id
+      LEFT JOIN network_core_booking_status booking_status ON booking_status.id=c.id
       LEFT JOIN network_assets legacy ON legacy.id=c.connected_asset_id
       LEFT JOIN network_segment_endpoints nea ON nea.segment_id=c.asset_id AND nea.side='A'
       LEFT JOIN network_assets na ON na.id=nea.node_asset_id
@@ -2188,16 +2199,31 @@ export class AtlasService {
     }
     try {
       const mappingId = await this.db.transaction(async (client) => {
-        const { rows: nodes } = await client.query(`SELECT id,lower(concat_ws(' ',name,attributes->>'folderPath',attributes->>'assetKind',attributes->>'Tipe Perangkat')) AS label FROM network_assets WHERE id=$1 AND asset_type='asset' AND GeometryType(geometry)='POINT' FOR UPDATE`, [node]);
+        const assetIds = [...new Set([segmentId, ...(isSplice ? [peer as string] : []), node as string])];
+        const { rows: lockedAssets } = await client.query(
+          "SELECT id,asset_type AS \"assetType\" FROM network_assets WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE",
+          [assetIds]
+        );
+        if (lockedAssets.length !== assetIds.length || lockedAssets.some((asset) => assetIds.includes(asset.id) && asset.id !== node && asset.assetType !== "segment")) {
+          throw new BadRequestException({ message: "Kabel atau titik sambungan tidak ditemukan." });
+        }
+        const { rows: nodes } = await client.query(`SELECT id,lower(concat_ws(' ',name,attributes->>'folderPath',attributes->>'assetKind',attributes->>'Tipe Perangkat')) AS label FROM network_assets WHERE id=$1 AND asset_type='asset' AND GeometryType(geometry)='POINT'`, [node]);
         if (!nodes.length) throw new BadRequestException({ message: "Pilih titik terminasi yang tersedia." });
         if (!isSplice && !/(^|[^a-z0-9])(odp|fat|spl[-_ ]?1[:_-][0-9]+)([^a-z0-9]|$)/u.test(nodes[0].label)) throw new BadRequestException({ message: "Masukan splitter harus berada pada ODP." });
         const ids = isSplice ? [segmentId, peer] : [segmentId];
-        const { rows: cables } = await client.query("SELECT id FROM network_assets WHERE id=ANY($1::text[]) AND asset_type='segment' ORDER BY id FOR UPDATE", [ids]);
+        const { rows: cables } = await client.query("SELECT id FROM network_assets WHERE id=ANY($1::text[]) AND asset_type='segment' ORDER BY id", [ids]);
         if (cables.length !== ids.length) throw new BadRequestException({ message: "Kabel tidak ditemukan." });
         const { rows: cores } = await client.query("SELECT id,asset_id AS \"assetId\",core_number AS \"coreNumber\" FROM network_cores WHERE (asset_id=$1 AND core_number=$2) OR (asset_id=$3 AND core_number=$4) ORDER BY id FOR UPDATE", [segmentId, core, isSplice ? peer : segmentId, isSplice ? peerCore : core]);
         const first = cores.find((row) => row.assetId === segmentId && row.coreNumber === core);
         const second = isSplice ? cores.find((row) => row.assetId === peer && row.coreNumber === peerCore) : null;
         if (!first || (isSplice && !second)) throw new BadRequestException({ message: "Nomor core tidak ditemukan pada kabel yang dipilih." });
+        const coreIds = [Number(first.id), ...(second ? [Number(second.id)] : [])];
+        const { rows: allocated } = await client.query(
+          `SELECT 1 FROM booking_core_sections
+           WHERE core_id=ANY($1::bigint[]) AND status IN ('Booked','Used') LIMIT 1`,
+          [coreIds]
+        );
+        if (allocated.length) throw new ConflictException({ message: "Core memiliki alokasi booking aktif dan sambungannya tidak dapat diubah." });
         const ordered = second ? [Number(first.id), Number(second.id)].sort((a, b) => a - b) : [Number(first.id), null];
         const { rows: occupied } = await client.query(`SELECT id FROM network_core_mappings WHERE node_asset_id=$1 AND (core_a_id=ANY($2::bigint[]) OR core_b_id=ANY($2::bigint[])) LIMIT 1`, [node, ordered.filter((value) => value !== null)]);
         if (occupied.length) throw new ConflictException({ message: "Salah satu core sudah memiliki sambungan pada titik ini." });
@@ -2219,7 +2245,37 @@ export class AtlasService {
   async deleteCoreMapping(segmentId: string, mappingId: string, userId: string) {
     if (!/^[0-9a-f-]{36}$/iu.test(mappingId)) throw new BadRequestException({ message: "ID sambungan tidak valid." });
     return this.db.transaction(async (client) => {
-      const { rows } = await client.query(`DELETE FROM network_core_mappings m USING network_cores a WHERE m.id=$1 AND a.id=m.core_a_id AND (a.asset_id=$2 OR EXISTS (SELECT 1 FROM network_cores b WHERE b.id=m.core_b_id AND b.asset_id=$2)) RETURNING m.id,m.node_asset_id AS "nodeAssetId"`, [mappingId, segmentId]);
+      const { rows: snapshot } = await client.query(
+        `SELECT m.core_a_id AS "coreAId",m.core_b_id AS "coreBId"
+         FROM network_core_mappings m JOIN network_cores a ON a.id=m.core_a_id
+         WHERE m.id=$1 AND (a.asset_id=$2 OR EXISTS (
+           SELECT 1 FROM network_cores b WHERE b.id=m.core_b_id AND b.asset_id=$2
+         ))`, [mappingId, segmentId]
+      );
+      if (!snapshot.length) throw new NotFoundException({ message: "Sambungan tidak ditemukan pada kabel ini." });
+      const coreIds = [snapshot[0].coreAId, snapshot[0].coreBId].filter((id) => id !== null);
+      const { rows: cableIds } = await client.query(
+        "SELECT DISTINCT asset_id AS id FROM network_cores WHERE id=ANY($1::bigint[]) ORDER BY asset_id",
+        [coreIds]
+      );
+      await client.query("SELECT id FROM network_assets WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE", [cableIds.map((row) => row.id)]);
+      const { rows: mapping } = await client.query(
+        `SELECT m.id,m.node_asset_id AS "nodeAssetId",m.core_a_id AS "coreAId",m.core_b_id AS "coreBId"
+         FROM network_core_mappings m JOIN network_cores a ON a.id=m.core_a_id
+         WHERE m.id=$1 AND (a.asset_id=$2 OR EXISTS (
+           SELECT 1 FROM network_cores b WHERE b.id=m.core_b_id AND b.asset_id=$2
+         )) FOR UPDATE OF m`, [mappingId, segmentId]
+      );
+      if (!mapping.length) throw new NotFoundException({ message: "Sambungan tidak ditemukan pada kabel ini." });
+      const { rows: allocated } = await client.query(
+        `SELECT 1 FROM booking_core_sections WHERE core_id=ANY($1::bigint[])
+         AND status IN ('Booked','Used') LIMIT 1`,
+        [[mapping[0].coreAId, mapping[0].coreBId].filter((id) => id !== null)]
+      );
+      if (allocated.length) throw new ConflictException({ message: "Core memiliki alokasi booking aktif dan sambungannya tidak dapat dihapus." });
+      const { rows } = await client.query(
+        "DELETE FROM network_core_mappings WHERE id=$1 RETURNING id,node_asset_id AS \"nodeAssetId\"", [mappingId]
+      );
       if (!rows.length) throw new NotFoundException({ message: "Sambungan tidak ditemukan pada kabel ini." });
       await audit(client, userId, "CORE_MAPPING_DELETED", "ASSET", segmentId, rows[0]);
       return { id: rows[0].id };
@@ -2254,6 +2310,8 @@ export class AtlasService {
           Number.isInteger(connection.peerCoreNumber) &&
           Number(connection.peerCoreNumber) > 0 &&
           ["A", "B", "R"].includes(connection.peerSide) &&
+          (connection.peerRoutePhysicalSide == null ||
+            (connection.peerSide === "R" && ["toward_A", "toward_B"].includes(connection.peerRoutePhysicalSide))) &&
           (connection.peerSide === "R"
             ? Number.isFinite(connection.peerRouteMeasureM) && Number(connection.peerRouteMeasureM) > 25
             : connection.peerRouteMeasureM === undefined) &&
@@ -2282,6 +2340,7 @@ export class AtlasService {
           item.nodeAssetId.length > 0 &&
           Number.isFinite(item.routeMeasureM) &&
           item.routeMeasureM > 25 &&
+          (item.routePhysicalSide == null || ["toward_A", "toward_B"].includes(item.routePhysicalSide)) &&
           item.connection !== null &&
           connectionFieldsValid(item.connection)
         ) &&
@@ -2364,6 +2423,7 @@ export class AtlasService {
           side: CorePosition;
           nodeAssetId?: string;
           routeMeasureM?: number;
+          routePhysicalSide?: "toward_A" | "toward_B" | null;
           connection: Exclude<CoreEndConnectionInput, null> | null;
         }[] = [];
         for (const entry of coreStatuses) {
@@ -2397,11 +2457,19 @@ export class AtlasService {
                 side: "R",
                 nodeAssetId: midspan.nodeAssetId,
                 routeMeasureM: Number(midspan.routeMeasureM),
+                routePhysicalSide: midspan.routePhysicalSide ?? null,
                 connection: midspan.connection,
               });
             }
           }
           if (current.status !== entry.status) {
+            const { rows: allocated } = await client.query(
+              "SELECT 1 FROM booking_core_sections WHERE core_id=$1 AND status IN ('Booked','Used') LIMIT 1",
+              [current.id]
+            );
+            if (allocated.length) {
+              throw new ConflictException({ message: "Core memiliki alokasi booking aktif dan tidak dapat diubah." });
+            }
             await client.query(
               "UPDATE network_cores SET status=$3 WHERE asset_id=$1 AND core_number=$2",
               [assetId, entry.coreNumber, entry.status]
@@ -2417,6 +2485,19 @@ export class AtlasService {
 
         const oldGroupIds = new Set<string>();
         for (const { coreId, side } of changedConnections) {
+          const { rows: allocated } = await client.query(
+            `SELECT 1 FROM booking_core_sections section
+             WHERE section.status IN ('Booked','Used') AND (
+               section.core_id=$1 OR section.core_id IN (
+                 SELECT peer_core_id FROM network_core_end_connections
+                 WHERE core_id=$1 AND side=$2 AND peer_core_id IS NOT NULL
+               )
+             ) LIMIT 1`,
+            [coreId, side]
+          );
+          if (allocated.length) {
+            throw new ConflictException({ message: "Sambungan memiliki alokasi booking aktif dan tidak dapat diubah." });
+          }
           const { rows } = await client.query(
             "SELECT connection_group_id AS \"groupId\" FROM network_core_end_connections WHERE core_id=$1 AND side=$2 FOR UPDATE",
             [coreId, side]
@@ -2435,6 +2516,21 @@ export class AtlasService {
         for (const side of ["A", "B"] as const) {
           if (!Object.hasOwn(segmentEndpoints, side)) continue;
           const nodeAssetId = segmentEndpoints[side];
+          const { rows: currentEndpoint } = await client.query(
+            "SELECT node_asset_id AS \"nodeAssetId\" FROM network_segment_endpoints WHERE segment_id=$1 AND side=$2 FOR UPDATE",
+            [assetId, side]
+          );
+          if ((currentEndpoint[0]?.nodeAssetId ?? null) !== nodeAssetId) {
+            const { rows: activeSections } = await client.query(
+              `SELECT 1 FROM booking_core_sections section
+               JOIN network_cores core ON core.id=section.core_id
+               WHERE core.asset_id=$1 AND section.status IN ('Booked','Used') LIMIT 1`,
+              [assetId]
+            );
+            if (activeSections.length) {
+              throw new ConflictException({ message: `Ujung ${side} tidak dapat diubah selama kabel memiliki alokasi booking aktif.` });
+            }
+          }
           if (nodeAssetId === null) {
             const { rows: attached } = await client.query(
               `SELECT 1 FROM network_core_end_connections connection
@@ -2469,11 +2565,7 @@ export class AtlasService {
               message: `Titik Ujung ${side} harus berupa aset jaringan yang berada maksimal 25 meter dari ujung kabel.`,
             });
           }
-          const { rows: existingEndpoint } = await client.query(
-            "SELECT node_asset_id AS \"nodeAssetId\" FROM network_segment_endpoints WHERE segment_id=$1 AND side=$2 FOR UPDATE",
-            [assetId, side]
-          );
-          if (existingEndpoint[0]?.nodeAssetId !== nodeAssetId) {
+          if ((currentEndpoint[0]?.nodeAssetId ?? null) !== nodeAssetId) {
             const { rows: attached } = await client.query(
               `SELECT 1 FROM network_core_end_connections connection
                JOIN network_cores core ON core.id=connection.core_id
@@ -2587,6 +2679,14 @@ export class AtlasService {
               });
             }
             const peerCoreId = Number(peer[0].coreId);
+            const { rows: activePeerSection } = await client.query(
+              `SELECT 1 FROM booking_core_sections
+               WHERE core_id=$1 AND status IN ('Booked','Used') LIMIT 1`,
+              [peerCoreId]
+            );
+            if (activePeerSection.length) {
+              throw new ConflictException({ message: `Core ${connection.peerCoreNumber} pada kabel tujuan memiliki alokasi booking aktif dan tidak dapat disambungkan ulang.` });
+            }
             if (connection.peerSide !== "R") {
               await client.query(
                 `INSERT INTO network_segment_endpoints
@@ -2615,13 +2715,13 @@ export class AtlasService {
             await client.query(
               `INSERT INTO network_core_end_connections
                 (connection_group_id,connection_type,core_id,side,node_asset_id,route_measure_m,
-                 peer_core_id,peer_side,peer_route_measure_m,verification_status,source,note,created_by)
-               VALUES($1,'splice',$2,$3,$4,$5,$6,$7,$8,'confirmed',$9,$10,$11),
-                     ($1,'splice',$6,$7,$4,$8,$2,$3,$5,'confirmed',$9,$10,$11)`,
+                 peer_core_id,peer_side,peer_route_measure_m,verification_status,source,note,created_by,route_physical_side,peer_route_physical_side)
+               VALUES($1,'splice',$2,$3,$4,$5,$6,$7,$8,'confirmed',$9,$10,$11,$12,$13),
+                     ($1,'splice',$6,$7,$4,$8,$2,$3,$5,'confirmed',$9,$10,$11,$13,$12)`,
               [groupId, change.coreId, change.side, sourcePosition.nodeAssetId, sourcePosition.routeMeasureM,
                 peerCoreId, connection.peerSide,
                 connection.peerSide === "R" ? Number(peer[0].peerRouteMeasureM) : null,
-                source, cleanNote, userId]
+                source, cleanNote, userId, change.routePhysicalSide ?? null, connection.peerRoutePhysicalSide ?? null]
             );
             await audit(client, userId, "CORE_SPLICE_RECORDED", "CORE", `${assetId}:${change.coreNumber}:${change.side}`, {
               connectionGroupId: groupId,
@@ -2640,12 +2740,12 @@ export class AtlasService {
             await client.query(
               `INSERT INTO network_core_end_connections
                 (connection_group_id,connection_type,core_id,side,node_asset_id,route_measure_m,
-                 port_reference,verification_status,source,note,created_by)
-               VALUES($1,$2,$3,$4,$5,$6,$7,'confirmed',$8,$9,$10)`,
+                 port_reference,verification_status,source,note,created_by,route_physical_side)
+               VALUES($1,$2,$3,$4,$5,$6,$7,'confirmed',$8,$9,$10,$11)`,
               [groupId, connection.connectionType, change.coreId, change.side,
                 sourcePosition.nodeAssetId, sourcePosition.routeMeasureM,
                 connection.connectionType === "device_port" ? connection.portReference.trim() : null,
-                source, cleanNote, userId]
+                source, cleanNote, userId, change.routePhysicalSide ?? null]
             );
             await audit(client, userId, "CORE_END_RECORDED", "CORE", `${assetId}:${change.coreNumber}:${change.side}`, {
               connectionGroupId: groupId,
@@ -2665,7 +2765,7 @@ export class AtlasService {
         count(*) FILTER (WHERE status='Available')::int AS available,
         count(*) FILTER (WHERE status='Used')::int AS used,
         count(*) FILTER (WHERE status='Booked')::int AS booked
-        FROM network_cores WHERE asset_id=$1`,
+        FROM network_core_booking_status WHERE asset_id=$1`,
         [assetId]
       );
       if (!total || counts[0].total !== total) {
@@ -2697,6 +2797,8 @@ export class AtlasService {
         assetId,
         verification
       );
+      const notified = new Set<string>();
+      for (const segmentId of segmentIdsToLock) await allocateWaiting(client, segmentId, userId, notified);
       return { assetId, ...verification };
       });
     } catch (error) {
@@ -2717,7 +2819,8 @@ export class AtlasService {
     const { rows: connected } = await client.query(
       `SELECT c.core_number FROM network_cores c
        WHERE c.asset_id=$1 AND c.core_number>$2
-         AND EXISTS (SELECT 1 FROM network_core_end_connections e WHERE e.core_id=c.id OR e.peer_core_id=c.id)
+         AND (EXISTS (SELECT 1 FROM network_core_end_connections e WHERE e.core_id=c.id OR e.peer_core_id=c.id)
+           OR EXISTS (SELECT 1 FROM booking_core_sections section WHERE section.core_id=c.id))
        LIMIT 1`,
       [assetId, total]
     );
@@ -2730,7 +2833,8 @@ export class AtlasService {
     );
     if (mapped.length) throw new ConflictException({ message: "Kapasitas tidak dapat dikurangi karena core yang akan dihapus masih memiliki catatan sambungan." });
     const { rows: active } = await client.query(
-      `SELECT id FROM network_cores WHERE asset_id=$1 AND core_number > $2 AND status <> 'Available' LIMIT 1`,
+      `SELECT core.id FROM network_cores core LEFT JOIN network_core_booking_status effective ON effective.id=core.id
+       WHERE core.asset_id=$1 AND core.core_number > $2 AND effective.status <> 'Available' LIMIT 1`,
       [assetId, total]
     );
     if (active.length) {
@@ -2787,6 +2891,13 @@ export class AtlasService {
           message: "Core yang sedang dibooking tidak dapat diubah.",
         });
       }
+      const { rows: allocated } = await client.query(
+        "SELECT 1 FROM booking_core_sections WHERE core_id=$1 AND status IN ('Booked','Used') LIMIT 1",
+        [rows[0].id]
+      );
+      if (allocated.length && rows[0].status !== status) {
+        throw new ConflictException({ message: "Core memiliki alokasi booking aktif dan tidak dapat diubah." });
+      }
       await client.query(
         "UPDATE network_cores SET status=$3 WHERE asset_id=$1 AND core_number=$2",
         [assetId, coreNumber, status]
@@ -2825,8 +2936,8 @@ export class AtlasService {
     const [assets, bookings, companyData] = await Promise.all([
       this.db.query(`SELECT (SELECT count(*)::int FROM network_assets WHERE asset_type='segment') AS segments,
        COALESCE((SELECT sum(total_cores)::int FROM network_assets WHERE asset_type='segment'),0) AS "totalCores",
-       (SELECT count(*)::int FROM network_cores c JOIN network_assets a ON a.id=c.asset_id WHERE a.asset_type='segment' AND c.status='Used') AS "usedCores",
-       (SELECT count(*)::int FROM network_cores c JOIN network_assets a ON a.id=c.asset_id WHERE a.asset_type='segment' AND c.status='Booked') AS "bookedCores"`),
+       (SELECT count(*)::int FROM network_core_booking_status c JOIN network_assets a ON a.id=c.asset_id WHERE a.asset_type='segment' AND c.status='Used') AS "usedCores",
+       (SELECT count(*)::int FROM network_core_booking_status c JOIN network_assets a ON a.id=c.asset_id WHERE a.asset_type='segment' AND c.status='Booked') AS "bookedCores"`),
       this.booking.listBookings(),
       this.db.query(
         `WITH core_usage AS (
@@ -2834,7 +2945,7 @@ export class AtlasService {
             count(*) FILTER (WHERE status='Used')::int AS "usedCores",
             count(*) FILTER (WHERE status='Booked')::int AS "bookedCores",
             count(*) FILTER (WHERE status='Available')::int AS "idleCores"
-          FROM network_cores GROUP BY asset_id
+          FROM network_core_booking_status GROUP BY asset_id
         ), base AS MATERIALIZED (
           SELECT a.id,a.name,
             COALESCE(NULLIF(btrim(a.area),''),NULLIF(btrim(a.attributes->>'Region'),''),NULLIF(btrim(a.attributes->>'region'),''),NULLIF(btrim(a.attributes->>'Wilayah'),''),NULLIF(btrim(a.attributes->>'wilayah'),''),NULLIF(btrim(a.attributes->>'Kota'),''),NULLIF(btrim(a.attributes->>'kota'),''),'Wilayah belum dicatat') AS area,
@@ -2924,7 +3035,7 @@ export class AtlasService {
       a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('assetId',linked.id,'kind',r.kind,'name',linked.name,'poleHeight',linked.pole_height) ORDER BY r.kind,linked.name)
         FROM network_asset_relations r JOIN network_assets linked ON linked.id=r.asset_id WHERE r.segment_id=a.id),'[]'::jsonb) AS "relatedAssets"
-      FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+      FROM network_assets a LEFT JOIN network_core_booking_status c ON c.asset_id=a.id
       WHERE a.asset_type='segment' GROUP BY a.id ORDER BY a.area,a.name`);
     return rows;
   }
@@ -3024,11 +3135,11 @@ export class AtlasService {
         (EXISTS(SELECT 1 FROM network_asset_relations r WHERE r.asset_id=p.id AND r.segment_id=c.id) OR EXISTS(SELECT 1 FROM network_core_mappings m JOIN network_cores mc ON mc.id IN (m.core_a_id,m.core_b_id) WHERE m.node_asset_id=p.id AND mc.asset_id=c.id)) AS recorded,
         ST_Distance(p.geometry::geography,c.geometry::geography) AS "distanceMeters",
         COALESCE((c.source='managed' OR c.attributes->'__coreUsageVerification'->>'verified'='true' OR c.attributes->>'__coreUsageVerified'='true'), false) AS verified,
-        (SELECT count(*)::int FROM network_cores x WHERE x.asset_id=c.id AND x.status='Used') AS used,
-        (SELECT count(*)::int FROM network_cores x WHERE x.asset_id=c.id AND x.status='Booked') AS booked,
-        (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_cores x WHERE x.asset_id=c.id AND x.status='Used') AS "usedNumbers",
-        (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_cores x WHERE x.asset_id=c.id AND x.status='Booked') AS "bookedNumbers",
-        (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_cores x WHERE x.asset_id=c.id AND x.status='Available') AS available,
+            (SELECT count(*)::int FROM network_core_booking_status x WHERE x.asset_id=c.id AND x.status='Used') AS used,
+            (SELECT count(*)::int FROM network_core_booking_status x WHERE x.asset_id=c.id AND x.status='Booked') AS booked,
+            (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_core_booking_status x WHERE x.asset_id=c.id AND x.status='Used') AS "usedNumbers",
+            (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_core_booking_status x WHERE x.asset_id=c.id AND x.status='Booked') AS "bookedNumbers",
+            (SELECT COALESCE(array_agg(x.core_number ORDER BY x.core_number),ARRAY[]::integer[]) FROM network_core_booking_status x WHERE x.asset_id=c.id AND x.status='Available') AS available,
         ST_AsGeoJSON(c.geometry)::json AS geometry
       FROM network_assets p JOIN network_assets c ON c.asset_type='segment'
         AND GeometryType(c.geometry) IN ('LINESTRING','MULTILINESTRING')
@@ -3226,7 +3337,7 @@ export class AtlasService {
       if (rows[0]) {
         const asset = rows[0];
         const { rows: counts } = await this.db.query(
-          `SELECT count(*) FILTER(WHERE status='Used')::int AS used,count(*) FILTER(WHERE status='Booked')::int AS booked,count(*) FILTER(WHERE status='Available')::int AS available FROM network_cores WHERE asset_id=$1`,
+          `SELECT count(*) FILTER(WHERE status='Used')::int AS used,count(*) FILTER(WHERE status='Booked')::int AS booked,count(*) FILTER(WHERE status='Available')::int AS available FROM network_core_booking_status WHERE asset_id=$1`,
           [asset.id]
         );
         const { rows: connectedCables } = await this.db.query(
@@ -3236,7 +3347,7 @@ export class AtlasService {
             count(c.id) FILTER (WHERE c.status='Booked')::int AS booked,
             count(c.id) FILTER (WHERE c.status='Available')::int AS available,
             (SELECT count(DISTINCT mc.id)::int FROM network_core_mappings m JOIN network_cores mc ON mc.id IN (m.core_a_id,m.core_b_id) WHERE m.node_asset_id=$1 AND mc.asset_id=a.id) AS "mappedCores"
-           FROM network_assets a LEFT JOIN network_cores c ON c.asset_id=a.id
+           FROM network_assets a LEFT JOIN network_core_booking_status c ON c.asset_id=a.id
            WHERE a.asset_type='segment' AND (EXISTS (SELECT 1 FROM network_asset_relations r WHERE r.asset_id=$1 AND r.segment_id=a.id)
              OR EXISTS (SELECT 1 FROM network_core_mappings m JOIN network_cores mc ON mc.id IN (m.core_a_id,m.core_b_id) WHERE m.node_asset_id=$1 AND mc.asset_id=a.id))
            GROUP BY a.id ORDER BY a.name`,

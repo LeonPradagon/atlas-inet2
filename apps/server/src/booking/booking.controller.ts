@@ -8,12 +8,13 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
 } from "@nestjs/common";
 import { ApiBody, ApiParam } from "@nestjs/swagger";
 import { AuthService } from "../auth/auth.service";
 import { BookingDurationDto, BookingPricesDto, CreateBookingDto } from "./booking.dto";
-import { BookingService } from "./booking.service";
+import { BookingService, type CreatePathBookingInput } from "./booking.service";
 
 @Controller()
 export class BookingController {
@@ -30,12 +31,30 @@ export class BookingController {
     return this.booking.listBookableSegments();
   }
 
+  @Get("assets/bookable-devices")
+  async bookableDevices(@Req() req: IncomingMessage, @Query("startId") startId?: string) {
+    await this.auth.requireUser(req);
+    return this.booking.listBookableDevices(startId);
+  }
+
+  @Get("bookings/confirmed-core-paths")
+  async confirmedCorePaths(
+    @Req() req: IncomingMessage,
+    @Query("startId") startId?: string,
+    @Query("endId") endId?: string,
+    @Query("cores") cores?: string,
+    @Query("preferredRoute") preferredRoute?: string
+  ) {
+    await this.auth.requireUser(req);
+    return this.booking.previewConfirmedCorePaths(startId ?? "", endId ?? "", Number(cores), preferredRoute);
+  }
+
   @Get("bookings")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   async bookings(@Req() req: IncomingMessage) {
-    await this.auth.requireUser(req);
-    return this.booking.listBookings();
+    const user = await this.auth.requireUser(req);
+    return this.booking.listBookings(user.role === "ADMIN");
   }
 
   @Post("bookings")
@@ -51,6 +70,16 @@ export class BookingController {
       { ...body, picPresales: user.name },
       user.id
     );
+  }
+
+  @Post("bookings/route")
+  @ApiBody({ schema: { type: "object" } })
+  async createPathBooking(@Req() req: IncomingMessage, @Body() body: CreatePathBookingInput) {
+    const user = await this.auth.requireUser(req);
+    return this.booking.createPathBooking({
+      ...body,
+      picPresales: body.picPresales?.trim() || user.name || user.email,
+    }, user.id);
   }
 
   @Post("bookings/:id/approve")
@@ -77,7 +106,7 @@ export class BookingController {
   @ApiParam({ name: "id", type: String })
   async releaseBooking(@Req() req: IncomingMessage, @Param("id") id: string) {
     const user = await this.auth.requireUser(req);
-    return this.booking.releaseBooking(id, user.id);
+    return this.booking.releaseBooking(id, user.id, user.role === "ADMIN");
   }
 
   @Post("bookings/:id/resubmit")

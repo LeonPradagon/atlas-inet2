@@ -298,26 +298,21 @@ async function main() {
       (await q("SELECT count(*) AS n FROM notifications")).rows[0].n
     );
     const released = await bookings.releaseBooking(hold.id, "presales");
-    assert.equal(released.allocatedBookingIds.length, 3);
-    assert.equal(released.allocated, released.allocatedBookingIds[0]);
+    assert.equal(released.allocatedBookingIds.length, 0, "waiting list is notified but not allocated automatically");
     for (const b of queue) {
-      assert.equal(await status(b.id), "Booked");
+      assert.equal(await status(b.id), "Waiting List");
     }
     assert.equal(
       Number((await q("SELECT count(*) AS n FROM notifications")).rows[0].n) -
         before,
       4
     );
-    assert.equal(
-      (
-        await q(
-          "SELECT count(*)::int AS n FROM audit_logs WHERE action='WAITING_LIST_ALLOCATED' AND details->>'segmentId'='multi'"
-        )
-      ).rows[0].n,
-      4
-    );
+    for (const b of queue) {
+      assert.equal((await bookings.resubmitBooking(b.id, "presales")).status, "Pending Approval");
+      assert.equal((await bookings.approveBooking(b.id, "admin")).status, "Booked");
+    }
     console.log(
-      "PASS: one release allocates multiple requests, with notifications and audit"
+      "PASS: legacy waiting requests are notified, resubmitted, and approved without automatic allocation"
     );
 
     await segment("fifo", 6);
@@ -340,15 +335,18 @@ async function main() {
       3
     );
     const changed = await atlas.setCoreStatus("fifo", 1, "Available", "admin");
-    assert.equal(changed.status, "Booked");
-    assert.equal(await status(head.id), "Booked");
+    assert.equal(changed.status, "Available");
+    assert.equal(await status(head.id), "Waiting List");
+    assert.equal((await bookings.resubmitBooking(head.id, "presales")).status, "Pending Approval");
+    assert.equal((await bookings.approveBooking(head.id, "admin")).status, "Booked");
     assert.equal(await status(tail.id), "Waiting List");
     await atlas.setCoreStatus("fifo", 2, "Available", "admin");
     assert.equal(await status(tail.id), "Waiting List");
     await atlas.setCoreStatus("fifo", 3, "Available", "admin");
-    assert.equal(await status(tail.id), "Booked");
+    assert.equal((await bookings.resubmitBooking(tail.id, "presales")).status, "Pending Approval");
+    assert.equal((await bookings.approveBooking(tail.id, "admin")).status, "Booked");
     console.log(
-      "PASS: strict FIFO by approval order, no later approval bypass, Available status triggers allocation"
+      "PASS: waiting list notifications preserve request order and require user resubmission"
     );
 
     await segment("capacity", 4);
@@ -362,6 +360,12 @@ async function main() {
       { area: "Updated area", totalCores: 10 },
       "admin"
     );
+    assert.equal(await status(capacityHead.id), "Waiting List");
+    assert.equal(await status(capacityTail.id), "Waiting List");
+    assert.equal((await bookings.resubmitBooking(capacityHead.id, "presales")).status, "Pending Approval");
+    assert.equal((await bookings.approveBooking(capacityHead.id, "admin")).status, "Booked");
+    assert.equal((await bookings.resubmitBooking(capacityTail.id, "presales")).status, "Pending Approval");
+    assert.equal((await bookings.approveBooking(capacityTail.id, "admin")).status, "Booked");
     assert.equal(await status(capacityHead.id), "Booked");
     assert.equal(await status(capacityTail.id), "Booked");
     await segment("rollback", 8);
@@ -409,7 +413,9 @@ async function main() {
     await Promise.all([bookings.expireBookings(), bookings.expireBookings()]);
     assert.equal(await status(expiring.id), "Expired");
     for (const b of expiryQueue) {
-      assert.equal(await status(b.id), "Booked");
+      assert.equal(await status(b.id), "Waiting List");
+      assert.equal((await bookings.resubmitBooking(b.id, "presales")).status, "Pending Approval");
+      assert.equal((await bookings.approveBooking(b.id, "admin")).status, "Booked");
     }
     assert.equal(
       (
@@ -421,7 +427,7 @@ async function main() {
       1
     );
     console.log(
-      "PASS: concurrent expiry runs release and allocate exactly once"
+      "PASS: concurrent expiry releases once and waiting requests can be resubmitted"
     );
 
     await segment("concurrent", 8);
@@ -446,9 +452,9 @@ async function main() {
       (SELECT sum(cores) FROM bookings WHERE segment_id='concurrent' AND status='Booked') AS booked,
       (SELECT count(*) FROM booking_cores bc JOIN network_cores c ON c.id=bc.core_id WHERE c.asset_id='concurrent') AS assignments`)
     ).rows[0];
-    assert.equal(Number(consistency.cores), 8);
-    assert.equal(Number(consistency.booked), 8);
-    assert.equal(Number(consistency.assignments), 8);
+    assert.equal(Number(consistency.cores), 3);
+    assert.equal(Number(consistency.booked), 3);
+    assert.equal(Number(consistency.assignments), 3);
     assert.equal(
       (
         await q(
@@ -458,7 +464,7 @@ async function main() {
       0
     );
     console.log(
-      "PASS: concurrent bookings/releases cannot double-assign cores"
+      "PASS: concurrent bookings/releases cannot double-assign cores or auto-allocate waiters"
     );
 
     await segment("related", 4);
@@ -901,6 +907,9 @@ async function main() {
       (
         await q(`SELECT ${column} AS value FROM bookings WHERE id=$1`, [id])
       ).rows[0].value?.toISOString() ?? null;
+    const bookingSummary = (row) => Object.fromEntries(Object.entries(row).filter(([key]) =>
+      ["approvedAt", "area", "cores", "customer", "expiresAt", "id", "picCustomer", "picPresales", "rejectedAt", "requestedAt", "segmentId", "segmentName", "status"].includes(key)
+    ));
     const trail = async (id) => ({
       audit: (
         await q(
@@ -923,15 +932,10 @@ async function main() {
     const bookable = await call("/assets/bookable-segments", "presales");
     assert.equal(bookable.status, 200);
     assert.deepEqual(
-      bookable.body.find((s) => s.id === "http-booking"),
-      {
-        area: "Original area",
-        assetType: "segment",
-        id: "http-booking",
-        idleCores: 2,
-        name: "http-booking",
-        totalCores: 2,
-      }
+      Object.fromEntries(Object.entries(bookable.body.find((s) => s.id === "http-booking")).filter(([key]) =>
+        ["area", "assetType", "id", "idleCores", "name", "totalCores"].includes(key)
+      )),
+      { area: "Original area", assetType: "segment", id: "http-booking", idleCores: 2, name: "http-booking", totalCores: 2 }
     );
     assert.equal(
       bookable.body.some((s) => s.id === "http-empty"),
@@ -1080,7 +1084,7 @@ async function main() {
       "the newest booking is listed first"
     );
     assert.deepEqual(
-      listed.body.find((b) => b.id === first),
+      bookingSummary(listed.body.find((b) => b.id === first)),
       {
         approvedAt: null,
         area: "Original area",
@@ -1162,7 +1166,7 @@ async function main() {
       missingBooking
     );
     const inactive = {
-      body: { message: "Hanya booking aktif yang dapat dilepas." },
+      body: { message: "Booking aktif dapat dilepas; layanan terpakai hanya dapat dilepas oleh admin." },
       status: 409,
     };
     assert.deepEqual(
@@ -1183,81 +1187,20 @@ async function main() {
     assert.deepEqual(
       await call(`/bookings/${second}/release`, "presales", "POST"),
       {
-        body: {
-          allocated: waiting,
-          allocatedBookingIds: [waiting],
-          released: second,
-        },
+        body: { allocated: null, allocatedBookingIds: [], released: second },
         status: 201,
       }
     );
     const httpSegment = "http-booking";
-    assert.deepEqual(await trail(first), {
-      audit: [
-        {
-          action: "BOOKING_CREATED",
-          actor: "presales",
-          details: {
-            cores: 1,
-            segmentId: httpSegment,
-            status: "Pending Approval",
-          },
-        },
-        {
-          action: "WAITING_LIST_ALLOCATED",
-          actor: "admin",
-          details: { cores: 1, segmentId: httpSegment },
-        },
-        {
-          action: "BOOKING_APPROVED",
-          actor: "admin",
-          details: {
-            allocatedBookingIds: [first],
-            cores: 1,
-            segmentId: httpSegment,
-            status: "Booked",
-          },
-        },
-        {
-          action: "BOOKING_RELEASED",
-          actor: "presales",
-          details: {
-            allocatedBookingIds: [],
-            cores: 1,
-            segmentId: httpSegment,
-          },
-        },
-      ],
-      notifications: [
-        {
-          message: "HTTP A meminta 1 core pada segmen http-booking.",
-          title: "Persetujuan booking core diperlukan",
-          user: "admin",
-        },
-        {
-          message: `HTTP A: 1 core tersedia dan booking ${first} aktif.`,
-          title: "Waiting list dialokasikan",
-          user: "presales",
-        },
-        {
-          message: `Booking ${first} disetujui dan 1 core telah dialokasikan.`,
-          title: "Booking core disetujui",
-          user: "presales",
-        },
-        {
-          message:
-            "HTTP A: 1 core dilepas. 0 permintaan waiting list dialokasikan.",
-          title: "Booking core dilepas",
-          user: "presales",
-        },
-      ],
-    });
+    const firstTrail = await trail(first);
+    assert.deepEqual(firstTrail.audit.map((entry) => entry.action), ["BOOKING_CREATED", "BOOKING_APPROVED", "BOOKING_RELEASED"]);
+    assert(firstTrail.notifications.some((entry) => entry.title === "Booking core dilepas"));
     const secondTrail = await trail(second);
     assert.deepEqual(secondTrail.audit.at(-1), {
       action: "BOOKING_RELEASED",
       actor: "presales",
       details: {
-        allocatedBookingIds: [waiting],
+        allocatedBookingIds: [],
         cores: 1,
         segmentId: httpSegment,
       },
@@ -1270,13 +1213,13 @@ async function main() {
       ["admin", "presales"],
       "a release notifies PRESALES users and the requester"
     );
-    assert.deepEqual((await trail(waiting)).audit.at(-1), {
-      action: "WAITING_LIST_ALLOCATED",
-      actor: "presales",
-      details: { cores: 2, segmentId: httpSegment },
-    });
+    assert.equal(await status(waiting), "Waiting List");
+    assert((await trail(waiting)).notifications.some((entry) => entry.title === "Core tersedia untuk waiting list"));
+    assert.equal((await bookings.resubmitBooking(waiting, "presales")).status, "Pending Approval");
+    assert.equal((await bookings.approveBooking(waiting, "admin")).status, "Booked");
+    assert.deepEqual((await trail(waiting)).audit.slice(-2).map((entry) => entry.action), ["BOOKING_RESUBMITTED", "BOOKING_APPROVED"]);
     assert.deepEqual(
-      (await call("/bookings", "presales")).body.find((b) => b.id === waiting),
+      bookingSummary((await call("/bookings", "presales")).body.find((b) => b.id === waiting)),
       {
         approvedAt: await iso("approved_at", waiting),
         area: "Original area",
@@ -1362,6 +1305,7 @@ async function main() {
           details: {
             cores: 2,
             segmentId: httpSegment,
+            segments: [{ cores: 2, segmentId: httpSegment }],
             status: "Pending Approval",
           },
         },
@@ -1373,7 +1317,7 @@ async function main() {
       ],
       notifications: [
         {
-          message: "HTTP C meminta 2 core pada segmen http-booking.",
+          message: "HTTP C meminta 2 core pada 1 segmen.",
           title: "Persetujuan booking core diperlukan",
           user: "admin",
         },
