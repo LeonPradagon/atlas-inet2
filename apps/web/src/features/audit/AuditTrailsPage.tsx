@@ -35,6 +35,8 @@ const actionLabels: Record<string, string> = {
   NOTIFICATION_READ: "Notifikasi dibaca",
   ADDRESS_ANALYSIS_COMPLETED: "Analisis alamat dijalankan",
   BULK_ANALYSIS_COMPLETED: "Analisis massal dijalankan",
+  BULK_ANALYSIS_QUEUED: "Analisis massal dimulai",
+  BULK_ANALYSIS_ROW_COMPLETED: "Baris analisis massal selesai",
   ANALYSIS_HISTORY_DELETED: "Riwayat analisis dihapus",
   ROUTE_PREVIEW_COMPLETED: "Pratinjau rute dijalankan",
   FTTH_ROUTE_PREVIEW_COMPLETED: "Pratinjau rute FTTH dijalankan",
@@ -43,6 +45,12 @@ const actionLabels: Record<string, string> = {
   LOGOUT_SUCCEEDED: "Logout",
   API_REQUEST: "Aktivitas aplikasi",
   API_REQUEST_FAILED: "Permintaan gagal",
+};
+
+const entityLabels: Record<string, string> = {
+  ANALYSIS_BULK_JOB: "Pekerjaan analisis massal",
+  ANALYSIS_HISTORY: "Riwayat analisis",
+  FTTH_DESIGN: "Desain FTTH",
 };
 
 function AuditDetails({ entry }: { entry: AuditEntry }) {
@@ -63,12 +71,26 @@ function AuditDetails({ entry }: { entry: AuditEntry }) {
       {fields.map(([key, value]) => (
         <div className="d-flex flex-wrap column-gap-2" key={key}>
           <dt className="fw-semibold text-body-secondary text-break">
-            {key === "durationMs" ? "Durasi respons" : key === "method" ? "Metode" : key === "path" ? "Path" : key}
+            {key === "durationMs"
+              ? "Durasi respons"
+              : key === "method"
+                ? "Metode"
+                : key === "path"
+                  ? "Path"
+                  : key === "authMethod"
+                    ? "Autentikasi"
+                    : key}
           </dt>
           <dd className="mb-0 text-break">
             {key === "durationMs" && typeof value === "number"
               ? `${value.toLocaleString("id-ID")} ms`
-              : typeof value === "string" ? value : JSON.stringify(value)}
+              : key === "authMethod" && value === "api_key"
+                ? "Open API (X-API-Key)"
+                : key === "authMethod" && value === "session"
+                  ? "Sesi pengguna"
+                  : key === "authMethod" && value === "anonymous"
+                    ? "Tanpa sesi/API key"
+                    : typeof value === "string" ? value : JSON.stringify(value)}
           </dd>
         </div>
       ))}
@@ -116,6 +138,7 @@ export function AuditTrailsPage() {
       Boolean(entry.details?.method && entry.details?.path);
     return (
       activityType === "all" ||
+      activityType === "open_api" ||
       (activityType === "technical" ? technical : !technical)
     );
   });
@@ -204,6 +227,7 @@ export function AuditTrailsPage() {
               <option value="all">Semua aktivitas</option>
               <option value="business">Aktivitas bisnis</option>
               <option value="technical">Permintaan API / teknis</option>
+              <option value="open_api">Open API (X-API-Key)</option>
             </select>
           </div>
           {audit.isPending ? (
@@ -260,7 +284,10 @@ export function AuditTrailsPage() {
                               )}
                             </td>
                             <td>
-                              <b>{entry.entityType}</b>
+                              <b>
+                                {entityLabels[entry.entityType] ??
+                                  entry.entityType}
+                              </b>
                               <small className="d-block text-secondary text-break">
                                 {entry.entityId ?? "—"}
                               </small>

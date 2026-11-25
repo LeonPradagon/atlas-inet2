@@ -39,6 +39,15 @@ curl -X POST "$ATLAS_API_URL/analysis/address" \
   -d '{"address":"Jl. Sudirman, Jakarta"}'
 ```
 
+Contoh PowerShell (gunakan URL lengkap dengan prefix `/api`; tanda `\` sebagai penerus baris hanya berlaku untuk shell seperti Bash):
+
+```powershell
+$uri = "https://<host>/api/analysis/address"
+$headers = @{ "X-API-Key" = $env:ANALYSIS_API_KEY }
+$body = @{ address = "Jl. Sudirman, Jakarta" } | ConvertTo-Json
+Invoke-RestMethod -Uri $uri -Method Post -Headers $headers -ContentType "application/json" -Body $body
+```
+
 Contoh dengan koordinat saja:
 
 ```sh

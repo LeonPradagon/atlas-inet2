@@ -92,6 +92,11 @@ async function bootstrap() {
           .then((current) =>
             atlas.recordApiRequest(
               current?.user.id ?? null,
+              current
+                ? "session"
+                : typeof request.headers["x-api-key"] === "string"
+                  ? "api_key"
+                  : "anonymous",
               method,
               path,
               response.statusCode,

@@ -1318,7 +1318,11 @@ export class AtlasController {
     @Param("id") id: string
   ) {
     const user = await this.auth.requireUser(req);
-    await this.atlas.deleteAnalysisHistory(user.id, id);
+    await this.atlas.deleteAnalysisHistory(
+      user.id,
+      id,
+      user.role === "ADMIN"
+    );
     return { success: true };
   }
 

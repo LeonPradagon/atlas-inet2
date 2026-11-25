@@ -562,6 +562,7 @@ export class AtlasService {
   }
   async recordApiRequest(
     actorId: string | null,
+    authMethod: "session" | "api_key" | "anonymous",
     method: string,
     path: string,
     statusCode: number,
@@ -570,6 +571,7 @@ export class AtlasService {
     const action = statusCode >= 400 ? "API_REQUEST_FAILED" : "API_REQUEST";
     await this.db.transaction((client) =>
       audit(client, actorId, action, "API", `${method} ${path}`, {
+        authMethod,
         durationMs,
         method,
         path,
@@ -756,11 +758,12 @@ export class AtlasService {
     });
     return { ...history, relatedDrafts };
   }
-  async deleteAnalysisHistory(userId: string, id: string) {
+  async deleteAnalysisHistory(userId: string, id: string, admin = false) {
     await this.db.transaction(async (client) => {
       const { rows } = await client.query(
-        "SELECT analysis_type AS type FROM analysis_history WHERE user_id=$1 AND id=$2 FOR UPDATE",
-        [userId, id]
+        `SELECT analysis_type AS type,user_id AS "ownerId" FROM analysis_history
+        WHERE ($3::boolean OR user_id=$1) AND id=$2 FOR UPDATE`,
+        [userId, id, admin]
       );
       if (!rows.length) {
         throw new NotFoundException({
@@ -768,8 +771,8 @@ export class AtlasService {
         });
       }
       await client.query(
-        "DELETE FROM analysis_history WHERE user_id=$1 AND id=$2",
-        [userId, id]
+        "DELETE FROM analysis_history WHERE ($3::boolean OR user_id=$1) AND id=$2",
+        [userId, id, admin]
       );
       await audit(
         client,
@@ -777,7 +780,7 @@ export class AtlasService {
         "ANALYSIS_HISTORY_DELETED",
         "ANALYSIS_HISTORY",
         id,
-        { type: rows[0].type }
+        { ownerId: rows[0].ownerId, type: rows[0].type }
       );
     });
   }
@@ -787,9 +790,18 @@ export class AtlasService {
       l.created_at AS "createdAt",u.name AS "actorName",u.email AS "actorEmail"
       FROM audit_logs l LEFT JOIN "user" u ON u.id=l.actor_id
       WHERE ($1='' OR l.action ILIKE '%'||$1||'%' OR l.entity_type ILIKE '%'||$1||'%' OR l.entity_id ILIKE '%'||$1||'%' OR u.name ILIKE '%'||$1||'%' OR u.email ILIKE '%'||$1||'%')
-      AND ($3='all' OR ($3='technical') = (l.entity_type='API' OR l.action LIKE 'HTTP%' OR COALESCE((l.details ? 'method' AND l.details ? 'path'),false)))
+      AND (
+        $3='all'
+        OR ($3='technical' AND (l.entity_type='API' OR l.action LIKE 'HTTP%' OR COALESCE((l.details ? 'method' AND l.details ? 'path'),false)))
+        OR ($3='business' AND NOT (l.entity_type='API' OR l.action LIKE 'HTTP%' OR COALESCE((l.details ? 'method' AND l.details ? 'path'),false)))
+        OR ($3='open_api' AND (l.details->>'authMethod'='api_key' OR l.actor_id='atlas-analysis-api'))
+      )
       ORDER BY l.created_at DESC,l.id DESC LIMIT $2`,
-      [search.trim(), Math.max(1, Math.min(250, limit)), ["business", "technical"].includes(kind) ? kind : "all"]
+      [
+        search.trim(),
+        Math.max(1, Math.min(250, limit)),
+        ["business", "technical", "open_api"].includes(kind) ? kind : "all",
+      ]
     );
     return rows;
   }
