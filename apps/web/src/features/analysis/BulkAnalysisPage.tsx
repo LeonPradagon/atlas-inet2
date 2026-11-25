@@ -203,9 +203,9 @@ export function BulkAnalysisPage() {
     ? segmentBookingDraft(
         selectedRow.address,
         selectedRowResult.network,
-        selectedRowResult.terminationPlan?.requirement?.requiredCores,
         selectedRowResult.terminationPlan?.sourceCable?.id,
-        selectedRowResult.terminations?.points
+        selectedRowResult.terminations?.points,
+        selectedRowResult.terminationPlan?.cables
       )
     : null;
   const clearCurrentJob = () => {
@@ -526,9 +526,9 @@ export function BulkAnalysisPage() {
           : undefined;
         const draft = row.status === "OK" ? segmentBookingDraft(
           row.address, row.result?.network ?? row.network,
-          row.result?.terminationPlan?.requirement?.requiredCores,
           row.result?.terminationPlan?.sourceCable?.id,
-          row.result?.terminations?.points
+          row.result?.terminations?.points,
+          row.result?.terminationPlan?.cables
         ) : null;
         const canSubmitSurvey =
           row.status === "OK" &&

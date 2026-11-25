@@ -38,6 +38,19 @@ export type CreateBookingInput = {
 };
 
 type BookingPrice = { name: string; unit: string; price: number };
+type CablePlanInput = { label: string; meters: number };
+type CablePlanPrice = CablePlanInput & { rateCents: number; totalCents: number };
+type BookingPriceSnapshot = {
+  cablePlan?: CablePlanPrice;
+  configured: boolean;
+  currency: "IDR";
+  unit: "core";
+  items: BookingPrice[];
+  coreRateCents: number;
+  allocationCount: number;
+  totalCents: number;
+  capturedAt: string;
+};
 // Both KMZ schemas are accepted by analysis and must identify the same devices here.
 const bookingDeviceType = `upper(COALESCE(
   NULLIF(node.attributes->>'Tipe Perangkat',''),
@@ -61,6 +74,7 @@ export type CreatePathBookingInput = {
   requestedCores?: number;
   spanCoreCounts?: number[];
   routeKey?: string;
+  cablePlan?: CablePlanInput;
 };
 
 type CableEnds = { A: [number, number]; B: [number, number] };
@@ -244,6 +258,42 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
     }));
   }
 
+  private async saveCablePlan(client: PoolClient, plan: CablePlanInput, customer: string, userId: string, bookingId: string | null) {
+    if (typeof plan.label !== "string" || !plan.label.trim() || plan.label.length > 1000 ||
+        !Number.isFinite(plan.meters) || plan.meters <= 0 || plan.meters > 1_000_000 || !customer) {
+      throw new BadRequestException("Lengkapi pelanggan, lokasi dan panjang kabel usulan.");
+    }
+    const { rows } = await client.query<{ value: { items?: BookingPrice[] } }>(
+      "SELECT value FROM app_settings WHERE key=$1", ["booking_prices"]
+    );
+    const rateCents = (rows[0]?.value.items ?? defaultBookingPrices)
+      .filter((item) => item.unit.trim().toLowerCase() === "meter")
+      .reduce((sum, item) => sum + Math.round(item.price * 100), 0);
+    const price = { label: plan.label.trim(), meters: plan.meters, rateCents, totalCents: Math.round(plan.meters * rateCents) };
+    const id = randomUUID();
+    await client.query(
+      "INSERT INTO booking_cable_plans(id,booking_id,requested_by,customer,estimate) VALUES($1,$2,$3,$4,$5::jsonb)",
+      [id, bookingId, userId, customer, JSON.stringify(price)]
+    );
+    await audit(client, userId, "CABLE_PLAN_CREATED", "CABLE_PLAN", id, { bookingId, ...price });
+    return { id, price };
+  }
+
+  async listStandaloneCablePlans(userId: string) {
+    const result = await this.db.transaction((client) => client.query(
+      "SELECT id, customer, estimate FROM booking_cable_plans WHERE booking_id IS NULL AND requested_by = $1 ORDER BY created_at DESC LIMIT 50",
+      [userId]
+    ));
+    return result.rows;
+  }
+
+  async createCablePlan(input: { customer?: string; cablePlan?: CablePlanInput }, userId: string) {
+    if (!input.cablePlan) throw new BadRequestException("Rencana kabel belum tersedia.");
+    const customer = typeof input.customer === "string" ? input.customer.trim() : "";
+    const plan = input.cablePlan;
+    return this.db.transaction((client) => this.saveCablePlan(client, plan, customer, userId, null));
+  }
+
   async createPathBooking(input: CreatePathBookingInput, userId: string) {
     const customer = input.customer?.trim();
     const picCustomer = input.picCustomer?.trim();
@@ -278,6 +328,24 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         throw new ConflictException({ message: "Susunan ruas berubah. Tinjau jalur dan jumlah core lagi." });
       }
       const counts = spanCoreCounts ?? route.cableIds.map(() => requestedCores);
+      const allocationCount = counts.reduce((total, count) => total + count, 0);
+      const priceRows = await client.query<{ value: { items?: BookingPrice[] } }>(
+        "SELECT value FROM app_settings WHERE key=$1",
+        ["booking_prices"]
+      );
+      const corePriceItems = (priceRows.rows[0]?.value.items ?? defaultBookingPrices)
+        .filter((item) => item.unit.trim().toLowerCase() === "core");
+      const coreRateCents = corePriceItems.reduce((sum, item) => sum + Math.round(item.price * 100), 0);
+      const priceSnapshot: BookingPriceSnapshot = {
+        configured: corePriceItems.length > 0 && coreRateCents > 0,
+        currency: "IDR",
+        unit: "core",
+        items: corePriceItems,
+        coreRateCents,
+        allocationCount,
+        totalCents: coreRateCents * allocationCount,
+        capturedAt: new Date().toISOString(),
+      };
       const allocations = route.allocations;
       const status = route.meetsRequest ? "Pending Approval" : "Waiting List";
       const id = `BKG-${randomUUID().toUpperCase()}`;
@@ -295,20 +363,24 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         GROUP BY cable_id
         ON CONFLICT (booking_id,segment_id) DO NOTHING
       `, [id, route.cableIds, counts]);
+      if (input.cablePlan) {
+        const cablePlan = await this.saveCablePlan(client, input.cablePlan, customer, userId, id);
+        priceSnapshot.cablePlan = cablePlan.price;
+      }
       const fingerprint = allocationFingerprint(routeKey, allocations);
       await client.query(`
         INSERT INTO booking_core_path_requests(booking_id,start_node_id,end_node_id,route_key,
-          route_cable_ids,requested_cores,route_length_m,proposed_allocations,review_fingerprint,span_core_counts)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb)
-      `, [id, startNodeId, endNodeId, routeKey, JSON.stringify(route.cableIds), requestedCores, totalLength, JSON.stringify(allocations), fingerprint, JSON.stringify(spanCoreCounts ?? [])]);
+          route_cable_ids,requested_cores,route_length_m,proposed_allocations,review_fingerprint,span_core_counts,price_snapshot)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11::jsonb)
+      `, [id, startNodeId, endNodeId, routeKey, JSON.stringify(route.cableIds), requestedCores, totalLength, JSON.stringify(allocations), fingerprint, JSON.stringify(spanCoreCounts ?? []), JSON.stringify(priceSnapshot)]);
       if (status === "Pending Approval") {
-        await notifyAdmins(client, "Persetujuan booking core diperlukan", `${customer} meminta ${counts.reduce((total, count) => total + count, 0)} alokasi core pada jalur ${route.cableNames.join(" → ")}.`, id);
+        await notifyAdmins(client, "Persetujuan booking core diperlukan", `${customer} meminta ${allocationCount} alokasi core pada jalur ${route.cableNames.join(" → ")}.`, id);
       }
       await audit(client, userId, "BOOKING_PATH_CREATED", "BOOKING", id, {
         requestedCores, spanCoreCounts: counts, startNodeId, endNodeId, cableIds: route.cableIds,
-        lengthMeters: totalLength, status, proposedAllocations: allocations,
+        lengthMeters: totalLength, status, proposedAllocations: allocations, priceSnapshot,
       });
-      return { id, status, needsVerification: false, cores: requestedCores, route: { cableIds: route.cableIds, cableNames: route.cableNames, lengthMeters: totalLength, allocations } };
+      return { id, status, needsVerification: false, cores: requestedCores, priceSnapshot, route: { cableIds: route.cableIds, cableNames: route.cableNames, lengthMeters: totalLength, allocations } };
     });
   }
 
@@ -406,6 +478,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       startName: string; endName: string; routeKey: string;
       plannedSplices: PlannedSplice[];
       spanCoreCounts: number[];
+      priceSnapshot: BookingPriceSnapshot;
       intermediateNames: (string | null)[];
     }>(`
       SELECT request.booking_id AS "bookingId",request.start_node_id AS "startNodeId",
@@ -413,6 +486,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
         request.requested_cores AS "requestedCores",request.route_length_m::float8 AS "routeLengthMeters",
         request.proposed_allocations AS "proposedAllocations",request.route_key AS "routeKey",start_node.name AS "startName",
         end_node.name AS "endName",request.planned_splices AS "plannedSplices",request.span_core_counts AS "spanCoreCounts",
+        request.price_snapshot AS "priceSnapshot",
         ARRAY(
           SELECT (
             SELECT max(node.name)
@@ -481,6 +555,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
           cableNames: pathRequest.routeCableIds.map((cableId) => rowSegments.find((segment) => segment.segmentId === cableId)?.name ?? cableId),
           requestedCores: pathRequest.requestedCores,
           spanCoreCounts: pathRequest.spanCoreCounts,
+          priceSnapshot: pathRequest.priceSnapshot,
           lengthMeters: Number(pathRequest.routeLengthMeters),
           proposedAllocations: isAdmin ? pathRequest.proposedAllocations : [],
           allocatedSections: isAdmin ? sectionsByBooking.filter((section) => section.bookingId === row.id) : [],

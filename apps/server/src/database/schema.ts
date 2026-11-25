@@ -593,6 +593,16 @@ export const bookingCorePathRequests = pgTable("booking_core_path_requests", {
   reviewFingerprint: text("review_fingerprint").notNull(),
   plannedSplices: jsonb("planned_splices").notNull().default(sql`'[]'::jsonb`),
   spanCoreCounts: jsonb("span_core_counts").$type<number[]>().notNull().default(sql`'[]'::jsonb`),
+  priceSnapshot: jsonb("price_snapshot").$type<{
+    configured: boolean;
+    currency: "IDR";
+    unit: "core";
+    items: { name: string; unit: string; price: number }[];
+    coreRateCents: number;
+    allocationCount: number;
+    totalCents: number;
+    capturedAt: string;
+  }>().notNull().default(sql`'{"configured":false,"currency":"IDR","unit":"core","items":[],"coreRateCents":0,"allocationCount":0,"totalCents":0,"capturedAt":""}'::jsonb`),
   createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
 });
 

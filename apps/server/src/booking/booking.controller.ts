@@ -72,6 +72,18 @@ export class BookingController {
     );
   }
 
+  @Get("bookings/cable-plan")
+  async listCablePlans(@Req() req: IncomingMessage) {
+    const user = await this.auth.requireUser(req);
+    return this.booking.listStandaloneCablePlans(user.id);
+  }
+
+  @Post("bookings/cable-plan")
+  async createCablePlan(@Req() req: IncomingMessage, @Body() body: Parameters<BookingService["createCablePlan"]>[0]) {
+    const user = await this.auth.requireUser(req);
+    return this.booking.createCablePlan(body, user.id);
+  }
+
   @Post("bookings/route")
   @ApiBody({ schema: { type: "object" } })
   async createPathBooking(@Req() req: IncomingMessage, @Body() body: CreatePathBookingInput) {

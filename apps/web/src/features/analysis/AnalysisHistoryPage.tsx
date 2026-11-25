@@ -699,10 +699,9 @@ export function AnalysisHistoryPage() {
   const addressBookingDraft = selectedAddressResult
     ? segmentBookingDraft(
         addressResult?.address ?? detail.data?.title ?? "Analisis alamat",
-        selectedAddressResult.network,
-        selectedAddressResult.terminationPlan?.requirement?.requiredCores,
-        selectedAddressResult.terminationPlan?.sourceCable?.id,
-        selectedAddressResult.terminations?.points
+        selectedAddressResult.network,        selectedAddressResult.terminationPlan?.sourceCable?.id,
+        selectedAddressResult.terminations?.points,
+        selectedAddressResult.terminationPlan?.cables
       )
     : null;
   const rows = Array.isArray(result.rows) ? (result.rows as BulkRow[]) : [];

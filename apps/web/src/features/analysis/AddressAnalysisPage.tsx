@@ -453,9 +453,9 @@ function AddressAnalysisEditor({
   const bookingDraft = analyze.data && selectedResult && segmentBookingDraft(
     analyze.data.address,
     selectedResult.network,
-    selectedResult.terminationPlan?.requirement?.requiredCores,
     selectedResult.terminationPlan?.sourceCable?.id,
-    selectedResult.terminations?.points
+    selectedResult.terminations?.points,
+    selectedResult.terminationPlan?.cables
   );
   const activeRouteId = selectedResult?.selectedRouteId ?? "A";
   const submitAnalysis = (point = selectedPoint) => {
