@@ -125,6 +125,17 @@ export type Booking = {
     cableNames: string[];
     requestedCores: number;
     spanCoreCounts?: number[];
+    priceSnapshot?: {
+      cablePlan?: { label: string; meters: number; rateCents: number; totalCents: number };
+      configured: boolean;
+      currency: "IDR";
+      unit: "core";
+      items: { name: string; unit: string; price: number }[];
+      coreRateCents: number;
+      allocationCount: number;
+      totalCents: number;
+      capturedAt: string;
+    };
     lengthMeters: number;
     proposedAllocations: { coreId: number; cableId: string; cableName: string; coreNumber: number; startMeters: number; endMeters: number; pathIndex: number }[];
     allocatedSections: { coreId: number; cableId: string; cableName: string; coreNumber: number; startMeters: number; endMeters: number; status: string }[];

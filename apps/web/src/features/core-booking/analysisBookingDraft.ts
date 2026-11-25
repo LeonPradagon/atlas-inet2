@@ -5,6 +5,8 @@ export type AnalysisBookingDraft = {
   targetId?: string;
   cableIds: string[];
   cores: number;
+  newCableMeters?: number;
+  cableOnly?: boolean;
 };
 
 export function segmentBookingDraft(
@@ -14,16 +16,19 @@ export function segmentBookingDraft(
     geometry?: unknown;
     capacity?: { connectedCables?: { id: string }[] };
   } | null,
-  cores?: number | null,
   sourceCableId?: string,
   nearbyTerminations?: {
     id: string;
     type: string;
     latitude: number;
     longitude: number;
-  }[]
+  }[],
+  proposedCables?: { distanceMeters: number }[]
 ): AnalysisBookingDraft | null {
-  if (!network?.id) return null;
+  const newCableMeters = proposedCableMeters(proposedCables);
+  if (!network?.id) {
+    return newCableMeters > 0 ? { label, cableIds: [], cores: 1, newCableMeters, cableOnly: true } : null;
+  }
   const coordinates =
     network.geometry &&
     typeof network.geometry === "object" &&
@@ -47,7 +52,8 @@ export function segmentBookingDraft(
       ...(sourceCableId ? [sourceCableId] : []),
       ...(network.capacity?.connectedCables?.map((cable) => cable.id) ?? []),
     ])],
-    cores: Number.isInteger(cores) && cores && cores > 0 && cores <= 4096 ? cores : 1,
+    cores: 1,
+    newCableMeters,
   };
 }
 
@@ -70,4 +76,8 @@ export function readAnalysisBookings(key: string): AnalysisBookingDraft[] {
 export function advanceAnalysisBookings(key: string, remaining: AnalysisBookingDraft[]) {
   if (remaining.length) sessionStorage.setItem(`atlas-booking-draft:${key}`, JSON.stringify(remaining));
   else sessionStorage.removeItem(`atlas-booking-draft:${key}`);
+}
+
+export function proposedCableMeters(cables: readonly { distanceMeters: number }[] = []) {
+  return cables.reduce((sum, cable) => Number.isFinite(cable.distanceMeters) && cable.distanceMeters > 0 ? sum + cable.distanceMeters : sum, 0);
 }

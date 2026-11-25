@@ -1,4 +1,4 @@
-import { prepareAnalysisBookings } from "../core-booking/analysisBookingDraft";
+import { prepareAnalysisBookings, proposedCableMeters } from "../core-booking/analysisBookingDraft";
 import { addMapDisplayControls } from "../map/mapDisplayControls";
 import { RouteSelector } from "../../components/RouteSelector";
 import { formatDistance } from "../../lib/format";
@@ -490,12 +490,13 @@ export function ConnectionAnalysisResult({
       </section>
     );
   }
-  const primary = result.routes.find((item) => item.id === "A") ?? route;
-  const startId = primary.source?.id;
-  const endId = primary.destination?.id;
-  const cableIds = [...new Set(primary.legs.flatMap((leg) =>
+  const startId = route.source?.id;
+  const endId = route.destination?.id;
+  const cableIds = [...new Set(route.legs.flatMap((leg) =>
     leg.kind === "existing" && leg.segmentId ? [leg.segmentId] : []
   ))];
+  const canBookCore = Boolean(startId && endId && startId !== endId && cableIds.length);
+  const newCableMeters = proposedCableMeters(route.legs.filter((leg) => leg.kind === "new"));
   const gaps = [...(route.terminalLinks ?? []), ...(route.roadSnapGaps ?? [])];
   const visibleLegs = route.legs.slice(
     (legPage - 1) * legPageSize,
@@ -509,9 +510,9 @@ export function ConnectionAnalysisResult({
   return (
     <section aria-label="Hasil analisis dua titik">
       <h3 className="h5">Rencana jalur melalui jaringan</h3>
-      {startId && endId && startId !== endId && primary.legs.some((leg) => leg.kind === "existing") ? (
+      {canBookCore || newCableMeters > 0 ? (
         <button className="btn btn-outline-primary mb-3" type="button" onClick={() => prepareAnalysisBookings([
-          { label: `${result.start.label} → ${result.end.label}`, startId, endId, cableIds, cores: 1 },
+          { label: `${result.start.label} → ${result.end.label}`, startId, endId, cableIds, cores: 1, newCableMeters, cableOnly: !canBookCore },
         ])}>Siapkan booking</button>
       ) : <p className="text-body-secondary">Jalur booking belum tersedia.</p>}
       <div
