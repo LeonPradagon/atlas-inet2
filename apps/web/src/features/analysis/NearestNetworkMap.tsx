@@ -28,6 +28,10 @@ import {
 } from "../map/networkMap";
 import { analysisMapStyle, searchRadiusFeature } from "./analysisMapStyle";
 import { CablePlanDetails } from "./CablePlanDetails";
+import {
+  prepareAnalysisBookings,
+  type AnalysisBookingDraft,
+} from "../core-booking/analysisBookingDraft";
 import type { NetworkCapacity } from "./NetworkCapacityDetail";
 import {
   type TerminationResults,
@@ -304,11 +308,13 @@ export function NetworkLocationsMap({
 export function NearestNetworkMap({
   result,
   streetViewUrl,
+  bookingDraft,
   selectedRouteId = "A",
   onSelectRoute,
 }: {
   result: NetworkSearchResult;
   streetViewUrl?: string;
+  bookingDraft?: AnalysisBookingDraft | null;
   selectedRouteId?: NetworkRouteOption["id"];
   onSelectRoute?: (routeId: NetworkRouteOption["id"]) => void;
 }) {
@@ -1664,8 +1670,36 @@ export function NearestNetworkMap({
           <CablePlanDetails
             networkName={result.network?.name}
             plan={result.terminationPlan}
+            action={bookingDraft && (
+              <div className="d-flex justify-content-start my-3">
+                <button
+                  className="btn btn-outline-primary atlas-secondary-action"
+                  onClick={() => prepareAnalysisBookings([bookingDraft])}
+                  type="button"
+                >
+                  <span aria-hidden="true" className="atlas-secondary-action-icon">
+                    <i className="bi bi-box-arrow-in-right" />
+                  </span>
+                  Siapkan booking
+                </button>
+              </div>
+            )}
           />
         </section>
+      )}
+      {bookingDraft && !result.terminationPlan?.cables.length && (
+        <div className="d-flex justify-content-start mt-3">
+          <button
+            className="btn btn-outline-primary atlas-secondary-action"
+            onClick={() => prepareAnalysisBookings([bookingDraft])}
+            type="button"
+          >
+            <span aria-hidden="true" className="atlas-secondary-action-icon">
+              <i className="bi bi-box-arrow-in-right" />
+            </span>
+            Siapkan booking
+          </button>
+        </div>
       )}
       {streetViewLocation && (
         <section aria-label="Street View lokasi survei" className="card mt-3">

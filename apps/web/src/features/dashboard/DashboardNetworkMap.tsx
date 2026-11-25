@@ -167,9 +167,8 @@ export function DashboardNetworkMap({ company }: { company: string }) {
     <div className="dashboard-network-map-wrap">
       <div aria-label="Peta jaringan fiber optik" className="dashboard-network-map" ref={container} />
       <button
-        aria-label={satelliteEnabled ? "Tampilkan peta standar" : "Tampilkan citra satelit"}
         aria-pressed={satelliteEnabled}
-        className="btn btn-sm btn-outline-primary atlas-secondary-action dashboard-map-style-toggle"
+        className="btn btn-light atlas-choice dashboard-map-style-toggle"
         disabled={!mapReady}
         onClick={() => {
           const next = !satelliteEnabled;
@@ -182,8 +181,8 @@ export function DashboardNetworkMap({ company }: { company: string }) {
         }}
         type="button"
       >
-        <i aria-hidden="true" className="bi bi-layers atlas-secondary-action-icon" />
-        {satelliteEnabled ? "Peta standar" : "Satelit"}
+        <i aria-hidden="true" className="bi bi-layers me-1" />
+        Satelit
       </button>
       {assetsQuery.isPending && <div className="dashboard-map-message"><span className="spinner-border spinner-border-sm" /> Memuat jalur jaringan...</div>}
       {assetsQuery.isError && <div className="dashboard-map-message">Peta jaringan tidak dapat dimuat.</div>}

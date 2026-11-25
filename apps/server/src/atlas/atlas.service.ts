@@ -1266,23 +1266,29 @@ export class AtlasService {
     zoom = 16,
     provinceCode?: string,
     importId?: string,
-    company?: string
+    company?: string,
+    geometryOnly = false
   ) {
     // Display geometry only; original geometry stays available for editing and exports.
     const tolerance = zoom >= 16 ? 0 : 360 / (512 * 2 ** zoom);
+    const coreColumns = geometryOnly ? "" : `
+      count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
+      count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
+      count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",`;
+    const coreJoin = geometryOnly ? "" : "LEFT JOIN network_core_booking_status c ON c.asset_id=a.id";
+    const grouping = geometryOnly ? "" : "GROUP BY a.id";
     const { rows } = await this.db.query<AssetRecord>(
       `SELECT a.id,a.name,a.area,a.asset_type AS "assetType",a.source,a.cable_type AS "cableType",
       a.installation,a.road_side AS side,a.pole,a.pole_height AS "poleHeight",a.odc,a.odp,a.total_cores AS "totalCores",
-      count(c.id) FILTER (WHERE c.status='Used')::int AS "usedCores",
-      count(c.id) FILTER (WHERE c.status='Booked')::int AS "bookedCores",
-      count(c.id) FILTER (WHERE c.status='Available')::int AS "idleCores",
+      ${coreColumns}
       ST_AsGeoJSON(CASE WHEN $5::float8 > 0 AND a.source<>'kml' THEN ST_SimplifyPreserveTopology(a.geometry,$5::float8) ELSE a.geometry END,6)::json AS geometry,
       GeometryType(a.geometry) AS "geometryType",a.attributes,a.created_at AS "createdAt"
-      FROM network_assets a LEFT JOIN network_core_booking_status c ON c.asset_id=a.id
+      FROM network_assets a ${coreJoin}
       LEFT JOIN LATERAL (
         SELECT l.details->>'fileName' AS file_name
         FROM audit_logs l
-        WHERE l.action='NETWORK_IMPORTED' AND l.entity_type='NETWORK_IMPORT'
+        WHERE $8::text IS NOT NULL
+          AND l.action='NETWORK_IMPORTED' AND l.entity_type='NETWORK_IMPORT'
           AND l.details->>'source'='kml/kmz' AND l.entity_id=${assetImportId}
         ORDER BY l.id LIMIT 1
       ) package_import ON true
@@ -1293,7 +1299,7 @@ export class AtlasService {
         AND ($8::text IS NULL OR CASE WHEN $8='__unassigned__'
           THEN ${assetCompany} IS NULL
           ELSE lower(${assetCompany})=lower($8) END)
-      GROUP BY a.id ORDER BY a.name`,
+      ${grouping} ORDER BY a.name`,
       [...bounds, tolerance, provinceCode ?? null, importId ?? null, company ?? null]
     );
     const pattern = new RegExp((await this.getCableNamePattern()).pattern);

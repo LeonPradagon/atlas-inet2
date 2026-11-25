@@ -38,6 +38,12 @@ export type CreateBookingInput = {
 };
 
 type BookingPrice = { name: string; unit: string; price: number };
+// Both KMZ schemas are accepted by analysis and must identify the same devices here.
+const bookingDeviceType = `upper(COALESCE(
+  NULLIF(node.attributes->>'Tipe Perangkat',''),
+  NULLIF(node.attributes->>'Perangkat',''),
+  NULLIF(node.attributes->>'Tipe_Perangkat','')
+))`;
 const defaultBookingPrices: BookingPrice[] = [
   { name: "Kabel fiber optik", unit: "meter", price: 0 },
   { name: "Core kabel", unit: "core", price: 0 },
@@ -174,13 +180,13 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       id: string; name: string; type: string | null; area: string | null; latitude: number; longitude: number;
     }>(`
       SELECT node.id,node.name,COALESCE(NULLIF(node.area,''),node.attributes->>'Wilayah',node.attributes->>'Region') AS area,
-        node.attributes->>'Tipe Perangkat' AS type,ST_Y(node.geometry) AS latitude,ST_X(node.geometry) AS longitude
+        ${bookingDeviceType} AS type,ST_Y(node.geometry) AS latitude,ST_X(node.geometry) AS longitude
       FROM network_assets node
       WHERE node.asset_type='asset' AND GeometryType(node.geometry)='POINT'
         AND (EXISTS (SELECT 1 FROM network_segment_endpoints endpoint WHERE endpoint.node_asset_id=node.id)
           OR EXISTS (SELECT 1 FROM network_core_end_connections endpoint
             WHERE endpoint.node_asset_id=node.id AND endpoint.connection_type='termination')
-          OR (upper(node.attributes->>'Tipe Perangkat') IN ('OLT','POP','OTB','ODC','ODP','CLOSURE','SLACK / COIL','TIANG','POLE')
+          OR (${bookingDeviceType} IN ('OLT','POP','OTB','ODC','ODP','CLOSURE','SLACK','SLACK / COIL','TIANG','POLE')
             AND EXISTS (SELECT 1 FROM network_assets cable
               WHERE cable.asset_type='segment' AND cable.total_cores>0
                 AND GeometryType(cable.geometry)='LINESTRING'
@@ -189,7 +195,9 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       ORDER BY node.name,node.id
     `);
     const cables = await loadCandidateCables(this.db, startId ?? "", null);
-    const cablesByNode = new Map<string, { id: string; name: string }[]>();
+    const cablesByNode = new Map<string, {
+      id: string; name: string; startId: string | null; endId: string | null;
+    }[]>();
     const endpoints = new Map<string, typeof cables>();
     const reachable = new Set<string>();
     const queue: string[] = [];
@@ -215,7 +223,7 @@ export class BookingService implements OnModuleInit, OnModuleDestroy {
       for (const id of new Set([cable.a, cable.b, ...cable.access.map((point) => point.node)])) {
         if (!id) continue;
         const list = cablesByNode.get(id) ?? [];
-        list.push({ id: cable.id, name: cable.name });
+        list.push({ id: cable.id, name: cable.name, startId: cable.a, endId: cable.b });
         cablesByNode.set(id, list);
       }
       for (const id of new Set([cable.a, cable.b])) {
@@ -1284,7 +1292,7 @@ async function loadCandidateCables(db: RouteQueryExecutor, startId: string, endI
       )), '[]'::jsonb)
        FROM network_assets node
        WHERE ($2::text IS NULL OR node.id IN ($1,$2)) AND node.asset_type='asset' AND GeometryType(node.geometry)='POINT'
-         AND upper(node.attributes->>'Tipe Perangkat') IN ('OLT','POP','OTB','ODC','ODP','CLOSURE','SLACK / COIL','TIANG','POLE')
+         AND ${bookingDeviceType} IN ('OLT','POP','OTB','ODC','ODP','CLOSURE','SLACK','SLACK / COIL','TIANG','POLE')
          AND node.geometry && ST_Expand(cable.geometry,0.001)
          AND ST_DistanceSphere(node.geometry,cable.geometry)<=25) AS access
     FROM network_assets cable
@@ -1296,7 +1304,7 @@ async function loadCandidateCables(db: RouteQueryExecutor, startId: string, endI
       return `LEFT JOIN LATERAL (
         SELECT node.id FROM network_assets node
         WHERE node.asset_type='asset' AND GeometryType(node.geometry)='POINT'
-          AND upper(node.attributes->>'Tipe Perangkat') IN ('OLT','POP','OTB','ODC','ODP','CLOSURE','SLACK / COIL','TIANG','POLE')
+          AND ${bookingDeviceType} IN ('OLT','POP','OTB','ODC','ODP','CLOSURE','SLACK','SLACK / COIL','TIANG','POLE')
           AND node.geometry && ST_Expand(${point}(cable.geometry),0.001)
           AND ST_DistanceSphere(node.geometry,${point}(cable.geometry))<=25
         ORDER BY ST_DistanceSphere(node.geometry,${point}(cable.geometry)),node.id LIMIT 1

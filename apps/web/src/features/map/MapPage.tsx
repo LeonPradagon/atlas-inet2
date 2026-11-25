@@ -1268,7 +1268,7 @@ export function MapPage() {
     ],
     queryFn: ({ signal }) =>
       api<NetworkAsset[]>(
-        `/assets/map?bbox=${mapBounds!.join(",")}&zoom=${mapZoom}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : ""}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`,
+        `/assets/map?view=geometry&bbox=${mapBounds!.join(",")}&zoom=${mapZoom}${selectedImportIds.length ? `&importIds=${selectedImportIds.join(",")}` : ""}${provinceCode ? `&provinceCode=${provinceCode}` : ""}`,
         { signal, timeout: 30_000 }
       ),
     retry: 0,
@@ -1537,15 +1537,15 @@ export function MapPage() {
     () => pointCollection(routePoints),
     [routePoints]
   );
-  const linkedCableQuery = useQuery({
-    queryKey: ["segments", "linked-cable", linkedCableId],
-    queryFn: () => api<NetworkAsset[]>(`/assets?${new URLSearchParams({ id: linkedCableId ?? "" })}`),
-    enabled: Boolean(linkedCableId),
+  const knownSelection = knownAssets.find((item) => item.id === selectedId);
+  const loadCableDetail = Boolean(selectedId && (knownSelection?.assetType === "segment" || selectedId === linkedCableId));
+  const cableDetailQuery = useQuery({
+    queryKey: ["segments", "cable-detail", selectedId],
+    queryFn: ({ signal }) => api<NetworkAsset[]>(`/assets?${new URLSearchParams({ id: selectedId })}`, { signal }),
+    enabled: loadCableDetail,
   });
-  const selectedAsset = knownAssets.find((item) => item.id === selectedId)
-    ?? (selectedId === linkedCableId
-      ? linkedCableQuery.data?.find((item) => item.id === selectedId && item.assetType === "segment")
-      : undefined);
+  const cableDetail = cableDetailQuery.data?.find((item) => item.id === selectedId && item.assetType === "segment");
+  const selectedAsset = cableDetail ? { ...knownSelection, ...cableDetail, geometry: knownSelection?.geometry ?? null } : knownSelection;
   const selectedDraftId = selectedAsset
     ? ftthDesignGroupId(selectedAsset)
     : undefined;
@@ -1621,7 +1621,7 @@ export function MapPage() {
     draftRadiusMeters,
   ]);
   const selectedSegment =
-    selectedAsset?.assetType === "segment" ? selectedAsset : undefined;
+    cableDetail && selectedAsset?.assetType === "segment" ? selectedAsset : undefined;
   useEffect(() => {
     if (!linkedCableId || selectedSegment?.id !== linkedCableId || openedLinkedCable.current) return;
     const details = coreDetailsRef.current;
@@ -2802,9 +2802,6 @@ export function MapPage() {
             cores.className = "segment-hover-cores";
             const capacity = [
               ["Total core", total, ""],
-              ["Tersedia", properties.idleCores, "text-success-emphasis"],
-              ["Terpakai", properties.usedCores, "text-danger-emphasis"],
-              ["Dibooking", properties.bookedCores, "text-warning-emphasis"],
             ] as const;
             for (const [label, count, tone] of capacity) {
               const item = document.createElement("div");
@@ -4210,7 +4207,7 @@ export function MapPage() {
             </button>
             <button
               aria-pressed={globeEnabled}
-              className="btn btn-light"
+              className="btn btn-light atlas-choice"
               disabled={!mapReady}
               onClick={() => {
                 const instance = map.current;
@@ -5153,10 +5150,10 @@ export function MapPage() {
               </div>
             )}
           <div className="segment-detail">
-            {linkedCableId && selectedId === linkedCableId && !selectedSegment && (
+            {loadCableDetail && !selectedSegment && (
               <p role="status">
-                {linkedCableQuery.isPending ? "Memuat kabel terkait…" :
-                  linkedCableQuery.isError ? "Detail kabel terkait gagal dimuat." : "Kabel terkait tidak ditemukan."}
+                {cableDetailQuery.isPending ? "Memuat kapasitas kabel…" :
+                  cableDetailQuery.isError ? "Detail kabel gagal dimuat." : "Kabel tidak ditemukan."}
               </p>
             )}
             <div className="segment-detail-toolbar">
@@ -5187,7 +5184,7 @@ export function MapPage() {
                   className="segment-endpoints-summary"
                 >
                   {(["A", "B"] as const).map((side) => {
-                    const geometry = selectedSegment.geometry;
+                    const geometry = selectedCableGeometry;
                     const point = geometry?.type === "LineString"
                       ? geometry.coordinates.at(side === "A" ? 0 : -1)
                       : undefined;

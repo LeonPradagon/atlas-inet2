@@ -19,10 +19,12 @@ import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
 import { api } from "../../lib/api";
 import { confirmAction, showError } from "../../lib/dialogs";
+import { segmentBookingDraft } from "../core-booking/analysisBookingDraft";
 import { addAtlasMapIcons } from "../map/networkMap";
 import { bulkJobStatusLabel } from "./bulkJobStatus";
 import {
   NearestNetworkMap,
+  resultForRoute,
   type NetworkSearchResult,
 } from "./NearestNetworkMap";
 import { NetworkCapacityDetail } from "./NetworkCapacityDetail";
@@ -650,6 +652,8 @@ export function AnalysisHistoryPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
   const [selectedId, setSelectedId] = useState("");
+  const [selectedAddressRouteId, setSelectedAddressRouteId] =
+    useState<"A" | "B">("A");
   const [busyId, setBusyId] = useState("");
   const detailPanelRef = useRef<HTMLElement>(null);
 
@@ -685,6 +689,22 @@ export function AnalysisHistoryPage() {
     }
   }, [selectedId, detail.isPending]);
   const result = detail.data?.result ?? {};
+  const addressResult =
+    detail.data?.analysisType === "ADDRESS" && result.mode !== "connection"
+      ? (result as unknown as NetworkSearchResult & { address?: string })
+      : null;
+  const selectedAddressResult = addressResult
+    ? resultForRoute(addressResult, selectedAddressRouteId)
+    : null;
+  const addressBookingDraft = selectedAddressResult
+    ? segmentBookingDraft(
+        addressResult?.address ?? detail.data?.title ?? "Analisis alamat",
+        selectedAddressResult.network,
+        selectedAddressResult.terminationPlan?.requirement?.requiredCores,
+        selectedAddressResult.terminationPlan?.sourceCable?.id,
+        selectedAddressResult.terminations?.points
+      )
+    : null;
   const rows = Array.isArray(result.rows) ? (result.rows as BulkRow[]) : [];
   const savedDraftFeatures = Array.isArray(result.features)
     ? (result.features as DraftFeature[])
@@ -1260,7 +1280,10 @@ export function AnalysisHistoryPage() {
                             }
                           />
                           <NearestNetworkMap
-                            result={result as unknown as NetworkSearchResult}
+                            bookingDraft={addressBookingDraft}
+                            onSelectRoute={setSelectedAddressRouteId}
+                            result={addressResult!}
+                            selectedRouteId={selectedAddressRouteId}
                           />
                         </div>
                       )}{" "}

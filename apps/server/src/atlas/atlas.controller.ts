@@ -424,6 +424,7 @@ export class AtlasController {
   @ApiQuery({ name: "importId", type: String, required: false })
   @ApiQuery({ name: "importIds", type: String, required: false })
   @ApiQuery({ name: "company", type: String, required: false })
+  @ApiQuery({ name: "view", enum: ["geometry"], required: false })
   async mapAssets(
     @Req() req: IncomingMessage,
     @Query("bbox") bbox?: string,
@@ -431,7 +432,8 @@ export class AtlasController {
     @Query("provinceCode") provinceCode?: string,
     @Query("importId") importId?: string,
     @Query("importIds") importIds?: string,
-    @Query("company") company?: string
+    @Query("company") company?: string,
+    @Query("view") view?: string
   ) {
     await this.auth.requireUser(req);
     const values = bbox?.split(",").map(Number) ?? [];
@@ -459,7 +461,8 @@ export class AtlasController {
       level,
       provinceCode,
       importFilter(importId, importIds),
-      company?.trim() || undefined
+      company?.trim() || undefined,
+      view === "geometry"
     );
   }
 

@@ -1,4 +1,4 @@
-import { prepareAnalysisBookings, segmentBookingDraft } from "../core-booking/analysisBookingDraft";
+import { segmentBookingDraft } from "../core-booking/analysisBookingDraft";
 import { notify } from "../../components/Snackbar";
 import { formatDistance } from "../../lib/format";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -450,10 +450,12 @@ function AddressAnalysisEditor({
     () => (analyze.data ? resultForRoute(analyze.data, selectedRouteId) : null),
     [analyze.data, selectedRouteId]
   );
-  const bookingDraft = analyze.data && segmentBookingDraft(
+  const bookingDraft = analyze.data && selectedResult && segmentBookingDraft(
     analyze.data.address,
-    analyze.data.network,
-    analyze.data.terminationPlan?.requirement?.requiredCores
+    selectedResult.network,
+    selectedResult.terminationPlan?.requirement?.requiredCores,
+    selectedResult.terminationPlan?.sourceCable?.id,
+    selectedResult.terminations?.points
   );
   const activeRouteId = selectedResult?.selectedRouteId ?? "A";
   const submitAnalysis = (point = selectedPoint) => {
@@ -1979,13 +1981,9 @@ function AddressAnalysisEditor({
             </div>
           </div>
           <div className="card-body">
-            {bookingDraft ? (
-              <button className="btn btn-outline-primary mb-3" type="button" onClick={() => prepareAnalysisBookings([bookingDraft])}>
-                Siapkan booking
-              </button>
-            ) : <p className="text-body-secondary">Jalur booking belum tersedia.</p>}
             {selectedResult && (
               <NearestNetworkMap
+                bookingDraft={bookingDraft}
                 key={analyze.data.historyId}
                 onSelectRoute={setSelectedRouteId}
                 result={selectedResult}

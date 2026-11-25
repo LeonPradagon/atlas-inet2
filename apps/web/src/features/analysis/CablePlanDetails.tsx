@@ -1,6 +1,7 @@
 import { formatDistance } from "../../lib/format";
 import { DataTable, type DataTableColumn } from "../../components/DataTable";
 import { DetailTable } from "../../components/DetailTable";
+import type { ReactNode } from "react";
 import {
   cableName,
   describeCableEndpoints,
@@ -44,9 +45,11 @@ const spanColumns: readonly DataTableColumn<CablePlanSpan>[] = [
 export function CablePlanDetails({
   plan,
   networkName,
+  action,
 }: {
   plan: TerminationPlan;
   networkName?: string;
+  action?: ReactNode;
 }) {
   const endpoints = describeCableEndpoints(plan, networkName);
   const spans = describeCableSpans(plan, networkName);
@@ -99,6 +102,7 @@ export function CablePlanDetails({
         );
       })}
 
+      {action}
       {spans.length > 1 && (
         <details className="cable-plan-spans">
           <summary>Rincian {spans.length} ruas kabel</summary>

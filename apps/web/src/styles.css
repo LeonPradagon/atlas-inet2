@@ -1996,6 +1996,31 @@ body {
   display: grid;
   gap: .5rem;
 }
+.booking-route-span-control {
+  display: grid;
+  justify-items: start;
+  gap: .375rem;
+  width: min(100%, 18rem);
+  padding-block: .25rem;
+}
+.booking-route-span-label {
+  color: var(--atlas-muted, var(--bs-secondary-color));
+  font-size: .8125rem;
+  font-weight: 600;
+}
+.booking-route-span-input {
+  width: min(100%, 10rem);
+}
+.booking-route-span-input .form-control {
+  font-variant-numeric: tabular-nums;
+}
+.booking-route-span-input .input-group-text {
+  color: var(--bs-secondary-color);
+  background: var(--bs-tertiary-bg);
+}
+.booking-route-span-error {
+  color: var(--bs-warning-text-emphasis, #8a5a00);
+}
 .booking-route-cable {
   display: flex;
   flex-wrap: wrap;
