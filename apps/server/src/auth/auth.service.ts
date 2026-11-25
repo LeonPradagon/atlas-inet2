@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import {
   BadRequestException,
   ForbiddenException,
@@ -30,6 +31,39 @@ export class AuthService {
       throw new ForbiddenException({ message: "Peran akun tidak diizinkan." });
     }
     return user as typeof session.user & { role: "ADMIN" | "PRESALES" };
+  }
+
+  async requireAnalysisUser(request: IncomingMessage) {
+    const session = await this.session(request);
+    if (session) {
+      const user = session.user as typeof session.user & { role?: string };
+      if (!["ADMIN", "PRESALES"].includes(user.role ?? "")) {
+        throw new ForbiddenException({ message: "Peran akun tidak diizinkan." });
+      }
+      return user as typeof session.user & { role: "ADMIN" | "PRESALES" };
+    }
+
+    const expected = process.env.ANALYSIS_API_KEY;
+    const supplied = request.headers["x-api-key"];
+    if (
+      expected &&
+      expected.length >= 32 &&
+      expected.trim() === expected &&
+      typeof supplied === "string"
+    ) {
+      const expectedBytes = Buffer.from(expected);
+      const suppliedBytes = Buffer.from(supplied);
+      if (
+        expectedBytes.length === suppliedBytes.length &&
+        timingSafeEqual(expectedBytes, suppliedBytes)
+      ) {
+        return { id: "atlas-analysis-api", role: "PRESALES" as const };
+      }
+    }
+
+    throw new UnauthorizedException({
+      message: "Sesi login atau X-API-Key yang valid diperlukan.",
+    });
   }
 
   async requireAdmin(request: IncomingMessage) {

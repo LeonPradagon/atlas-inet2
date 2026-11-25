@@ -22,6 +22,7 @@ services:
       DATABASE_URL: postgresql://atlas:atlas_dev@postgis:5432/atlas
       BETTER_AUTH_URL: http://localhost:5176
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      ANALYSIS_API_KEY: ${ANALYSIS_API_KEY:-}
       TRUSTED_ORIGINS: http://localhost:5176,http://localhost:3000
       GEOCODER_URL: ${GEOCODER_URL:-}
       NOMINATIM_URL: ${NOMINATIM_URL:-https://nominatim.openstreetmap.org/search}

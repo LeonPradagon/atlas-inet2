@@ -27,6 +27,7 @@ services:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET in .env}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Set BETTER_AUTH_URL in .env}
       TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:?Set TRUSTED_ORIGINS in .env}
+      ANALYSIS_API_KEY: ${ANALYSIS_API_KEY:-}
       GEOCODER_URL: http://photon:2322
       NOMINATIM_URL: ${NOMINATIM_URL:-https://nominatim.openstreetmap.org/search}
       ROUTING_URL: http://graphhopper:8989

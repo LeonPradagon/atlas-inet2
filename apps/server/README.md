@@ -112,3 +112,8 @@ parameter path, query, dan respons berhasil didokumentasikan di Swagger. Data
 impor, respons provider, dan hasil analisis yang dinamis dapat memiliki field
 tambahan. DTO ini mendokumentasikan input dan tidak menambahkan validasi runtime
 baru.
+
+Untuk autentikasi integrasi server-ke-server, endpoint analisis juga menerima
+header `X-API-Key` dari environment `ANALYSIS_API_KEY`. Lihat
+[`docs/api-analisis.md`](../../docs/api-analisis.md) untuk format request,
+template XLSX, status job, dan contoh polling.

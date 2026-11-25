@@ -11,6 +11,17 @@ async function bootstrap() {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   try {
     await migrateDatabase(pool);
+    if (
+      process.env.ANALYSIS_API_KEY &&
+      process.env.ANALYSIS_API_KEY.length >= 32 &&
+      process.env.ANALYSIS_API_KEY.trim() === process.env.ANALYSIS_API_KEY
+    ) {
+      await pool.query(
+        `INSERT INTO "user" (id,name,email,role)
+         VALUES ('atlas-analysis-api','ATLAS Analysis API','atlas-analysis-api@local.invalid','PRESALES')
+         ON CONFLICT (id) DO NOTHING`
+      );
+    }
   } finally {
     await pool.end();
   }
@@ -96,9 +107,13 @@ async function bootstrap() {
   const swaggerConfig = new DocumentBuilder()
     .setTitle("ATLAS API")
     .setDescription(
-      "Dokumentasi API ATLAS. Login menggunakan email dan kata sandi untuk membuat sesi cookie; endpoint yang membutuhkan autentikasi menggunakan sesi tersebut. Data impor dan hasil analisis yang dinamis dapat memiliki field tambahan."
+      "Dokumentasi API ATLAS. Endpoint analisis menerima sesi login atau X-API-Key dari ANALYSIS_API_KEY; endpoint lain menggunakan sesi. Data impor dan hasil analisis yang dinamis dapat memiliki field tambahan."
     )
     .setVersion("0.1.0")
+    .addApiKey(
+      { type: "apiKey", in: "header", name: "X-API-Key" },
+      "AnalysisApiKey"
+    )
     .build();
   SwaggerModule.setup("api/docs", app, () => {
     const document = SwaggerModule.createDocument(app, swaggerConfig);

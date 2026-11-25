@@ -23,6 +23,7 @@ import {
   ApiOperation,
   ApiParam,
   ApiQuery,
+  ApiSecurity,
 } from "@nestjs/swagger";
 import { AuthService } from "../auth/auth.service";
 import {
@@ -797,6 +798,7 @@ export class AtlasController {
   }
 
   @Post("analysis/connection")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiBody({ type: AnalyzeConnectionDto })
@@ -804,7 +806,7 @@ export class AtlasController {
     @Req() req: IncomingMessage,
     @Body() body: AnalyzeConnectionDto
   ) {
-    const user = await this.auth.requireUser(req);
+    const user = await this.auth.requireAnalysisUser(req);
     const input = validateConnectionInput(body);
     const result = await this.connection!.analyze(input);
     const historyId = await this.atlas.saveAnalysisHistory(
@@ -818,6 +820,7 @@ export class AtlasController {
   }
 
   @Post("analysis/address")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiBody({ type: AnalyzeAddressDto })
@@ -825,7 +828,7 @@ export class AtlasController {
     @Req() req: IncomingMessage,
     @Body() body: AnalyzeAddressDto
   ) {
-    const user = await this.auth.requireUser(req);
+    const user = await this.auth.requireAnalysisUser(req);
     const suppliedRequirement = body.coreRequirement;
     if (
       suppliedRequirement !== undefined &&
@@ -847,21 +850,14 @@ export class AtlasController {
           services: suppliedRequirement.services,
         }
       : undefined;
-    if (!body.address?.trim()) {
-      throw new BadRequestException({ message: "Alamat wajib diisi." });
-    }
-    if (
-      !body.coordinates &&
-      !(
-        body.structured?.province?.trim() &&
-        body.structured.city?.trim() &&
-        body.structured.district?.trim() &&
-        body.structured.subdistrict?.trim()
-      )
-    ) {
+    const address =
+      body.address?.trim() ||
+      (body.coordinates
+        ? `${body.coordinates.latitude}, ${body.coordinates.longitude}`
+        : "");
+    if (!body.coordinates && !address) {
       throw new BadRequestException({
-        message:
-          "Provinsi, kabupaten/kota, kecamatan, dan kelurahan/desa wajib dipilih.",
+        message: "Alamat atau koordinat wajib diisi.",
       });
     }
     if (body.coordinates) {
@@ -872,15 +868,22 @@ export class AtlasController {
       }
       const { longitude, latitude, provider, matchQuality, matchedStreet } =
         body.coordinates;
-      if (typeof longitude !== "number" || typeof latitude !== "number") {
+      if (
+        typeof longitude !== "number" ||
+        typeof latitude !== "number" ||
+        !Number.isFinite(longitude) ||
+        !Number.isFinite(latitude) ||
+        Math.abs(longitude) > 180 ||
+        Math.abs(latitude) > 90
+      ) {
         throw new BadRequestException({
-          message: "Koordinat harus berupa longitude dan latitude.",
+          message: "Longitude dan latitude harus berupa koordinat yang valid.",
         });
       }
       const result = await this.analyzeCoordinates(
         longitude,
         latitude,
-        body.address,
+        address,
         provider,
         matchQuality,
         matchedStreet,
@@ -890,9 +893,9 @@ export class AtlasController {
       const historyId = await this.atlas.saveAnalysisHistory(
         user.id,
         "ADDRESS",
-        body.address.trim(),
+        address,
         {
-          address: body.address,
+          address,
           coordinateConfirmed: true,
           coordinates: body.coordinates,
           coreRequirement: requirement,
@@ -902,13 +905,18 @@ export class AtlasController {
       );
       return { ...result, historyId };
     }
-    if (body.structured) {
+    if (
+      body.structured?.province?.trim() &&
+      body.structured.city?.trim() &&
+      body.structured.district?.trim() &&
+      body.structured.subdistrict?.trim()
+    ) {
       const result = await this.geocoding.geocodeStructured(body.structured);
       const [longitude, latitude] = result.coordinates;
       const analysis = await this.analyzeCoordinates(
         longitude,
         latitude,
-        body.address,
+        address,
         result.provider,
         result.matchQuality,
         result.matchedStreet,
@@ -918,9 +926,9 @@ export class AtlasController {
       const historyId = await this.atlas.saveAnalysisHistory(
         user.id,
         "ADDRESS",
-        body.address.trim(),
+        address,
         {
-          address: body.address,
+          address,
           coreRequirement: requirement,
           structured: body.structured,
         },
@@ -928,18 +936,19 @@ export class AtlasController {
       );
       return { ...analysis, historyId };
     }
-    const result = await this.analyzeLocation(body.address);
+    const result = await this.analyzeLocation(address);
     const historyId = await this.atlas.saveAnalysisHistory(
       user.id,
       "ADDRESS",
-      body.address.trim(),
-      { address: body.address },
+      address,
+      { address },
       result
     );
     return { ...result, historyId };
   }
 
   @Get("analysis/address/suggestions")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiQuery({ name: "q", type: String, required: false })
@@ -964,7 +973,7 @@ export class AtlasController {
     @Req() req: IncomingMessage,
     @Query() query: Record<string, unknown>
   ) {
-    await this.auth.requireUser(req);
+    await this.auth.requireAnalysisUser(req);
     const search = typeof query.q === "string" ? query.q.trim() : "";
     if (!search || search.length < 3) {
       return [];
@@ -984,13 +993,14 @@ export class AtlasController {
   }
 
   @Get("analysis/terminations")
+  @ApiSecurity("AnalysisApiKey")
   async nearbyAnalysisTerminations(
     @Req() req: IncomingMessage,
     @Query("longitude") longitude?: string,
     @Query("latitude") latitude?: string,
     @Query("expand") expand?: string
   ) {
-    await this.auth.requireUser(req);
+    await this.auth.requireAnalysisUser(req);
     const lon = Number(longitude);
     const lat = Number(latitude);
     if (!longitude || !latitude || !Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90) {
@@ -1000,6 +1010,7 @@ export class AtlasController {
   }
 
   @Get("analysis/address/reverse")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiQuery({ name: "longitude", type: String, required: true })
@@ -1009,7 +1020,7 @@ export class AtlasController {
     @Query("longitude") longitude?: string,
     @Query("latitude") latitude?: string
   ) {
-    await this.auth.requireUser(req);
+    await this.auth.requireAnalysisUser(req);
     const lon = Number(longitude),
       lat = Number(latitude);
     if (
@@ -1025,6 +1036,7 @@ export class AtlasController {
   }
 
   @Post("analysis/bulk")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiOperation({ summary: "Analisis file XLSX (maksimal 15 MB)" })
@@ -1037,7 +1049,7 @@ export class AtlasController {
     @Req() req: IncomingMessage,
     @UploadedFile() file?: { originalname: string; buffer: Buffer }
   ) {
-    const user = await this.auth.requireUser(req);
+    const user = await this.auth.requireAnalysisUser(req);
     if (!(file && /\.xlsx$/iu.test(file.originalname))) {
       throw new BadRequestException({ message: "Pilih file Excel .xlsx." });
     }
@@ -1086,6 +1098,7 @@ export class AtlasController {
   }
 
   @Post("analysis/bulk/jobs")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiOperation({ summary: "Analisis file XLSX (maksimal 15 MB)" })
@@ -1098,7 +1111,7 @@ export class AtlasController {
     @Req() req: IncomingMessage,
     @UploadedFile() file?: { originalname: string; buffer: Buffer }
   ) {
-    const user = await this.auth.requireUser(req);
+    const user = await this.auth.requireAnalysisUser(req);
     if (!file) {
       throw new BadRequestException({ message: "Pilih file Excel .xlsx." });
     }
@@ -1106,15 +1119,17 @@ export class AtlasController {
   }
 
   @Get("analysis/bulk/jobs/:id")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiParam({ name: "id", type: String })
   async bulkJobProgress(@Req() req: IncomingMessage, @Param("id") id: string) {
-    const user = await this.auth.requireUser(req);
+    const user = await this.auth.requireAnalysisUser(req);
     return this.bulk.progress(user.id, id, user.role === "ADMIN");
   }
 
   @Get("analysis/bulk/jobs/:id/rows")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiParam({ name: "id", type: String })
@@ -1130,7 +1145,7 @@ export class AtlasController {
     @Query("search") search?: string,
     @Query("status") status?: string
   ) {
-    const user = await this.auth.requireUser(req);
+    const user = await this.auth.requireAnalysisUser(req);
     return this.bulk.page(
       user.id,
       id,
@@ -1143,15 +1158,17 @@ export class AtlasController {
   }
 
   @Get("analysis/bulk/jobs/:id/map-points")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiParam({ name: "id", type: String })
   async bulkJobMapPoints(@Req() req: IncomingMessage, @Param("id") id: string) {
-    const user = await this.auth.requireUser(req);
+    const user = await this.auth.requireAnalysisUser(req);
     return this.bulk.mapPoints(user.id, id, user.role === "ADMIN");
   }
 
   @Post("analysis/bulk/jobs/:id/rows/:row/expand")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiParam({ name: "id", type: String })
@@ -1163,7 +1180,7 @@ export class AtlasController {
     @Param("row") row: string,
     @Body() body: ExpandBulkRowDto
   ) {
-    const user = await this.auth.requireUser(req);
+    const user = await this.auth.requireAnalysisUser(req);
     if (body.confirmed !== true) {
       throw new BadRequestException({
         message: "Persetujuan diperlukan sebelum pencarian hingga 2 km.",
@@ -1176,11 +1193,12 @@ export class AtlasController {
   }
 
   @Post("analysis/bulk/jobs/:id/cancel")
+  @ApiSecurity("AnalysisApiKey")
   @ApiUnauthorizedResponse({ description: "Sesi login diperlukan." })
   @ApiForbiddenResponse({ description: "Peran akun tidak diizinkan." })
   @ApiParam({ name: "id", type: String })
   async cancelBulkJob(@Req() req: IncomingMessage, @Param("id") id: string) {
-    const user = await this.auth.requireUser(req);
+    const user = await this.auth.requireAnalysisUser(req);
     return this.bulk.cancel(user.id, id);
   }
 

@@ -29,12 +29,16 @@ export class CoreRequirementDto {
 }
 
 export class AnalyzeAddressDto {
-  @ApiProperty({ type: String, description: "Alamat yang akan dianalisis" })
+  @ApiPropertyOptional({
+    type: String,
+    description:
+      "Alamat yang akan dianalisis. Wajib jika coordinates tidak dikirim; jika koordinat dikirim, alamat boleh dihilangkan.",
+  })
   address?: string;
   @ApiPropertyOptional({
     type: StructuredAddressDto,
     description:
-      "Wajib mengisi province, city, district, dan subdistrict jika coordinates tidak dikirim",
+      "Opsional untuk memperjelas geocoding alamat; province, city, district, dan subdistrict harus lengkap agar dipakai.",
   })
   structured?: StructuredAddressDto;
   @ApiPropertyOptional({

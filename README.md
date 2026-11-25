@@ -102,4 +102,21 @@ ADMIN juga dapat mengimpor data jaringan melalui template Excel di halaman peta;
 - `apps/server` — `auth`, `atlas`, `network`, `geospatial`, `database`, dan `health` untuk NestJS
 - `compose.yaml` — PostGIS lokal; profile `deploy` menambahkan frontend dan backend
 
-Endpoint utama: `GET /api/health`, `GET /api/me`, `GET /api/dashboard`, `GET /api/assets`, `POST /api/assets/import`, `GET/POST /api/bookings`, `POST /api/bookings/:id/release`, `POST /api/analysis/address`, `POST /api/analysis/bulk`, dan `POST /api/routes/preview`. Semua kecuali health dan auth memerlukan sesi.
+Endpoint utama: `GET /api/health`, `GET /api/me`, `GET /api/dashboard`, `GET /api/assets`, `POST /api/assets/import`, `GET/POST /api/bookings`, `POST /api/bookings/:id/release`, `POST /api/analysis/address`, `POST /api/analysis/bulk`, dan `POST /api/routes/preview`. Endpoint analisis menerima sesi login atau `X-API-Key`; endpoint lain (selain health dan auth) tetap memerlukan sesi.
+
+Untuk mengaktifkan integrasi analisis dari server lain, isi `ANALYSIS_API_KEY` di `.env` dengan secret acak minimal 32 karakter, lalu restart backend. Contoh membuat secret: `openssl rand -hex 32`. Key hanya membuka API analisis: `/api/analysis/address`, `/api/analysis/connection`, endpoint geocoding pendukung, `/api/analysis/bulk`, dan `/api/analysis/bulk/jobs` beserta endpoint progres, baris hasil, peta, perluasan, dan pembatalannya. Riwayat analisis tetap memerlukan sesi.
+
+Panduan endpoint, format XLSX, status job, dan contoh integrasi tersedia di [Dokumentasi API Analisis](docs/api-analisis.md).
+
+Kirim key melalui header `X-API-Key`. Analisis satu alamat menggunakan JSON; analisis bulk menerima XLSX pada field `file`:
+
+```sh
+curl -X POST https://<host>/api/analysis/address \
+  -H "X-API-Key: $ANALYSIS_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"address":"Jl. Sudirman, Jakarta","structured":{"province":"DKI Jakarta","city":"Jakarta Selatan","district":"Kebayoran Baru","subdistrict":"Senayan"}}'
+
+curl -X POST https://<host>/api/analysis/bulk/jobs \
+  -H "X-API-Key: $ANALYSIS_API_KEY" \
+  -F "file=@alamat.xlsx"
+```
