@@ -199,6 +199,15 @@ export function BulkAnalysisPage() {
         : null,
     [selectedRow?.result, selectedRouteId]
   );
+  const selectedRowBookingDraft = selectedRow && selectedRowResult
+    ? segmentBookingDraft(
+        selectedRow.address,
+        selectedRowResult.network,
+        selectedRowResult.terminationPlan?.requirement?.requiredCores,
+        selectedRowResult.terminationPlan?.sourceCable?.id,
+        selectedRowResult.terminations?.points
+      )
+    : null;
   const clearCurrentJob = () => {
     const url = new URL(window.location.href);
     url.searchParams.delete("jobId");
@@ -517,7 +526,9 @@ export function BulkAnalysisPage() {
           : undefined;
         const draft = row.status === "OK" ? segmentBookingDraft(
           row.address, row.result?.network ?? row.network,
-          row.result?.terminationPlan?.requirement?.requiredCores
+          row.result?.terminationPlan?.requirement?.requiredCores,
+          row.result?.terminationPlan?.sourceCable?.id,
+          row.result?.terminations?.points
         ) : null;
         const canSubmitSurvey =
           row.status === "OK" &&
@@ -900,6 +911,7 @@ export function BulkAnalysisPage() {
                   />
                   <TerminationDetail data={selectedRowResult.terminations} />
                   <NearestNetworkMap
+                    bookingDraft={selectedRowBookingDraft}
                     onSelectRoute={setSelectedRouteId}
                     result={selectedRowResult}
                     selectedRouteId={selectedRouteId}

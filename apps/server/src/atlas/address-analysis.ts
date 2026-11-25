@@ -58,6 +58,23 @@ function routeGeometryKey(route: CandidateRoute) {
   return `${route.target.id}:${JSON.stringify(coordinates)}`;
 }
 
+function terminationPriority(type: string) {
+  return type === "Closure" ? 0 : type === "Slack / Coil" ? 2 : 1;
+}
+
+function compareCandidateRoutes(a: CandidateRoute, b: CandidateRoute) {
+  const distanceDifference = a.route.distanceMeters - b.route.distanceMeters;
+  if (Math.abs(distanceDifference) > 1) {
+    return distanceDifference;
+  }
+  return (
+    terminationPriority(a.target.type) - terminationPriority(b.target.type) ||
+    distanceDifference ||
+    a.target.id.localeCompare(b.target.id) ||
+    a.routeIndex - b.routeIndex
+  );
+}
+
 const ROUTE_OVERLAP_TOLERANCE_METERS = 12;
 const ROUTE_SAMPLE_SPACING_METERS = 15;
 const MAX_SHARED_ROUTE_RATIO = 0.75;
@@ -462,10 +479,7 @@ export async function analyzeCoordinates(
     routeByKey.set(routeGeometryKey(candidate), candidate);
   }
   const rankedRoutes = [...routeByKey.values()].sort(
-    (a, b) =>
-      a.route.distanceMeters - b.route.distanceMeters ||
-      a.target.id.localeCompare(b.target.id) ||
-      a.routeIndex - b.routeIndex
+    compareCandidateRoutes
   );
   if (!rankedRoutes.length) {
     return {
