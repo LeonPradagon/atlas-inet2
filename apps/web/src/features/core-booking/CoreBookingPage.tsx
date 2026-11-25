@@ -35,7 +35,7 @@ type BookingDevice = {
   area?: string | null;
   latitude?: number;
   longitude?: number;
-  cables?: { id: string; name: string }[];
+  cables?: { id: string; name: string; startId?: string | null; endId?: string | null }[];
   hasCandidateRoute?: boolean;
 };
 type RouteOption = {
@@ -135,9 +135,39 @@ export function CoreBookingPage() {
     ?? matchingSegments[0];
   const suggestedEndpoints = suggestedSegment ? suggestedSegment.endpointIds : undefined;
   const reverseEndpoints = targetId === suggestedEndpoints?.A;
-  const draftStartId = analysisDraft?.startId ?? (reverseEndpoints ? suggestedEndpoints?.B : suggestedEndpoints?.A);
-  const draftEndId = analysisDraft?.endId ?? (reverseEndpoints ? suggestedEndpoints?.A : suggestedEndpoints?.B);
-  const preferredCableIds = suggestedSegment ? [suggestedSegment.id] : analysisDraft?.cableIds ?? [];
+  const devicesQuery = useQuery({
+    queryKey: ["bookable-devices"],
+    queryFn: () => api<BookingDevice[]>("/assets/bookable-devices"),
+    enabled: showForm && formMode === "route",
+    staleTime: 30_000,
+  });
+  const devices = devicesQuery.data ?? [];
+  const deviceIds = new Set(devices.map((device) => device.id));
+  const targetCables = devices.find((device) => device.id === targetId)?.cables ?? [];
+  const preferredDraftCables = analysisDraft?.cableIds ?? [];
+  const cableRank = (id: string) => {
+    const index = preferredDraftCables.indexOf(id);
+    return index === -1 ? preferredDraftCables.length : index;
+  };
+  const candidateCable = [...targetCables].sort((a, b) => cableRank(a.id) - cableRank(b.id))
+    .find((cable) => [cable.startId, cable.endId].some(
+    (id) => id && id !== targetId && deviceIds.has(id)
+  ));
+  const candidateStartId = [candidateCable?.startId, candidateCable?.endId].find(
+    (id) => id && id !== targetId && deviceIds.has(id)
+  );
+  const candidateCablePair = targetId && !candidateStartId ? devices
+    .flatMap((device) => device.cables ?? [])
+    .filter((cable) => cable.id === targetId)
+    .sort((a, b) => cableRank(a.id) - cableRank(b.id))
+    .find((cable) => cable.startId && cable.endId && cable.startId !== cable.endId &&
+      deviceIds.has(cable.startId) && deviceIds.has(cable.endId)) : undefined;
+  const draftStartId = analysisDraft?.startId ?? candidateStartId ??
+    candidateCablePair?.startId ?? (reverseEndpoints ? suggestedEndpoints?.B : suggestedEndpoints?.A);
+  const draftEndId = analysisDraft?.endId ?? (candidateStartId ? targetId :
+    candidateCablePair?.endId ?? (reverseEndpoints ? suggestedEndpoints?.A : suggestedEndpoints?.B));
+  const preferredCable = candidateCable || candidateCablePair || suggestedSegment;
+  const preferredCableIds = preferredCable ? [preferredCable.id] : preferredDraftCables;
   useEffect(() => {
     if (draftStartId && draftEndId && draftStartId !== draftEndId) {
       setStartNodeId(draftStartId);
@@ -145,12 +175,6 @@ export function CoreBookingPage() {
       setSelectedRouteKey("");
     }
   }, [analysisDraft, draftStartId, draftEndId]);
-  const devicesQuery = useQuery({
-    queryKey: ["bookable-devices"],
-    queryFn: () => api<BookingDevice[]>("/assets/bookable-devices"),
-    enabled: showForm && formMode === "route",
-    staleTime: 30_000,
-  });
   const preferredRouteKey = preferredCableIds.length && startNodeId === draftStartId && endNodeId === draftEndId
     ? `verify:${JSON.stringify(preferredCableIds)}`
     : undefined;
@@ -737,7 +761,7 @@ export function CoreBookingPage() {
                 {analysisDrafts.length > 1 && <span className="d-block">{analysisDrafts.length} draf tersisa. Tinjau satu per satu.</span>}
                 {preferredRouteKey && preferredRoute && preferredRoute.routeKey !== preferredRouteKey && <span className="d-block">Jalur dari analisis belum tersedia untuk booking. Tinjau jalur kabel yang ditemukan.</span>}
                 {usesAlternative && <span className="d-block">Jalur utama kurang kapasitas. Alternatif dengan kapasitas cukup dipilih otomatis.</span>}
-                {!segmentsQuery.isPending && (!draftStartId || !draftEndId || draftStartId === draftEndId) &&
+                {!segmentsQuery.isPending && !devicesQuery.isPending && (!draftStartId || !draftEndId || draftStartId === draftEndId) &&
                   <span className="d-block">Jalur booking belum tersedia dari hasil ini. Diperlukan dua titik jaringan berbeda.</span>}
               </div>
             )}
@@ -1160,22 +1184,29 @@ function BookingRouteOption({
                   </span>
                 </span>
                 {selected && onChangeSpan ? (
-                  <label className="d-flex align-items-center gap-2 flex-wrap">
-                    <span>Core diminta untuk ruas {segmentIndex + 1}</span>
-                    <input
-                      className="form-control form-control-sm w-auto"
-                      type="number"
-                      min={1}
-                      max={4096}
-                      step={1}
-                      required
-                      value={spanCounts[segmentIndex] || ""}
-                      onChange={(event) => onChangeSpan(segmentIndex, Number(event.target.value))}
-                    />
+                  <span className="booking-route-span-control">
+                    <label className="booking-route-span-label" htmlFor={`booking-route-span-${index}-${segmentIndex}`}>
+                      Jumlah core untuk ruas {segmentIndex + 1}
+                    </label>
+                    <span className="input-group input-group-sm booking-route-span-input">
+                      <input
+                        id={`booking-route-span-${index}-${segmentIndex}`}
+                        className="form-control"
+                        type="number"
+                        min={1}
+                        max={4096}
+                        step={1}
+                        required
+                        value={spanCounts[segmentIndex] || ""}
+                        aria-label={`Jumlah core untuk ruas ${segmentIndex + 1}`}
+                        onChange={(event) => onChangeSpan(segmentIndex, Number(event.target.value))}
+                      />
+                      <span className="input-group-text">core</span>
+                    </span>
                     {segment && spanCounts[segmentIndex] > segment.availableCores && (
-                      <small className="text-warning">Kapasitas ruas ini tidak cukup.</small>
+                      <small className="booking-route-span-error">Kapasitas ruas ini tidak cukup.</small>
                     )}
-                  </label>
+                  </span>
                 ) : (
                   <span>{spanCounts[segmentIndex]} core diminta</span>
                 )}
