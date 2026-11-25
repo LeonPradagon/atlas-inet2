@@ -397,6 +397,17 @@ details:not([open]) > :not(summary) { display: none !important; }
   background-color: color-mix(in srgb, var(--atlas-interaction-accent) 18%, var(--bs-btn-bg));
 }
 
+:root:not([data-bs-theme="dark"]) .map-top-actions :is(.btn-light, .map-icon-filter-trigger).btn {
+  --bs-btn-border-color: var(--bs-secondary-color);
+  --bs-btn-hover-border-color: var(--atlas-interaction-accent);
+  --bs-btn-disabled-border-color: var(--bs-secondary-color);
+}
+
+:root:not([data-bs-theme="dark"]) .map-top-actions > .atlas-choice.btn[aria-pressed="true"] {
+  background-color: var(--atlas-selected-surface);
+  border-color: var(--atlas-interaction-accent);
+}
+
 .atlas-choice.btn:focus-visible {
   outline: 1px solid var(--atlas-interaction-accent);
   outline-offset: 2px;
