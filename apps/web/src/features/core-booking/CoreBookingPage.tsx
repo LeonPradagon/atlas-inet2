@@ -5,10 +5,11 @@ import { assetDetailTitle } from "../map/assetDetailTitle";
 import { DataTableShell } from "../../components/DataTable";
 import { ModalDialog } from "../../components/ModalDialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearch } from "@tanstack/react-router";
+import { useSearch } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "../../components/PageHeader";
 import { TablePagination } from "../../components/TablePagination";
+import { BookingPriceEstimate } from "./BookingPriceEstimate";
 import {
   api,
   type Booking,
@@ -77,6 +78,14 @@ export function CoreBookingPage() {
   const [draftKey] = useState(() => new URLSearchParams(window.location.search).get("draft") ?? "");
   const [analysisDrafts, setAnalysisDrafts] = useState(() => readAnalysisBookings(draftKey));
   const analysisDraft = analysisDrafts[0];
+  const newCableMeters = analysisDraft?.newCableMeters ?? 0;
+  const [draftScope, setDraftScope] = useState<"core" | "cable" | "both">("both");
+  const canDraftCore = Boolean(analysisDraft && !analysisDraft.cableOnly);
+  const activeDraftScope = analysisDraft?.cableOnly
+    ? "cable"
+    : newCableMeters > 0 ? draftScope : "core";
+  const includeCable = activeDraftScope !== "core";
+  const includeCore = activeDraftScope !== "cable";
   const [showForm, setShowForm] = useState(Boolean(analysisDraft));
   const [formMode, setFormMode] = useState<"route" | "legacy">("route");
   const [startNodeId, setStartNodeId] = useState(analysisDraft?.startId ?? "");
@@ -98,6 +107,11 @@ export function CoreBookingPage() {
     queryKey: ["booking-prices"],
     queryFn: () => api<{ items: BookingPrice[] }>("/settings/booking-prices"),
   });
+  const corePriceItems = (pricesQuery.data?.items ?? []).filter((item) => item.unit.trim().toLowerCase() === "core");
+  const coreRateCents = corePriceItems.reduce((sum, item) => sum + Math.round(item.price * 100), 0);
+  const meterRateCents = (pricesQuery.data?.items ?? [])
+    .filter((item) => item.unit.trim().toLowerCase() === "meter")
+    .reduce((sum, item) => sum + Math.round(item.price * 100), 0);
   const bookingDays = duration?.days ?? 30;
   const [newDuration, setNewDuration] = useState(30);
   const [editDuration, setEditDuration] = useState(false);
@@ -138,7 +152,7 @@ export function CoreBookingPage() {
   const devicesQuery = useQuery({
     queryKey: ["bookable-devices"],
     queryFn: () => api<BookingDevice[]>("/assets/bookable-devices"),
-    enabled: showForm && formMode === "route",
+    enabled: includeCore && showForm && formMode === "route",
     staleTime: 30_000,
   });
   const devices = devicesQuery.data ?? [];
@@ -185,7 +199,7 @@ export function CoreBookingPage() {
       if (preferredRouteKey) query.set("preferredRoute", preferredRouteKey);
       return api<{ truncated: boolean; options: RouteOption[] }>(`/bookings/confirmed-core-paths?${query}`);
     },
-    enabled: showForm && formMode === "route" && Boolean(startNodeId && endNodeId && startNodeId !== endNodeId && requestedCores > 0),
+    enabled: includeCore && showForm && formMode === "route" && Boolean(startNodeId && endNodeId && startNodeId !== endNodeId && requestedCores > 0),
   });
   const options = routeQuery.data?.options ?? [];
   const sortedOptions = [...options].sort((left, right) => left.lengthMeters - right.lengthMeters);
@@ -201,6 +215,7 @@ export function CoreBookingPage() {
     option.cableIds.map((_, index) => spanOverrides[routeEditKey(option)]?.[index] ?? requestedCores);
   const selectedCounts = selectedRoute ? countsForRoute(selectedRoute) : [];
   const validSpanCounts = selectedCounts.every((count) => Number.isInteger(count) && count >= 1 && count <= 4096);
+  const selectedRouteAllocationCount = selectedCounts.reduce((sum, count) => sum + count, 0);
   const selectedRouteMeetsRequest = selectedRoute
     ? routeMeetsSpanCounts(selectedRoute, selectedCounts)
     : false;
@@ -208,6 +223,7 @@ export function CoreBookingPage() {
     selectedRoute?.routeKey === recommendedRoute.routeKey;
   const advanceDraft = () => {
     setSpanOverrides({});
+    setDraftScope("both");
     const remaining = analysisDrafts.slice(1);
     advanceAnalysisBookings(draftKey, remaining);
     setAnalysisDrafts(remaining);
@@ -294,6 +310,21 @@ export function CoreBookingPage() {
     },
     onError: (error) => notify(error instanceof Error ? error.message : "Booking jalur tidak dapat dibuat.", "error"),
   });
+  const cablePlansQuery = useQuery({
+    queryKey: ["booking-cable-plans", user?.id],
+    enabled: Boolean(user),
+    queryFn: () => api<{ id: string; customer: string; estimate: { label: string; meters: number; rateCents: number; totalCents: number } }[]>("/bookings/cable-plan"),
+  });
+  const createCablePlan = useMutation({
+    mutationFn: (body: { customer: string; cablePlan: { label: string; meters: number } }) =>
+      api<{ id: string }>("/bookings/cable-plan", postJson(body)),
+    onSuccess: (plan) => {
+      void queryClient.invalidateQueries({ queryKey: ["booking-cable-plans"] });
+      advanceDraft();
+      notify(`Rencana tarik kabel tersimpan untuk survei. Referensi: ${plan.id}`);
+    },
+    onError: (error) => notify(error instanceof Error ? error.message : "Rencana kabel gagal disimpan.", "error"),
+  });
   const resubmit = useMutation({
     mutationFn: (booking: Booking) => api(`/bookings/${booking.id}/resubmit`, { method: "POST" }),
     onSuccess: async () => { await invalidateNetwork(); notify("Booking diajukan ulang untuk persetujuan ADMIN."); },
@@ -329,10 +360,11 @@ export function CoreBookingPage() {
   const bookableSegments = segmentsQuery.data ?? [];
   const segmentById = new Map(bookableSegments.map((segment) => [segment.id, segment]));
   const selectedSegments = bookableSegments.filter((segment) => selectedSegmentIds.includes(segment.id));
-  const corePriceItems = (pricesQuery.data?.items ?? []).filter((item) => item.unit.trim().toLowerCase() === "core");
-  const coreRateCents = corePriceItems.reduce((sum, item) => sum + Math.round(item.price * 100), 0);
+  const validSelectedSegmentCores = selectedSegments.every((segment) => {
+    const cores = segmentCores[segment.id] ?? 1;
+    return Number.isInteger(cores) && cores >= 1 && cores <= segment.totalCores;
+  });
   const selectedCoreCount = selectedSegments.reduce((sum, segment) => sum + (segmentCores[segment.id] ?? 1), 0);
-  const estimatedBookingCents = coreRateCents * selectedCoreCount;
   const needsWaitingList = selectedSegments.some((segment) => (segmentCores[segment.id] ?? 1) > segment.idleCores);
   const statusCounts = new Map<BookingDisplayStatus, number>();
   for (const booking of bookings) {
@@ -388,13 +420,22 @@ export function CoreBookingPage() {
   };
   const addRouteBooking = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (createRoute.isPending) return;
+    if (createRoute.isPending || createCablePlan.isPending) return;
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
+    const cablePlan = includeCable && analysisDraft ? { label: analysisDraft.label, meters: newCableMeters } : undefined;
+    const customer = String(form.get("customer") ?? "").trim();
+    if (!includeCore && cablePlan) {
+      if (await confirmAction("Simpan rencana tarik kabel untuk survei?", formElement.closest("dialog") ?? undefined)) {
+        createCablePlan.mutate({ customer, cablePlan });
+      }
+      return;
+    }
     const route = selectedRoute;
     if (!route || !validSpanCounts) return;
     const body = {
-      customer: String(form.get("customer") ?? "").trim(),
+      customer,
+      cablePlan,
       picCustomer: String(form.get("picCustomer") ?? "").trim(),
       picCustomerEmail: String(form.get("picCustomerEmail") ?? "").trim(),
       picCustomerPhone: String(form.get("picCustomerPhone") ?? "").trim(),
@@ -407,7 +448,8 @@ export function CoreBookingPage() {
     const message = selectedRouteMeetsRequest
       ? "Ajukan jalur core ini untuk ditinjau admin? Core baru dialokasikan setelah persetujuan."
       : "Kapasitas jalur belum cukup. Masukkan permintaan ini ke waiting list?";
-    if (await confirmAction(message, formElement.closest("dialog") ?? undefined)) createRoute.mutate(body);
+    const confirmation = cablePlan ? `${message} Rencana tarik kabel baru juga akan disimpan untuk survei.` : message;
+    if (await confirmAction(confirmation, formElement.closest("dialog") ?? undefined)) createRoute.mutate(body);
   };
   return (
     <>
@@ -579,6 +621,7 @@ export function CoreBookingPage() {
                   <th>Pelanggan / ID</th>
                   <th>Segmen</th>
                   <th>Total alokasi</th>
+                  <th>Estimasi biaya</th>
                   <th>PIC customer</th>
                   <th>PIC presales</th>
                   <th>Status</th>
@@ -625,7 +668,7 @@ export function CoreBookingPage() {
                         </small>
                       )}
                     </td>
-                    <td className="text-nowrap">
+                    <td className="text-nowrap fw-semibold">
                       {booking.pathRequest ? (
                         <>
                           <b className="d-block">
@@ -642,6 +685,9 @@ export function CoreBookingPage() {
                           <small className="d-block text-body-secondary">Diminta {booking.cores} core</small>
                         </>
                       )}
+                    </td>
+                    <td className="text-nowrap">
+                      <strong>{formatBookingEstimate(bookingEstimateCents(booking))}</strong>
                     </td>
                     <td className="text-break">
                       <span className="d-block fw-semibold">{booking.picCustomer}</span>
@@ -759,14 +805,40 @@ export function CoreBookingPage() {
               <div className="alert alert-info">
                 <strong>Draf dari analisis: {analysisDraft.label}</strong>
                 {analysisDrafts.length > 1 && <span className="d-block">{analysisDrafts.length} draf tersisa. Tinjau satu per satu.</span>}
-                {preferredRouteKey && preferredRoute && preferredRoute.routeKey !== preferredRouteKey && <span className="d-block">Jalur dari analisis belum tersedia untuk booking. Tinjau jalur kabel yang ditemukan.</span>}
-                {usesAlternative && <span className="d-block">Jalur utama kurang kapasitas. Alternatif dengan kapasitas cukup dipilih otomatis.</span>}
-                {!segmentsQuery.isPending && !devicesQuery.isPending && (!draftStartId || !draftEndId || draftStartId === draftEndId) &&
+                {includeCore && preferredRouteKey && preferredRoute && preferredRoute.routeKey !== preferredRouteKey && <span className="d-block">Jalur dari analisis belum tersedia untuk booking. Tinjau jalur kabel yang ditemukan.</span>}
+                {includeCore && usesAlternative && <span className="d-block">Jalur utama kurang kapasitas. Alternatif dengan kapasitas cukup dipilih otomatis.</span>}
+                {includeCore && !segmentsQuery.isPending && !devicesQuery.isPending && (!draftStartId || !draftEndId || draftStartId === draftEndId) &&
                   <span className="d-block">Jalur booking belum tersedia dari hasil ini. Diperlukan dua titik jaringan berbeda.</span>}
               </div>
             )}
             <label className="form-label" htmlFor="booking-customer-route">Nama pelanggan</label>
             <input className="form-control mb-3" id="booking-customer-route" name="customer" placeholder="Nama perusahaan" required />
+            {analysisDraft && (
+              <fieldset className="booking-request-selector">
+                <legend>Pilih kebutuhan jaringan</legend>
+                <div className="booking-request-options">
+                  {[
+                    ...(canDraftCore ? [["core", "Booking core", "Pakai kapasitas kabel yang sudah ada."]] : []),
+                    ...(newCableMeters > 0 ? [["cable", "Tarik kabel baru", "Pasang kabel dari jaringan ke lokasi."]] : []),
+                    ...(canDraftCore && newCableMeters > 0 ? [["both", "Core dan kabel baru", "Pakai core eksisting sekaligus rencanakan kabel baru."]] : []),
+                  ].map(([value, label, description]) => (
+                    <label className={`booking-request-choice ${activeDraftScope === value ? "is-selected" : ""}`} key={value}>
+                      <input
+                        checked={activeDraftScope === value}
+                        disabled={createRoute.isPending || createCablePlan.isPending}
+                        name="booking-request-scope"
+                        onChange={() => setDraftScope(value as "core" | "cable" | "both")}
+                        type="radio"
+                        value={value}
+                      />
+                      <span><strong>{label}</strong><small>{description}</small></span>
+                    </label>
+                  ))}
+                </div>
+                {!canDraftCore && !newCableMeters && <p role="status">Rute core dan panjang kabel baru belum tersedia dari hasil analisis ini.</p>}
+              </fieldset>
+            )}
+            {includeCore && <>
             <div className="row g-3">
               <div className="col-md-6">
                 <BookingDevicePicker
@@ -831,23 +903,77 @@ export function CoreBookingPage() {
                 )}
               </fieldset>
             )}
-            <div className="row g-3 mt-1">
+            </>}
+            {analysisDraft && (includeCore || includeCable) && (
+              <BookingPriceEstimate
+                cablePlan={includeCable ? { label: analysisDraft.label, meters: newCableMeters, rateCents: meterRateCents } : undefined}
+                corePending={includeCore && !selectedRoute}
+                includeCore={includeCore}
+                lineLabel="Ruas"
+                lines={includeCore && selectedRoute ? selectedRoute.cableIds.map((cableId, index) => ({
+                  name: selectedRoute.cableNames[index] ?? cableId,
+                  cores: selectedCounts[index] ?? requestedCores,
+                })) : []}
+                totalCores={includeCore ? selectedRouteAllocationCount : 0}
+                coreRateCents={coreRateCents}
+                ratesPending={pricesQuery.isPending}
+                ratesError={pricesQuery.isError}
+                valid={!includeCore || validSpanCounts}
+                onRetry={() => void pricesQuery.refetch()}
+              />
+            )}
+            {!analysisDraft && selectedRoute && (
+              <BookingPriceEstimate
+                lineLabel="Ruas"
+                lines={selectedRoute.cableIds.map((cableId, index) => ({
+                  name: selectedRoute.cableNames[index] ?? cableId,
+                  cores: selectedCounts[index] ?? requestedCores,
+                }))}
+                totalCores={selectedRouteAllocationCount}
+                coreRateCents={coreRateCents}
+                ratesPending={pricesQuery.isPending}
+                ratesError={pricesQuery.isError}
+                valid={validSpanCounts}
+                onRetry={() => void pricesQuery.refetch()}
+              />
+            )}
+            {(includeCore || includeCable) && <div className="row g-3 mt-1">
               <div className="col-md-6"><label className="form-label" htmlFor="booking-route-pic">PIC customer</label><input className="form-control" id="booking-route-pic" name="picCustomer" placeholder="Nama PIC" required /></div>
-              <div className="col-md-6"><label className="form-label" htmlFor="booking-route-email">Email PIC customer</label><input className="form-control" id="booking-route-email" name="picCustomerEmail" type="email" required /></div>
-              <div className="col-md-6"><label className="form-label" htmlFor="booking-route-phone">Telepon PIC customer</label><input className="form-control" id="booking-route-phone" name="picCustomerPhone" type="tel" required /></div>
-              <div className="col-md-6"><label className="form-label" htmlFor="booking-route-presales">PIC presales</label><input className="form-control" id="booking-route-presales" value={user?.name ?? ""} readOnly /></div>
+              {includeCore && <>
+                <div className="col-md-6"><label className="form-label" htmlFor="booking-route-email">Email PIC customer</label><input className="form-control" id="booking-route-email" name="picCustomerEmail" type="email" required /></div>
+                <div className="col-md-6"><label className="form-label" htmlFor="booking-route-phone">Telepon PIC customer</label><input className="form-control" id="booking-route-phone" name="picCustomerPhone" type="tel" required /></div>
+                <div className="col-md-6"><label className="form-label" htmlFor="booking-route-presales">PIC presales</label><input className="form-control" id="booking-route-presales" value={user?.name ?? ""} readOnly /></div>
+              </>}
             </div>
+            }
+            {createCablePlan.isError && <div className="alert alert-danger mt-3" role="alert">{createCablePlan.error.message}</div>}
             {createRoute.isError && <div className="alert alert-danger mt-3" role="alert">{createRoute.error.message}</div>}
             <div className="modal-actions">
               <button className="btn btn-light" type="button" onClick={() => setShowForm(false)}>Batal</button>
-              {analysisDrafts.length > 1 && <button className="btn btn-outline-secondary" type="button" onClick={advanceDraft} disabled={createRoute.isPending}>Lewati draf</button>}
-              <button className="btn btn-outline-primary atlas-secondary-action" type="button" onClick={() => { setFormMode("legacy"); create.reset(); }}>Booking per segmen</button>
-              <button className="btn btn-primary" type="submit" disabled={createRoute.isPending || routeQuery.isFetching || routeQuery.isError || !selectedRoute || !startNodeId || !endNodeId || startNodeId === endNodeId || requestedCores < 1 || !validSpanCounts}>
-                {!selectedRoute ? "Pilih jalur dulu" : selectedRouteMeetsRequest ? "Ajukan persetujuan" : "Masuk waiting list"}
+              {analysisDrafts.length > 1 && <button className="btn btn-outline-secondary" type="button" onClick={advanceDraft} disabled={createRoute.isPending || createCablePlan.isPending}>Lewati draf</button>}
+              {!analysisDraft && <button className="btn btn-outline-primary atlas-secondary-action" type="button" onClick={() => { setFormMode("legacy"); create.reset(); }}>Booking per segmen</button>}
+              <button className="btn btn-primary" type="submit" disabled={createRoute.isPending || createCablePlan.isPending || (includeCore && (routeQuery.isFetching || routeQuery.isError || !selectedRoute || !startNodeId || !endNodeId || startNodeId === endNodeId || requestedCores < 1 || !validSpanCounts))}>
+                {!includeCore ? "Simpan rencana tarik kabel" : !selectedRoute ? "Pilih jalur dulu" : selectedRouteMeetsRequest ? "Ajukan persetujuan" : "Masuk waiting list"}
               </button>
             </div>
           </form>
         </ModalDialog>
+      )}
+      {!!cablePlansQuery.data?.length && (
+        <section className="card panel-card mt-3" aria-label="Rencana tarik kabel saya">
+          <div className="card-header"><h2 className="h6 mb-0">Rencana tarik kabel saya</h2></div>
+          <div className="list-group list-group-flush">
+            {cablePlansQuery.data.map(({ id, customer, estimate }) => (
+              <div className="list-group-item d-flex flex-wrap justify-content-between gap-2" key={id}>
+                <div><strong>{customer}</strong><span className="d-block">{estimate.label}</span></div>
+                <div>
+                  <strong>{estimate.rateCents > 0 ? rupiahFromCents(estimate.totalCents) : "Tarif belum tersedia"}</strong>
+                  <small className="d-block text-body-secondary">{estimate.meters.toLocaleString("id-ID")} m · Perlu survei</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
       {showForm && formMode === "legacy" && (
         <ModalDialog labelledBy="booking-title" className="booking-modal" onClose={() => setShowForm(false)}>
@@ -954,21 +1080,19 @@ export function CoreBookingPage() {
                 </div>
               </fieldset>
               {selectedSegments.length > 0 && (
-                <section aria-label="Perkiraan biaya booking" className="booking-price-estimate mt-3">
-                  <div className="booking-price-estimate-heading">
-                    <div><span>ESTIMASI BOOKING CORE</span><strong>{rupiahFromCents(estimatedBookingCents)}</strong></div>
-                    <small>{selectedCoreCount} core × {rupiahFromCents(coreRateCents)} per core</small>
-                  </div>
-                  {pricesQuery.isError ? <p role="status" className="mb-0">Tarif belum dapat dimuat, jadi estimasi belum tersedia.</p> : corePriceItems.length && coreRateCents > 0 ? (
-                    <div className="booking-price-breakdown">
-                      {selectedSegments.map((segment) => {
-                        const count = segmentCores[segment.id] ?? 1;
-                        return <div key={segment.id}><span>{segment.name} · {count} core</span><b>{rupiahFromCents(coreRateCents * count)}</b></div>;
-                      })}
-                      <small>Rumus: jumlah core yang diminta × total tarif dengan satuan “core” di Manajemen Harga. Tarif meter/unit tidak termasuk estimasi booking ini.</small>
-                    </div>
-                  ) : <p className="booking-price-missing mb-0">Tarif per core belum ditetapkan. <Link to="/harga-jaringan">Atur di Manajemen Harga</Link>.</p>}
-                </section>
+                <BookingPriceEstimate
+                  lineLabel="Segmen"
+                  lines={selectedSegments.map((segment) => ({
+                    name: assetDetailTitle(segment),
+                    cores: segmentCores[segment.id] ?? 1,
+                  }))}
+                  totalCores={selectedCoreCount}
+                  coreRateCents={coreRateCents}
+                  ratesPending={pricesQuery.isPending}
+                  ratesError={pricesQuery.isError}
+                  valid={validSelectedSegmentCores}
+                  onRetry={() => void pricesQuery.refetch()}
+                />
               )}
               <div className="row g-3">
                 <div className="col-12">
@@ -1160,10 +1284,10 @@ function BookingRouteOption({
         </span>
         <span id={summaryId} className="booking-route-capacity">
           <strong>{option.availableCores} core tersedia</strong>
-          <span>{routeMeetsSpanCounts(option, spanCounts) ? "Kapasitas cukup" : "Kapasitas belum cukup · Waiting List"}</span>
+          {!routeMeetsSpanCounts(option, spanCounts) && <span>Kapasitas belum cukup · Waiting List</span>}
           {spanCounts.every((count) => count > 0) && spanCounts.length > 0 && (
             <span className="w-100">
-              Total kebutuhan booking <strong>{spanCounts.reduce((sum, count) => sum + count, 0)} alokasi core</strong>
+              <strong>{spanCounts.reduce((sum, count) => sum + count, 0)} alokasi core</strong>
               {" "}({describeSpanCounts(spanCounts)})
             </span>
           )}
@@ -1178,20 +1302,17 @@ function BookingRouteOption({
                   <span>
                     <span className="booking-route-segment-label">Segmen {segmentIndex + 1}</span>
                     <strong className="d-block">{name}</strong>
+                    {option.cableNames.length > 1 && (
+                      <span className="booking-route-segment-capacity">
+                        {segment ? `${segment.availableCores} core tersedia` : "Kapasitas belum tersedia"}
+                      </span>
+                    )}
                   </span>
-                  <span className="booking-route-segment-capacity">
-                    {segment ? `${segment.availableCores} core tersedia` : "Kapasitas belum tersedia"}
-                  </span>
-                </span>
                 {selected && onChangeSpan ? (
                   <span className="booking-route-span-control">
-                    <label className="booking-route-span-label" htmlFor={`booking-route-span-${index}-${segmentIndex}`}>
-                      Jumlah core untuk ruas {segmentIndex + 1}
-                    </label>
-                    <span className="input-group input-group-sm booking-route-span-input">
                       <input
                         id={`booking-route-span-${index}-${segmentIndex}`}
-                        className="form-control"
+                        className="form-control form-control-sm"
                         type="number"
                         min={1}
                         max={4096}
@@ -1201,14 +1322,14 @@ function BookingRouteOption({
                         aria-label={`Jumlah core untuk ruas ${segmentIndex + 1}`}
                         onChange={(event) => onChangeSpan(segmentIndex, Number(event.target.value))}
                       />
-                      <span className="input-group-text">core</span>
-                    </span>
-                    {segment && spanCounts[segmentIndex] > segment.availableCores && (
-                      <small className="booking-route-span-error">Kapasitas ruas ini tidak cukup.</small>
-                    )}
+                    <label htmlFor={`booking-route-span-${index}-${segmentIndex}`}>core diminta</label>
                   </span>
                 ) : (
                   <span>{spanCounts[segmentIndex]} core diminta</span>
+                )}
+                </span>
+                {selected && onChangeSpan && segment && spanCounts[segmentIndex] > segment.availableCores && (
+                  <small className="booking-route-span-error">Kapasitas ruas ini tidak cukup.</small>
                 )}
                 {segment?.midspanPoints?.map((point) => (
                   <span className="booking-route-point" key={point.id}><strong>Sambungan</strong> {point.name}</span>
@@ -1229,14 +1350,31 @@ function BookingRouteOption({
   );
 }
 
+function bookingEstimateCents(booking: Booking): number | undefined {
+  const snapshot = booking.pathRequest?.priceSnapshot;
+  if (!snapshot?.configured) return undefined;
+  const cable = snapshot.cablePlan;
+  if (cable && cable.rateCents <= 0) return undefined;
+  return snapshot.totalCents + (cable?.totalCents ?? 0);
+}
+
+function formatBookingEstimate(cents: number | undefined) {
+  return cents === undefined ? "Belum tersedia" : rupiahFromCents(cents);
+}
+
 function BookingRouteDetail({ booking }: { booking: Booking }) {
+  const [isOpen, setIsOpen] = useState(false);
   const route = booking.pathRequest;
   if (!route) return null;
 
+  const snapshot = route.priceSnapshot;
+  const cablePlan = snapshot?.cablePlan;
+  const dialogTitleId = `booking-route-title-${booking.id}`;
   const hasAllocation = booking.status === "Booked" || booking.status === "Used";
   const allocations = hasAllocation
     ? [...(route.wholeCableAllocations ?? []), ...route.allocatedSections]
     : booking.status === "Pending Approval" ? route.proposedAllocations : [];
+  const spanCounts = bookingSpanCounts(route);
   const points = [
     route.startName,
     ...route.cableIds.slice(1).map((_, index) =>
@@ -1246,68 +1384,133 @@ function BookingRouteDetail({ booking }: { booking: Booking }) {
   ];
 
   return (
-    <div className="booking-path-summary">
-      <strong className="d-block">{route.startName} → {route.endName}</strong>
-      <small className="d-block text-body-secondary mt-1">
-        {describeSpanCounts(bookingSpanCounts(route))} · {(route.lengthMeters / 1000).toFixed(2)} km
-      </small>
-      <details className="booking-path-allocation mt-2">
-        <summary>Detail jalur</summary>
-        <strong className="d-block mt-2">Urutan titik</strong>
-        <ol className="ps-3 mb-2">
-          {points.map((name, index) => (
-            <li className="text-break" key={index}>{name || "Belum tercatat"}</li>
-          ))}
-        </ol>
-        <strong className="d-block">Core per segmen</strong>
-        <ol className="ps-3 mb-2">
-          {route.cableIds.map((cableId, index) => {
-            const numbers = [...new Set(allocations.filter((item) => item.cableId === cableId).map((item) => item.coreNumber))]
-              .sort((left, right) => left - right);
-            return (
-              <li className="text-break" key={index}>
-                {route.cableNames[index] ?? cableId}
-                <small className="d-block text-body-secondary">
-                  {bookingSpanCounts(route)[index]} core {hasAllocation ? "dialokasikan" : "diminta"}
-                  {numbers.length > 0 && ` · ${hasAllocation ? "Nomor core" : "Usulan nomor core"}: ${numbers.join(", ")}`}
-                </small>
-                {[...new Set((hasAllocation ? route.allocatedSections : route.proposedAllocations)
+    <>
+      <div className="booking-path-summary">
+        <strong className="d-block text-break">{route.startName} → {route.endName}</strong>
+        <small className="d-block text-body-secondary mt-1">
+          {(route.lengthMeters / 1000).toFixed(2)} km
+        </small>
+        <button
+          aria-haspopup="dialog"
+          className="btn btn-sm btn-outline-primary atlas-secondary-action mt-2"
+          onClick={() => setIsOpen(true)}
+          type="button"
+        >
+          Detail jalur
+        </button>
+      </div>
+      {isOpen && (
+        <ModalDialog
+          labelledBy={dialogTitleId}
+          className="booking-route-detail-dialog"
+          onClose={() => setIsOpen(false)}
+        >
+          <div className="modal-heading booking-route-detail-heading">
+            <div>
+              <h3 id={dialogTitleId}>Detail jalur booking</h3>
+              <p className="text-break">{booking.customer} · {booking.id}</p>
+            </div>
+            <button aria-label="Tutup detail jalur" className="btn-close" onClick={() => setIsOpen(false)} type="button" />
+          </div>
+
+          <section className="booking-route-detail-section booking-price-estimate">
+            <div className="booking-price-estimate-heading">
+              <div>
+                <h4 className="mb-0">Estimasi saat diajukan</h4>
+                <strong>{formatBookingEstimate(bookingEstimateCents(booking))}</strong>
+              </div>
+            </div>
+            <div className="booking-price-estimate-items">
+              <div className="booking-price-estimate-item">
+                <div>
+                  <strong>Core eksisting</strong>
+                  <small className="d-block">{describeSpanCounts(spanCounts)}{snapshot?.configured && ` · ${rupiahFromCents(snapshot.coreRateCents)} per core`}</small>
+                </div>
+                <b>{formatBookingEstimate(snapshot?.configured ? snapshot.totalCents : undefined)}</b>
+              </div>
+              {cablePlan && (
+                <div className="booking-price-estimate-item">
+                  <div>
+                    <strong>Tarik kabel baru</strong>
+                    <small className="d-block">{cablePlan.label} · {cablePlan.meters.toLocaleString("id-ID", { maximumFractionDigits: 2 })} m · Perlu survei</small>
+                  </div>
+                  <b>{formatBookingEstimate(cablePlan.rateCents > 0 ? cablePlan.totalCents : undefined)}</b>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="booking-route-detail-section" aria-labelledby={`${dialogTitleId}-segments`}>
+            <div className="booking-route-detail-segment-heading">
+              <h4 id={`${dialogTitleId}-segments`}>Rincian jalur</h4>
+              <span>{(route.lengthMeters / 1000).toFixed(2)} km</span>
+            </div>
+            <ol className="booking-route-detail-segments">
+              {route.cableIds.map((cableId, index) => {
+                const numbers = [...new Set(allocations.filter((item) => item.cableId === cableId).map((item) => item.coreNumber))]
+                  .sort((left, right) => left - right);
+                const ranges = [...new Set((hasAllocation ? route.allocatedSections : route.proposedAllocations)
                   .filter((part) => part.cableId === cableId)
-                  .map((part) => `${Math.round(part.startMeters)}–${Math.round(part.endMeters)} m`))].map((range) => (
-                    <small className="d-block text-body-secondary" key={range}>Posisi ruas pada kabel: {range}</small>
-                  ))}
-              </li>
-            );
-          })}
-        </ol>
-        {route.plannedSplices?.length ? (
-          <>
-            <strong className="d-block">Rencana sambungan</strong>
-            <small className="d-block text-body-secondary">Belum dikonfirmasi secara fisik</small>
-            <ol className="ps-3 mb-2">
-              {route.plannedSplices.map((splice, index) => (
-                <li className="mt-2 text-break" key={index}>
-                  <strong>{splice.nodeName}</strong>
-                  <small className="d-block">{splice.from.cableName} → {splice.to.cableName}</small>
-                  {Array.from({ length: Math.max(splice.from.coreNumbers.length, splice.to.coreNumbers.length) }, (_, pairIndex) => {
-                    const incoming = splice.from.coreNumbers[pairIndex];
-                    const outgoing = splice.to.coreNumbers[pairIndex];
-                    return (
-                      <small className="d-block" key={pairIndex}>
-                        {incoming !== undefined && outgoing !== undefined
-                          ? `Core ${incoming} → Core ${outgoing}`
-                          : `Core ${incoming ?? outgoing} (${incoming === undefined ? "keluar" : "masuk"}) · Tidak dipasangkan`}
+                  .map((part) => `${Math.round(part.startMeters)}–${Math.round(part.endMeters)} m`))];
+                return (
+                  <li className="booking-route-detail-segment" key={`${cableId}-${index}`}>
+                    <p className="mb-1 fw-semibold text-break">{points[index] || "Belum tercatat"} → {points[index + 1] || "Belum tercatat"}</p>
+                    <div className="booking-route-detail-segment-heading">
+                      <strong className="text-break">Segmen {index + 1} · {route.cableNames[index] ?? cableId}</strong>
+                      <span>{spanCounts[index] ?? 0} core {hasAllocation ? "dialokasikan" : "diminta"}</span>
+                    </div>
+                    {numbers.length > 0 && (
+                      <small className="d-block text-body-secondary">
+                        {hasAllocation ? "Nomor core" : "Usulan nomor core"}: {numbers.join(", ")}
                       </small>
-                    );
-                  })}
-                </li>
-              ))}
+                    )}
+                    {ranges.map((range) => (
+                      <small className="d-block text-body-secondary" key={range}>Posisi ruas pada kabel: {range}</small>
+                    ))}
+                    {!route.terminationRecorded && index < route.cableIds.length - 1 && !route.plannedSplices?.[index] && (
+                      <small className="d-block text-body-secondary">Terminasi: Belum tercatat</small>
+                    )}
+                  </li>
+                );
+              })}
             </ol>
-          </>
-        ) : (
-          <small className="d-block text-body-secondary">Sambungan terminasi: {route.terminationRecorded ? "Tercatat" : "Belum tercatat"}</small>
-        )}
-      </details>
-    </div>
+          </section>
+
+          {route.plannedSplices?.length ? (
+            <section className="booking-route-detail-section" aria-labelledby={`${dialogTitleId}-splices`}>
+              <h4 id={`${dialogTitleId}-splices`}>Rencana sambungan</h4>
+              <p className="booking-route-detail-note">Belum dikonfirmasi secara fisik</p>
+              <ol className="booking-route-detail-splices">
+                {route.plannedSplices.map((splice, index) => (
+                  <li className="text-break" key={index}>
+                    <strong>{splice.nodeName}</strong>
+                    <small className="d-block">{splice.from.cableName} → {splice.to.cableName}</small>
+                    {Array.from({ length: Math.max(splice.from.coreNumbers.length, splice.to.coreNumbers.length) }, (_, pairIndex) => {
+                      const incoming = splice.from.coreNumbers[pairIndex];
+                      const outgoing = splice.to.coreNumbers[pairIndex];
+                      return (
+                        <small className="d-block" key={pairIndex}>
+                          {incoming !== undefined && outgoing !== undefined
+                            ? `Core ${incoming} → Core ${outgoing}`
+                            : `Core ${incoming ?? outgoing} (${incoming === undefined ? "keluar" : "masuk"}) · Tidak dipasangkan`}
+                        </small>
+                      );
+                    })}
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ) : (
+            <p className="booking-route-detail-note">
+              Sambungan terminasi: {route.terminationRecorded ? "Tercatat" : "Belum tercatat"}
+            </p>
+          )}
+
+          <div className="modal-actions booking-route-detail-actions">
+            <button className="btn btn-outline-secondary" onClick={() => setIsOpen(false)} type="button">Tutup</button>
+          </div>
+        </ModalDialog>
+      )}
+    </>
   );
 }

@@ -16,6 +16,15 @@ function formatRupiah(cents: number) {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cents / 100);
 }
 
+function bookingCoreAllocationCount(booking: Booking) {
+  const route = booking.pathRequest;
+  if (!route) return booking.cores;
+  return route.priceSnapshot?.allocationCount ||
+    (route.spanCoreCounts?.length
+      ? route.spanCoreCounts.reduce((sum, count) => sum + count, 0)
+      : route.requestedCores * route.cableIds.length);
+}
+
 export function BookingPricesPage() {
   const client = useQueryClient();
   const [prices, setPrices] = useState(defaultPrices);
@@ -36,15 +45,17 @@ export function BookingPricesPage() {
     queryFn: () => api<Booking[]>("/bookings"),
   });
   const save = useMutation({
+    meta: {
+      successNotice: "Daftar harga berhasil disimpan.",
+      errorNotice: "Harga tidak dapat disimpan.",
+    },
     mutationFn: (items: BookingPrice[]) => api<{ items: BookingPrice[] }>("/settings/booking-prices", { method: "PATCH", data: { items } }),
     onSuccess: async ({ items }) => {
       setPrices(items);
       setProcurementQuantities({});
       setProcurementSpecifications({});
       await client.invalidateQueries({ queryKey: ["booking-prices"] });
-      notify("Daftar harga berhasil disimpan.");
     },
-    onError: (error) => notify(error instanceof Error ? error.message : "Harga tidak dapat disimpan.", "error"),
   });
   useEffect(() => {
     if (pricesQuery.data) setPrices(pricesQuery.data.items);
@@ -56,8 +67,11 @@ export function BookingPricesPage() {
     item.name.trim() && item.unit.trim() && Number.isFinite(item.price) && item.price >= 0 && item.price <= Number.MAX_SAFE_INTEGER && Math.round(item.price * 100) / 100 === item.price
   );
   const selectedBooking = bookingsQuery.data?.find((booking) => booking.id === procurementBookingId);
+  const selectedBookingCoreQuantity = selectedBooking ? bookingCoreAllocationCount(selectedBooking) : undefined;
   const procurementLines = savedPrices.map((item, index) => {
-    const linkedCoreQuantity = selectedBooking && item.unit.trim().toLowerCase() === "core" ? selectedBooking.cores : undefined;
+    const linkedCoreQuantity = selectedBooking && item.unit.trim().toLowerCase() === "core"
+      ? selectedBookingCoreQuantity
+      : undefined;
     const quantity = linkedCoreQuantity ?? Number(procurementQuantities[index] ?? 0);
     return { item, index, quantity, linkedCoreQuantity, specification: procurementSpecifications[index] ?? "", subtotalCents: Math.round(quantity * item.price * 100) };
   });
@@ -72,7 +86,7 @@ export function BookingPricesPage() {
     sheet.addRow(["ESTIMASI PROCUREMENT"]);
     sheet.addRow(["Referensi", procurementReference || "—"]);
     sheet.addRow(["Booking", selectedBooking ? `${selectedBooking.id} · ${selectedBooking.customer}` : "Tidak ditautkan"]);
-    sheet.addRow(["Jumlah core booking", selectedBooking?.cores ?? "—"]);
+    sheet.addRow(["Jumlah alokasi core booking", selectedBookingCoreQuantity ?? "—"]);
     sheet.addRow([]);
     sheet.addRow(["Item", "Spesifikasi / Beamwidth", "Kuantitas", "Satuan", "Harga satuan (Rp)", "Status harga", "Subtotal (Rp)"]);
     const firstLineRow = sheet.rowCount + 1;
@@ -161,7 +175,7 @@ export function BookingPricesPage() {
           {hasChanges && <div className="alert alert-warning py-2">Simpan perubahan harga terlebih dahulu. Kalkulasi memakai tarif yang sudah tersimpan.</div>}
           <div className="row g-3 mb-4">
             <div className="col-md-6"><label className="form-label" htmlFor="procurement-reference">Referensi procurement</label><input className="form-control" id="procurement-reference" maxLength={100} onChange={(event) => setProcurementReference(event.target.value)} placeholder="Nama proyek atau nomor dokumen" value={procurementReference} /></div>
-            <div className="col-md-6"><label className="form-label" htmlFor="procurement-booking">Tautkan booking core (opsional)</label><select className="form-select" id="procurement-booking" onChange={(event) => setProcurementBookingId(event.target.value)} value={procurementBookingId}><option value="">Isi kuantitas core manual</option>{bookingsQuery.data?.filter((booking) => !["Rejected", "Released", "Expired"].includes(booking.status)).map((booking) => <option key={booking.id} value={booking.id}>{booking.id} · {booking.customer} · {booking.cores} core · {booking.status}</option>)}</select><div className="form-text">Jika dipilih, kuantitas tarif bersatuan core mengikuti jumlah core booking.</div></div>
+          <div className="col-md-6"><label className="form-label" htmlFor="procurement-booking">Tautkan booking core (opsional)</label><select className="form-select" id="procurement-booking" onChange={(event) => setProcurementBookingId(event.target.value)} value={procurementBookingId}><option value="">Isi kuantitas core manual</option>{bookingsQuery.data?.filter((booking) => !["Rejected", "Released", "Expired"].includes(booking.status)).map((booking) => <option key={booking.id} value={booking.id}>{booking.id} · {booking.customer} · {bookingCoreAllocationCount(booking)} alokasi core · {booking.status}</option>)}</select><div className="form-text">Jika dipilih, kuantitas tarif bersatuan core mengikuti total alokasi core pada booking.</div></div>
           </div>
           {pricesQuery.isError || bookingsQuery.isError ? <div className="alert alert-danger">Tarif atau daftar booking gagal dimuat, kalkulasi belum tersedia.</div> : <div className="table-responsive procurement-table-wrap"><table className="table align-middle procurement-table"><thead><tr><th>Item</th><th>Kuantitas</th><th>Satuan</th><th>Harga satuan</th><th>Spesifikasi / beamwidth</th><th>Status harga</th><th>Subtotal</th></tr></thead><tbody>{procurementLines.map((line) => <tr key={`${line.index}-${line.item.name}`}><td><strong>{line.item.name}</strong></td><td>{line.linkedCoreQuantity !== undefined ? <span className="procurement-linked-quantity">{line.quantity.toLocaleString("id-ID")} <i className="bi bi-link-45deg" title="Dari booking core" /></span> : <input aria-label={`Kuantitas ${line.item.name}`} className="form-control procurement-quantity" min="0" onChange={(event) => setProcurementQuantities((current) => ({ ...current, [line.index]: event.target.value }))} step="0.01" type="number" value={procurementQuantities[line.index] ?? ""} />}</td><td><span className="pricing-unit-badge">{line.item.unit}</span></td><td className="text-nowrap">{formatRupiah(Math.round(line.item.price * 100))}</td><td><input aria-label={`Spesifikasi ${line.item.name}`} className="form-control procurement-specification" maxLength={120} onChange={(event) => setProcurementSpecifications((current) => ({ ...current, [line.index]: event.target.value }))} placeholder={/beamwidth/iu.test(line.item.name) ? "Contoh: 18 GHz · beamwidth 3°" : "Catatan opsional"} value={line.specification} /></td><td>{line.item.price > 0 ? <span className="procurement-price-status is-set">Tersedia</span> : <span className="procurement-price-status">Belum diatur</span>}</td><td className="text-nowrap fw-semibold">{formatRupiah(line.subtotalCents)}</td></tr>)}{!procurementLines.length && <tr><td className="text-muted py-4 text-center" colSpan={7}>Tambahkan tarif di atas untuk mulai membuat estimasi.</td></tr>}</tbody><tfoot><tr><th colSpan={6} className="text-end">Total estimasi</th><th className="text-nowrap">{formatRupiah(totalProcurementCents)}</th></tr></tfoot></table></div>}
           {procurementLines.some((line) => line.quantity > 0 && line.item.price <= 0) && <div className="alert alert-warning mt-3 mb-0 py-2">Ada item berkuantitas yang harganya belum diatur. Total sementara belum mencakup biaya item tersebut.</div>}
