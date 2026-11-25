@@ -2964,7 +2964,19 @@ body {
   top: 10px;
   left: 10px;
   z-index: 2;
+  min-width: 104px;
+  min-height: 40px;
+  padding-inline: 12px;
+  color: #f3f6ff;
+  background: #172842;
+  border-color: #a6bbff;
+  font-weight: 700;
   box-shadow: 0 2px 8px #14223840;
+}
+.dashboard-map-style-toggle.btn:is(:hover, :focus-visible):not(:disabled) {
+  color: #fff;
+  background: #263b5d;
+  border-color: #c0ceff;
 }
 .dashboard-map-message {
   position: absolute;
