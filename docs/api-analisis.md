@@ -4,7 +4,7 @@ Panduan ini untuk integrasi server-ke-server ke API analisis ATLAS. Endpoint ana
 
 ## Akses dan autentikasi
 
-- Base URL produksi: `https://<host>/api`
+- Base URL produksi: `https://110.239.80.32/api`
 - Kirim key pada setiap request dengan header `X-API-Key`.
 - Nilai key disimpan di environment server sebagai `ANALYSIS_API_KEY`; gunakan key dari pemilik server dan jangan taruh di repository atau kode browser.
 - API key minimum 32 karakter. Server membandingkan key dengan perbandingan waktu konstan.
@@ -12,9 +12,23 @@ Panduan ini untuk integrasi server-ke-server ke API analisis ATLAS. Endpoint ana
 - Satu key memakai identitas API bersama untuk menyimpan analisis dan memiliki job bulk. Endpoint riwayat tetap memerlukan sesi login.
 
 ```sh
-export ATLAS_API_URL="https://<host>/api"
+export ATLAS_API_URL="https://110.239.80.32/api"
 export ANALYSIS_API_KEY="<key-dari-pemilik-server>"
 ```
+
+### Cara paling mudah: Postman
+
+Untuk analisis satu alamat:
+
+1. Buat request **POST** ke `https://110.239.80.32/api/analysis/address`.
+2. Buka **Headers**, tambahkan `X-API-Key` dengan API key Anda. Tambahkan `Content-Type` dengan nilai `application/json`.
+3. Buka **Body → raw → JSON**, lalu masukkan:
+
+```json
+{"address":"Jl. Sudirman, Jakarta"}
+```
+
+4. Klik **Send**. Jangan tempel API key pada URL atau body.
 
 ## Analisis satu lokasi
 
@@ -35,14 +49,16 @@ Contoh dengan alamat saja:
 ```sh
 curl -X POST "$ATLAS_API_URL/analysis/address" \
   -H "X-API-Key: $ANALYSIS_API_KEY" \
-  -H "Content-Type: application/json" \\
+  -H "Content-Type: application/json" \
   -d '{"address":"Jl. Sudirman, Jakarta"}'
 ```
+
+Perintah `curl` di atas untuk Bash, Git Bash, atau WSL. Di PowerShell, gunakan contoh `Invoke-RestMethod` berikut.
 
 Contoh PowerShell (gunakan URL lengkap dengan prefix `/api`; tanda `\` sebagai penerus baris hanya berlaku untuk shell seperti Bash):
 
 ```powershell
-$uri = "https://<host>/api/analysis/address"
+$uri = "https://110.239.80.32/api/analysis/address"
 $headers = @{ "X-API-Key" = $env:ANALYSIS_API_KEY }
 $body = @{ address = "Jl. Sudirman, Jakarta" } | ConvertTo-Json
 Invoke-RestMethod -Uri $uri -Method Post -Headers $headers -ContentType "application/json" -Body $body
@@ -59,6 +75,16 @@ curl -X POST "$ATLAS_API_URL/analysis/address" \
     "coordinateConfirmed": true,
     "coreRequirement": {"services": 20, "reserve": 4}
   }'
+```
+
+Di Postman, gunakan request yang sama lalu ganti isi **Body → raw → JSON** dengan:
+
+```json
+{
+  "coordinates": {"longitude": 106.8229, "latitude": -6.2088},
+  "coordinateConfirmed": true,
+  "coreRequirement": {"services": 20, "reserve": 4}
+}
 ```
 
 Respons memuat hasil analisis seperti `status`, koordinat, jaringan/rute/terminasi yang ditemukan, dan `historyId`. Isi detail analisis dapat berkembang.
@@ -101,6 +127,8 @@ Kolom tambahan alamat dikenali sebagai `Provinsi`/`Province`, `Kabupaten`/`Kabup
 ### `POST /analysis/bulk/jobs`
 
 Kirim `multipart/form-data` dengan field file bernama `file` dan ekstensi `.xlsx`.
+
+Di Postman, pilih **Body → form-data**, buat key `file`, ubah tipenya dari **Text** ke **File**, lalu pilih file `.xlsx`. Header `X-API-Key` tetap diperlukan. Biarkan Postman mengatur `Content-Type` multipart secara otomatis.
 
 ```sh
 curl -X POST "$ATLAS_API_URL/analysis/bulk/jobs" \
