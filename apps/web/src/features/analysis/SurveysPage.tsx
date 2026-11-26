@@ -419,10 +419,11 @@ export function SurveysPage() {
             }));
           }
           setConfirmedOcrLocation(false);
-        } catch {
+        } catch (error) {
+          console.error("Survey photo OCR failed:", error);
           if (readId === imageReadId.current) {
             setImageError(
-              "OCR gagal membaca koordinat. Pastikan teks koordinat terlihat jelas pada foto."
+              "OCR gagal dijalankan. Klik Coba lagi untuk mengulang proses."
             );
           }
         }
@@ -864,12 +865,23 @@ export function SurveysPage() {
                 </>
               )}
               {imageError && (
-                <p
-                  className="alert alert-danger py-2 px-3 mt-2 mb-0"
-                  role="alert"
-                >
-                  {imageError}
-                </p>
+                <>
+                  <p
+                    className="alert alert-danger py-2 px-3 mt-2 mb-0"
+                    role="alert"
+                  >
+                    {imageError}
+                  </p>
+                  {imageFile && (
+                    <button
+                      className="btn btn-sm btn-outline-primary mt-2"
+                      onClick={() => chooseImage(imageFile)}
+                      type="button"
+                    >
+                      Coba lagi
+                    </button>
+                  )}
+                </>
               )}
               {form.image && (
                 <div className="survey-image-preview mt-3">
@@ -954,6 +966,16 @@ export function SurveysPage() {
               )}
             </div>
             <div className="d-flex mt-3 gap-2">
+              {selected.status === "IN_PROGRESS" && (
+                <button
+                  className="btn btn-outline-secondary"
+                  disabled={update.isPending || readingImage || (form.imageLocationSource === "OCR" && !confirmedOcrLocation)}
+                  onClick={() => update.mutate({ survey: selected, status: "IN_PROGRESS", findings: form, imageLocationConfirmed: form.imageLocationSource !== "OCR" || confirmedOcrLocation })}
+                  type="button"
+                >
+                  Simpan draf
+                </button>
+              )}
               {selected.status === "IN_PROGRESS" && (
                 <button
                   className="btn btn-outline-primary atlas-secondary-action"
